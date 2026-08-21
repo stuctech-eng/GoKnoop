@@ -14,12 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
  * GEEN BULK EXPORT: GetFeature-requests worden altijd hard gelimiteerd
  * tot maximaal MAX_FEATURES resultaten, ongeacht wat is opgegeven.
  * Dit is een audit/discovery-tool, geen dataset-downloadendpoint
- * (zie Master Plan sectie 4, 66, 67 -- doorlevering is niet toegestaan).
- *
- * User-Agent: expliciet meegegeven, omdat Routedatabank's server
- * verzoeken zonder duidelijke User-Agent blokkeert bij GetFeature
- * (bevestigd door GIS-beheerder Jon Rietman -- werkt wel via QGIS,
- * dat altijd een eigen User-Agent meestuurt).
+ * (zie Master Plan sectie 4, 66, 67 — doorlevering is niet toegestaan).
  */
 
 const ALLOWED_REQUESTS = ["GetCapabilities", "DescribeFeatureType", "GetFeature"];
@@ -61,10 +56,27 @@ export async function GET(req: NextRequest) {
 
   const forwardParams = new URLSearchParams(req.nextUrl.searchParams);
   forwardParams.delete("key");
+
+  // Endpoint-keuze: standaard /wfs, optioneel /ows (workaround van Routedatabank).
+  const endpointOverride = forwardParams.get("endpoint");
+  forwardParams.delete("endpoint");
+  const resolvedBaseUrl =
+    endpointOverride === "ows" ? baseUrl.replace(/\/wfs\/?$/, "/ows") : baseUrl;
+
   forwardParams.set("service", "WFS");
-  if (!forwardParams.get("version")) {
+
+  // Versie-stijl: standaard 'version', optioneel 'acceptversions' (Jon's workaround-URL).
+  const useAcceptVersions = forwardParams.get("versionStyle") === "acceptversions";
+  forwardParams.delete("versionStyle");
+  if (useAcceptVersions) {
+    forwardParams.delete("version");
+    if (!forwardParams.get("acceptversions")) {
+      forwardParams.set("acceptversions", "2.0.0");
+    }
+  } else if (!forwardParams.get("version")) {
     forwardParams.set("version", "2.0.0");
   }
+
   forwardParams.set("request", requestType);
 
   if (requestType === "GetFeature") {
@@ -80,7 +92,7 @@ export async function GET(req: NextRequest) {
     forwardParams.set("maxFeatures", String(cappedCount));
   }
 
-  const targetUrl = `${baseUrl}?${forwardParams.toString()}`;
+  const targetUrl = `${resolvedBaseUrl}?${forwardParams.toString()}`;
   const authHeader = "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
 
   try {
