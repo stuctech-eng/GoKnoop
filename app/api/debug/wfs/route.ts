@@ -80,16 +80,21 @@ export async function GET(req: NextRequest) {
   forwardParams.set("request", requestType);
 
   if (requestType === "GetFeature") {
-    const requestedCount = parseInt(
-      forwardParams.get("count") || forwardParams.get("maxFeatures") || String(MAX_FEATURES),
-      10
-    );
-    const cappedCount = Math.min(
-      isNaN(requestedCount) ? MAX_FEATURES : requestedCount,
-      MAX_FEATURES
-    );
-    forwardParams.set("count", String(cappedCount));
-    forwardParams.set("maxFeatures", String(cappedCount));
+    const skipCountEnforcement = forwardParams.get("noCount") === "1";
+    forwardParams.delete("noCount");
+
+    if (!skipCountEnforcement) {
+      const requestedCount = parseInt(
+        forwardParams.get("count") || forwardParams.get("maxFeatures") || String(MAX_FEATURES),
+        10
+      );
+      const cappedCount = Math.min(
+        isNaN(requestedCount) ? MAX_FEATURES : requestedCount,
+        MAX_FEATURES
+      );
+      forwardParams.set("count", String(cappedCount));
+      forwardParams.set("maxFeatures", String(cappedCount));
+    }
   }
 
   const targetUrl = `${resolvedBaseUrl}?${forwardParams.toString()}`;
@@ -101,6 +106,7 @@ export async function GET(req: NextRequest) {
         Authorization: authHeader,
         "User-Agent": "GoKnoop/1.0 (+https://go-knoop.vercel.app; QGIS-compatible WFS client)",
         Accept: "application/xml, application/json, */*",
+        Referer: "https://go-knoop.vercel.app/",
       },
       cache: "no-store",
     });
