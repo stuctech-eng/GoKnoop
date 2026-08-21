@@ -14,7 +14,12 @@ import { NextRequest, NextResponse } from "next/server";
  * GEEN BULK EXPORT: GetFeature-requests worden altijd hard gelimiteerd
  * tot maximaal MAX_FEATURES resultaten, ongeacht wat is opgegeven.
  * Dit is een audit/discovery-tool, geen dataset-downloadendpoint
- * (zie Master Plan sectie 4, 66, 67 — doorlevering is niet toegestaan).
+ * (zie Master Plan sectie 4, 66, 67 -- doorlevering is niet toegestaan).
+ *
+ * User-Agent: expliciet meegegeven, omdat Routedatabank's server
+ * verzoeken zonder duidelijke User-Agent blokkeert bij GetFeature
+ * (bevestigd door GIS-beheerder Jon Rietman -- werkt wel via QGIS,
+ * dat altijd een eigen User-Agent meestuurt).
  */
 
 const ALLOWED_REQUESTS = ["GetCapabilities", "DescribeFeatureType", "GetFeature"];
@@ -80,7 +85,11 @@ export async function GET(req: NextRequest) {
 
   try {
     const upstream = await fetch(targetUrl, {
-      headers: { Authorization: authHeader },
+      headers: {
+        Authorization: authHeader,
+        "User-Agent": "GoKnoop/1.0 (+https://go-knoop.vercel.app; QGIS-compatible WFS client)",
+        Accept: "application/xml, application/json, */*",
+      },
       cache: "no-store",
     });
 
