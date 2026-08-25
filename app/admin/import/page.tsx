@@ -94,11 +94,11 @@ export default function ImportAdminPage() {
             `Server gaf geen geldige JSON terug (status ${res.status}): ${rawText.slice(0, 200)} (poging ${attempt})`,
             true
           );
-          if (attempt >= 5) {
+          if (attempt >= 10) {
             log("5 pogingen mislukt op rij, gestopt. Tik nogmaals op start om te hervatten vanaf het laatste punt.", true);
             break;
           }
-          await new Promise((r) => setTimeout(r, 2000));
+          await new Promise((r) => setTimeout(r, 5000));
           continue;
         }
 
@@ -106,11 +106,11 @@ export default function ImportAdminPage() {
           attempt++;
           const errorDetail = [data.error, (data as { details?: string }).details].filter(Boolean).join(" — ");
           log(`Fout bij startIndex=${currentStart}: ${errorDetail || res.status} (poging ${attempt}) — probeer opnieuw...`, true);
-          if (attempt >= 5) {
+          if (attempt >= 10) {
             log("5 pogingen mislukt op rij, gestopt. Pas evt. de paginagrootte aan en tik nogmaals op start om te hervatten.", true);
             break;
           }
-          await new Promise((r) => setTimeout(r, 2000));
+          await new Promise((r) => setTimeout(r, 5000));
           continue; // zelfde startIndex opnieuw proberen
         }
 
@@ -134,14 +134,15 @@ export default function ImportAdminPage() {
         }
 
         currentStart = data.newStartIndex ?? currentStart;
+        await new Promise((r) => setTimeout(r, 400)); // korte pauze tussen pagina's, uit respect voor Routedatabank
       } catch (err) {
         attempt++;
         log(`Onverwachte fout: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)} (poging ${attempt})`, true);
-        if (attempt >= 5) {
+        if (attempt >= 10) {
           log("5 pogingen mislukt op rij, gestopt. Tik nogmaals op start om te hervatten vanaf het laatste punt.", true);
           break;
         }
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 5000));
       }
     }
 
