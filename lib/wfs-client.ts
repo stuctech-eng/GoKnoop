@@ -36,14 +36,30 @@ export async function fetchWfsPage(
 
   const authHeader = "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
 
-  const res = await fetch(`${baseUrl}?${params.toString()}`, {
-    headers: {
-      Authorization: authHeader,
-      "User-Agent": "GoKnoop/1.0 (+https://go-knoop.vercel.app; QGIS-compatible WFS client)",
-      Referer: "https://go-knoop.vercel.app/",
-    },
-    cache: "no-store",
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s harde limiet
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}?${params.toString()}`, {
+      headers: {
+        Authorization: authHeader,
+        "User-Agent": "GoKnoop/1.0 (+https://go-knoop.vercel.app; QGIS-compatible WFS client)",
+        Referer: "https://go-knoop.vercel.app/",
+      },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(
+        `WFS-aanvraag voor ${typeName} (startIndex=${startIndex}, count=${count}) duurde langer dan 20s en is afgebroken.`
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!res.ok) {
     throw new Error(`WFS-aanvraag voor ${typeName} gaf status ${res.status}`);
