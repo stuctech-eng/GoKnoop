@@ -99,6 +99,8 @@ CREATE TABLE active_dataset (
 
 De steekproef toont een `rijrichting`-veld met geziene waarden `0` en `1` (numeriek/enum, geen vrije tekst). Dit is nog niet geïnterpreteerd en heeft directe gevolgen voor het graphmodel:
 
+**Update 25-8-2026:** empirische steekproef (917 edges) bevestigt drie waarden, niet twee: `0` (688×, 75%), `1` (143×, 16%), `2` (86×, 9%). De aanname van een simpele bidirectioneel/eenrichting-codering met twee waarden klopt dus niet — er is een derde categorie die nog niet verklaard is (mogelijk: onbekend/niet-geregistreerd, of een tweede type beperking zoals "verplichte rijrichting voor bromfietsers" of vergelijkbaar). Dit moet worden opgehelderd voordat `directionality` betrouwbaar kan worden afgeleid.
+
 - Als `rijrichting` een eenrichtingsbeperking aangeeft (bijv. `0` = beide richtingen, `1` = alleen in de richting van de lijngeometrie, of een vergelijkbare codering), dan is een edge **niet automatisch symmetrisch** (`24 ↔ 31`), maar kan die directioneel zijn (`24 → 31`).
 - Voor de route-engine is dit essentieel: een gegenereerde route die een eenrichtingspad tegen de richting in gebruikt, is voor een fietser ongeldig of zelfs verboden.
 
@@ -121,7 +123,9 @@ Voor elke edge:
 
 1. Bepaal het eerste punt (`ST_StartPoint`) en laatste punt (`ST_EndPoint`) van de lijngeometrie.
 2. Zoek voor elk eindpunt de dichtstbijzijnde node binnen een tolerantie, met PostGIS `ST_DWithin` + `ORDER BY geom <-> point LIMIT 1` (index-versneld via de GIST-index).
-3. **Starttolerantie: 15 meter.** Dit is een eerste aanname, geen gevalideerde waarde — Phase 1A kon dit niet empirisch bevestigen omdat dat coördinaat-vergelijkingsverzoek niet lukte. **Eerste taak bij implementatie: een steekproef van 50–100 edges handmatig/scriptmatig controleren om de juiste tolerantie vast te stellen**, voordat dit op de volledige dataset (28.067 edges) wordt losgelaten.
+3. **Matchtolerantie: 5 meter (empirisch bevestigd, 25-8-2026).** Steekproef van 449 nodes / 917 edges (bbox rond Utrecht/Gooi en Vechtstreek) toont: mediaan afstand tot dichtstbijzijnde node is **0,00 meter** (veel exacte coördinaat-matches), 77,7% matcht al binnen 2m, en oprekken tot 50m voegt slechts 1 procentpunt toe (78,8%). Een ruimere tolerantie dan ~5m levert dus geen echte winst en vergroot alleen het risico op foutieve matches. **Definitieve waarde: 5 meter.**
+
+4. **~21% van de edge-eindpunten blijft structureel unmatched, ook bij grote tolerantie — dit is verwacht gedrag, geen bug.** Waarschijnlijke oorzaak: de `_vrij`-lagen voor nodes en edges zijn per regio onafhankelijk vrijgegeven. Een edge kan "vrij" zijn terwijl het knooppunt waarop hij aansluit in een aangrenzende, niet-vrijgegeven regio ligt en dus alleen in de ontoegankelijke volledige laag bestaat. Dit is een karakteristiek van de toegestane dataset, geen matchingfout — de importer moet deze edges gewoon opslaan met `match_confidence = 'unmatched_start'/'unmatched_end'`, niet proberen te forceren.
 4. Sla het resultaat op: beide kanten gematcht → `match_confidence = 'matched'`; anders het toepasselijke label.
 5. Reken na import het percentage matched/unmatched uit en zet dat in `dataset_versions.validation_result`.
 
@@ -130,7 +134,7 @@ Voor elke edge:
 ## 6. DATAKWALITEIT — VERWACHTE AANDACHTSPUNTEN
 
 - **`uitlev_akk`-veld:** bevestigd in de steekproef altijd `"Ja; vrij"` op de geteste records. Toch bij import blijven controleren of dit per record klopt, niet aannemen dat de hele laag uniform is.
-- **`soort_knooppunt` met waarden als "Samengesteld_aan"/"Samengesteld_uit":** gezien in de steekproef, nog niet volledig begrepen. Vermoeden: sommige knooppuntnummers bestaan uit meerdere onderliggende puntobjecten (bijv. een knooppunt met een ingewikkeld kruispunt heeft meerdere geometrische representaties onder hetzelfde `knooppuntnr`). **Moet worden uitgezocht bij implementatie** — mogelijk moeten meerdere records met hetzelfde `knooppuntnr` worden samengevoegd tot één logische node, in plaats van als aparte nodes geïmporteerd.
+- **`soort_knooppunt` met waarden als "Samengesteld_aan"/"Samengesteld_uit" — BEVESTIGD SUBSTANTIEEL, geen randgeval.** Empirische steekproef (449 nodes): 165 van de 449 records (37%) zijn "Samengesteld" (aan of uit), en 98 unieke knooppuntnummers hebben meerdere records — tot 8 records onder één nummer (bijv. nr. "10"). De hypothese dat één logisch knooppunt uit meerdere fysieke puntrecords kan bestaan is dus bevestigd én het komt vaak genoeg voor dat de importer dit expliciet moet afhandelen (samenvoegen tot één logische node), niet als uitzondering behandelen.
 - **Schema-afwijking tussen `fietsnetwerken_vrij` en het eerder via DescribeFeatureType geziene `fietsknooppuntnetwerken`:** de `_vrij`-laag heeft `lokaalid` in plaats van `ogc_fid`. Importer moet robuust zijn tegen dit soort kleine schemaverschillen tussen laagvarianten.
 - **Limburg-uitzondering:** nog niet expliciet zichtbaar in `regio`/`provincie`-waarden uit de steekproef (die toonde alleen Utrecht/Gooi en Vechtstreek). Bij volledige import controleren of Limburgse regio's al server-side ontbreken, of dat er alsnog een filter nodig is.
 
