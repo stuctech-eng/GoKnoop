@@ -1,0 +1,159 @@
+# GoKnoop — Phase 1B: Data Model + Importer Design
+
+**Datum:** 25 augustus 2026
+**Status:** Ontwerp — nog niet geïmplementeerd (dat is Phase 1C)
+**Basis:** Phase 1A-auditrapport (`docs/phase1a-wfs-audit.md`), bevestigd met echte featuredata
+
+---
+
+## 1. BRONLAGEN (definitief, Phase 1A bevestigd)
+
+| Bron-laag | Ons gebruik | CRS zoals geleverd |
+|---|---|---|
+| `fietsknooppunten_wgs84` | Nodes | EPSG:4326 |
+| `fietsnetwerken_vrij` | Edges | EPSG:28992 |
+
+Beide zijn de "vrije" varianten waar het account `goknoop` daadwerkelijk rechten op heeft (bevestigd in Phase 1A). De NL-brede lagen (`fietsknooppunten`, `fietsknooppuntnetwerken`) blijven ontoegankelijk en worden niet gebruikt.
+
+**Open vraag, geen blocker:** `fietsknooppunten_vrij` (RD-variant van dezelfde nodes) bestaat ook — te overwegen als primaire bron in plaats van de wgs84-variant, zodat nodes en edges in dezelfde bron-CRS binnenkomen en er één conversie minder nodig is. Te beslissen bij implementatie; functioneel maakt het geen verschil.
+
+---
+
+## 2. DOELDATABASE
+
+**Voorstel: Supabase (PostgreSQL + PostGIS).**
+
+Redenen:
+- Master Plan sectie 10 schrijft PostgreSQL + PostGIS voor als voorkeursdatabase (spatial indexes, nearest-neighbor queries, geometrieberekeningen)
+- Supabase is al onderdeel van de bestaande toolset (gebruikt in Polder) — geen nieuwe leverancier, wel een nieuwe database naast Firebase
+- Vercel + Supabase is een beproefde combinatie in de rest van de projectenportfolio
+
+**Let op — dit wijkt af van de meeste andere GoKnoop-achtige projecten die op Firebase draaien.** Firestore heeft geen bruikbare geo-spatial queries (geen PostGIS-equivalent), dus voor GoKnoop specifiek is Supabase de juiste keuze, niet Firebase. Dit is een bewuste afwijking, geen inconsistentie.
+
+---
+
+## 3. DATAMODEL (PostGIS-schema, definitief voorstel)
+
+```sql
+-- Dataset-versies: elke import krijgt een eigen versie, activatie gebeurt atomisch
+CREATE TABLE dataset_versions (
+    id            BIGSERIAL PRIMARY KEY,
+    source        TEXT NOT NULL DEFAULT 'routedatabank',
+    imported_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status        TEXT NOT NULL DEFAULT 'pending', -- pending | validated | active | superseded | failed
+    node_count    INTEGER,
+    edge_count    INTEGER,
+    validation_result JSONB
+);
+
+-- Nodes: knooppunten
+CREATE TABLE nodes (
+    id              BIGSERIAL PRIMARY KEY,
+    dataset_version_id BIGINT NOT NULL REFERENCES dataset_versions(id),
+    source_objectid BIGINT NOT NULL,       -- objectid uit fietsknooppunten_wgs84
+    number          TEXT NOT NULL,          -- knooppuntnr (string, niet int)
+    regio           TEXT,
+    provincie       TEXT,
+    soort_knooppunt TEXT,
+    geom            GEOMETRY(Point, 28992) NOT NULL,  -- opgeslagen in RD New voor matchprecisie
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_nodes_geom ON nodes USING GIST (geom);
+CREATE INDEX idx_nodes_dataset ON nodes (dataset_version_id);
+CREATE INDEX idx_nodes_number ON nodes (dataset_version_id, number);
+
+-- Edges: verbindingen tussen knooppunten
+CREATE TABLE edges (
+    id                  BIGSERIAL PRIMARY KEY,
+    dataset_version_id  BIGINT NOT NULL REFERENCES dataset_versions(id),
+    source_objectid     BIGINT NOT NULL,   -- objectid uit fietsnetwerken_vrij
+    regio               TEXT,
+    provincie           TEXT,
+    rijrichting         TEXT,
+    distance_m          INTEGER,            -- lengte_m uit de bron
+    geom                GEOMETRY(LineString, 28992) NOT NULL,
+    from_node_id        BIGINT REFERENCES nodes(id),  -- AFGELEID, niet uit bron
+    to_node_id          BIGINT REFERENCES nodes(id),  -- AFGELEID, niet uit bron
+    match_confidence     TEXT,               -- 'matched' | 'unmatched_start' | 'unmatched_end' | 'unmatched_both'
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_edges_geom ON edges USING GIST (geom);
+CREATE INDEX idx_edges_dataset ON edges (dataset_version_id);
+CREATE INDEX idx_edges_from ON edges (from_node_id);
+CREATE INDEX idx_edges_to ON edges (to_node_id);
+
+-- Actieve versie: precies één rij, wijst naar de dataset_version die live staat
+CREATE TABLE active_dataset (
+    singleton   BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+    dataset_version_id BIGINT NOT NULL REFERENCES dataset_versions(id)
+);
+```
+
+**Waarom `from_node_id`/`to_node_id` nullable zijn:** niet elke edge hoeft aan beide kanten een matchende node te hebben (zie sectie 5, datakwaliteit). Een edge zonder volledige match wordt niet stilzwijgend genegeerd, maar opgeslagen met `match_confidence` zodat de omvang van het probleem zichtbaar en meetbaar is.
+
+**Waarom alles in RD New (EPSG:28992) staat:** matchtolerantie werkt het natuurlijkst in meters. WGS84 (lat/lon) vervormt afstanden afhankelijk van breedtegraad. Nodes uit `fietsknooppunten_wgs84` worden dus bij import geconverteerd naar EPSG:28992 (`ST_Transform`).
+
+---
+
+## 4. NODE/EDGE MATCHING-ALGORITME
+
+Voor elke edge:
+
+1. Bepaal het eerste punt (`ST_StartPoint`) en laatste punt (`ST_EndPoint`) van de lijngeometrie.
+2. Zoek voor elk eindpunt de dichtstbijzijnde node binnen een tolerantie, met PostGIS `ST_DWithin` + `ORDER BY geom <-> point LIMIT 1` (index-versneld via de GIST-index).
+3. **Starttolerantie: 15 meter.** Dit is een eerste aanname, geen gevalideerde waarde — Phase 1A kon dit niet empirisch bevestigen omdat dat coördinaat-vergelijkingsverzoek niet lukte. **Eerste taak bij implementatie: een steekproef van 50–100 edges handmatig/scriptmatig controleren om de juiste tolerantie vast te stellen**, voordat dit op de volledige dataset (28.067 edges) wordt losgelaten.
+4. Sla het resultaat op: beide kanten gematcht → `match_confidence = 'matched'`; anders het toepasselijke label.
+5. Reken na import het percentage matched/unmatched uit en zet dat in `dataset_versions.validation_result`.
+
+---
+
+## 5. DATAKWALITEIT — VERWACHTE AANDACHTSPUNTEN
+
+- **`uitlev_akk`-veld:** bevestigd in de steekproef altijd `"Ja; vrij"` op de geteste records. Toch bij import blijven controleren of dit per record klopt, niet aannemen dat de hele laag uniform is.
+- **`soort_knooppunt` met waarden als "Samengesteld_aan"/"Samengesteld_uit":** gezien in de steekproef, nog niet volledig begrepen. Vermoeden: sommige knooppuntnummers bestaan uit meerdere onderliggende puntobjecten (bijv. een knooppunt met een ingewikkeld kruispunt heeft meerdere geometrische representaties onder hetzelfde `knooppuntnr`). **Moet worden uitgezocht bij implementatie** — mogelijk moeten meerdere records met hetzelfde `knooppuntnr` worden samengevoegd tot één logische node, in plaats van als aparte nodes geïmporteerd.
+- **Schema-afwijking tussen `fietsnetwerken_vrij` en het eerder via DescribeFeatureType geziene `fietsknooppuntnetwerken`:** de `_vrij`-laag heeft `lokaalid` in plaats van `ogc_fid`. Importer moet robuust zijn tegen dit soort kleine schemaverschillen tussen laagvarianten.
+- **Limburg-uitzondering:** nog niet expliciet zichtbaar in `regio`/`provincie`-waarden uit de steekproef (die toonde alleen Utrecht/Gooi en Vechtstreek). Bij volledige import controleren of Limburgse regio's al server-side ontbreken, of dat er alsnog een filter nodig is.
+
+---
+
+## 6. IMPORTER-PIPELINE
+
+```
+1. Nieuwe dataset_versions-rij aanmaken (status: 'pending')
+2. Nodes ophalen (fietsknooppunten_wgs84, gepagineerd via startIndex+count, GEEN cap —
+   dit is de eigen database-import, niet de publieke debug-route)
+3. Edges ophalen (fietsnetwerken_vrij, zelfde paginering)
+4. Transform: nodes van EPSG:4326 → EPSG:28992
+5. Bulk-insert nodes en edges, gekoppeld aan de nieuwe dataset_version_id
+6. Node/edge-matching uitvoeren (sectie 4), match_confidence invullen
+7. Validatie: tel matched/unmatched, controleer op duplicaten, ontbrekende geometrieën
+8. Bij voldoende kwaliteit (drempel te bepalen, bijv. >98% matched): status → 'validated'
+9. Atomische activatie: active_dataset.dataset_version_id bijwerken naar de nieuwe versie
+   (één UPDATE-statement — de oude versie blijft ongewijzigd in de database staan)
+10. Oude dataset_version(s) markeren als 'superseded', niet meteen verwijderen
+    (rollback-mogelijkheid, en historische vergelijking)
+```
+
+**Belangrijk:** de applicatie query't nooit rechtstreeks op de nieuwste `dataset_version_id` — altijd via `active_dataset`. Dat is wat "atomische activatie" concreet betekent: gebruikers zien nooit een halfslachtig geïmporteerde dataset, ook niet tijdens een lopende import.
+
+**Paginering:** WFS 2.0.0 ondersteunt `startIndex` + `count` voor het ophalen van grote datasets in delen (bijv. 1000 per aanvraag). Met 13.152 nodes en 28.067 edges is dat orde grootte 14 + 29 = ~43 requests voor een volledige import — ruim binnen redelijke grenzen voor een Vercel serverless function met een timeout, mits elke pagina apart wordt opgehaald (niet in één functie-aanroep — waarschijnlijk een aparte import-route of achtergrondtaak nodig, te bepalen bij implementatie).
+
+---
+
+## 7. UPDATE-FREQUENTIE
+
+Routedatabank actualiseert ~2x per maand (bevestigd door Jon Rietman). Voorstel: een geplande import (bijv. wekelijks, ruim binnen hun updatefrequentie) via een Vercel Cron Job die dezelfde importer-pipeline aanroept. Geen realtime sync nodig.
+
+---
+
+## 8. WAT DIT ONTWERP BEWUST NIET DOET
+
+- Geen downloadbare export van de brondata aanbieden (Master Plan sectie 67) — de nodes/edges-tabellen zijn intern, de applicatie serveert alleen afgeleide routes/navigatie, nooit de ruwe dataset.
+- Geen realtime WFS-doorverbinding vanuit de frontend — alle WFS-verkeer blijft server-side, de frontend praat alleen met de eigen GoKnoop-database.
+- Geen implementatie in dit document — dat is Phase 1C.
+
+---
+
+## VOLGENDE STAP
+
+Bij akkoord op dit ontwerp: Phase 1C — daadwerkelijke bouw van de importer, te beginnen met de matchtolerantie-steekproef uit sectie 4, punt 3, voordat de volledige dataset wordt verwerkt.
