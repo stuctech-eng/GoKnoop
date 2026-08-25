@@ -89,13 +89,33 @@ CREATE TABLE active_dataset (
 );
 ```
 
-**Waarom `from_node_id`/`to_node_id` nullable zijn:** niet elke edge hoeft aan beide kanten een matchende node te hebben (zie sectie 5, datakwaliteit). Een edge zonder volledige match wordt niet stilzwijgend genegeerd, maar opgeslagen met `match_confidence` zodat de omvang van het probleem zichtbaar en meetbaar is.
+**Waarom `from_node_id`/`to_node_id` nullable zijn:** niet elke edge hoeft aan beide kanten een matchende node te hebben (zie sectie 6, datakwaliteit). Een edge zonder volledige match wordt niet stilzwijgend genegeerd, maar opgeslagen met `match_confidence` zodat de omvang van het probleem zichtbaar en meetbaar is.
 
 **Waarom alles in RD New (EPSG:28992) staat:** matchtolerantie werkt het natuurlijkst in meters. WGS84 (lat/lon) vervormt afstanden afhankelijk van breedtegraad. Nodes uit `fietsknooppunten_wgs84` worden dus bij import geconverteerd naar EPSG:28992 (`ST_Transform`).
 
 ---
 
-## 4. NODE/EDGE MATCHING-ALGORITME
+## 4. DIRECTIONALITEIT — `rijrichting`
+
+De steekproef toont een `rijrichting`-veld met geziene waarden `0` en `1` (numeriek/enum, geen vrije tekst). Dit is nog niet geïnterpreteerd en heeft directe gevolgen voor het graphmodel:
+
+- Als `rijrichting` een eenrichtingsbeperking aangeeft (bijv. `0` = beide richtingen, `1` = alleen in de richting van de lijngeometrie, of een vergelijkbare codering), dan is een edge **niet automatisch symmetrisch** (`24 ↔ 31`), maar kan die directioneel zijn (`24 → 31`).
+- Voor de route-engine is dit essentieel: een gegenereerde route die een eenrichtingspad tegen de richting in gebruikt, is voor een fietser ongeldig of zelfs verboden.
+
+**Verplichte Phase 1C-onderzoeksstap, vóór de importer gebouwd wordt:** de daadwerkelijke betekenis van elke `rijrichting`-waarde vaststellen — via een combinatie van (a) documentatie/navraag bij Routedatabank indien nodig, en (b) visuele/steekproefsgewijze validatie: geometrierichting van de lijn vergelijken met bekende praktijksituaties (bijv. een brug of eenrichtingsfietspad dat bekend staat als eenrichtingsverkeer).
+
+**Gevolg voor het datamodel:** `edges` krijgt een extra kolom `directionality` (`bidirectional` | `forward_only` | `backward_only`), afgeleid van `rijrichting` tijdens import — niet 1-op-1 overgenomen totdat de codering bevestigd is.
+
+```sql
+ALTER TABLE edges ADD COLUMN directionality TEXT NOT NULL DEFAULT 'bidirectional';
+-- Waarden: 'bidirectional' | 'forward_only' | 'backward_only'
+-- 'forward_only'/'backward_only' verwijzen naar de richting van de brongeometrie
+-- (ST_StartPoint → ST_EndPoint = 'forward')
+```
+
+---
+
+## 5. NODE/EDGE MATCHING-ALGORITME
 
 Voor elke edge:
 
@@ -107,7 +127,7 @@ Voor elke edge:
 
 ---
 
-## 5. DATAKWALITEIT — VERWACHTE AANDACHTSPUNTEN
+## 6. DATAKWALITEIT — VERWACHTE AANDACHTSPUNTEN
 
 - **`uitlev_akk`-veld:** bevestigd in de steekproef altijd `"Ja; vrij"` op de geteste records. Toch bij import blijven controleren of dit per record klopt, niet aannemen dat de hele laag uniform is.
 - **`soort_knooppunt` met waarden als "Samengesteld_aan"/"Samengesteld_uit":** gezien in de steekproef, nog niet volledig begrepen. Vermoeden: sommige knooppuntnummers bestaan uit meerdere onderliggende puntobjecten (bijv. een knooppunt met een ingewikkeld kruispunt heeft meerdere geometrische representaties onder hetzelfde `knooppuntnr`). **Moet worden uitgezocht bij implementatie** — mogelijk moeten meerdere records met hetzelfde `knooppuntnr` worden samengevoegd tot één logische node, in plaats van als aparte nodes geïmporteerd.
@@ -116,7 +136,7 @@ Voor elke edge:
 
 ---
 
-## 6. IMPORTER-PIPELINE
+## 7. IMPORTER-PIPELINE
 
 ```
 1. Nieuwe dataset_versions-rij aanmaken (status: 'pending')
@@ -125,7 +145,7 @@ Voor elke edge:
 3. Edges ophalen (fietsnetwerken_vrij, zelfde paginering)
 4. Transform: nodes van EPSG:4326 → EPSG:28992
 5. Bulk-insert nodes en edges, gekoppeld aan de nieuwe dataset_version_id
-6. Node/edge-matching uitvoeren (sectie 4), match_confidence invullen
+6. Node/edge-matching uitvoeren (sectie 5), match_confidence en directionality invullen
 7. Validatie: tel matched/unmatched, controleer op duplicaten, ontbrekende geometrieën
 8. Bij voldoende kwaliteit (drempel te bepalen, bijv. >98% matched): status → 'validated'
 9. Atomische activatie: active_dataset.dataset_version_id bijwerken naar de nieuwe versie
@@ -140,13 +160,13 @@ Voor elke edge:
 
 ---
 
-## 7. UPDATE-FREQUENTIE
+## 8. UPDATE-FREQUENTIE
 
 Routedatabank actualiseert ~2x per maand (bevestigd door Jon Rietman). Voorstel: een geplande import (bijv. wekelijks, ruim binnen hun updatefrequentie) via een Vercel Cron Job die dezelfde importer-pipeline aanroept. Geen realtime sync nodig.
 
 ---
 
-## 8. WAT DIT ONTWERP BEWUST NIET DOET
+## 9. WAT DIT ONTWERP BEWUST NIET DOET
 
 - Geen downloadbare export van de brondata aanbieden (Master Plan sectie 67) — de nodes/edges-tabellen zijn intern, de applicatie serveert alleen afgeleide routes/navigatie, nooit de ruwe dataset.
 - Geen realtime WFS-doorverbinding vanuit de frontend — alle WFS-verkeer blijft server-side, de frontend praat alleen met de eigen GoKnoop-database.
@@ -154,6 +174,36 @@ Routedatabank actualiseert ~2x per maand (bevestigd door Jon Rietman). Voorstel:
 
 ---
 
-## VOLGENDE STAP
+## STATUS: GOEDGEKEURD ALS PHASE 1B
 
-Bij akkoord op dit ontwerp: Phase 1C — daadwerkelijke bouw van de importer, te beginnen met de matchtolerantie-steekproef uit sectie 4, punt 3, voordat de volledige dataset wordt verwerkt.
+---
+
+## PHASE 1C — VOLGORDE VAN UITVOERING
+
+Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande onzekerheden uit dit document één voor één empirisch opgelost, in deze volgorde — elke stap bouwt op de vorige:
+
+```
+1. Matchtolerantie-steekproef       (sectie 5, punt 3)
+        ↓
+2. Onderzoek samengestelde knooppunten   (sectie 6 — Samengesteld_aan/uit)
+        ↓
+3. Onderzoek rijrichting              (sectie 4 — directionaliteit)
+        ↓
+4. Controleer node ↔ edge relaties    (matching op grotere steekproef, met 1+2+3 verwerkt)
+        ↓
+5. Controleer Limburg-exclusie        (sectie 6)
+        ↓
+6. Importer bouwen                    (sectie 7, pipeline)
+        ↓
+7. Volledige dataset importeren
+        ↓
+8. Validatie                          (matched/unmatched-percentage, duplicaten)
+        ↓
+9. Graph genereren
+        ↓
+10. Graph-integriteit testen
+        ↓
+11. Dataset atomisch activeren
+```
+
+Pas na stap 11 begint de route-generator (Phase 2 van het Master Plan).
