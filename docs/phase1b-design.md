@@ -310,7 +310,8 @@ geometry/afstand  ← ruimtelijk signaal (kandidaatvorming, niet de beslissing z
 
 De uiteindelijke merge-beslissing = combinatie van alle vier, nooit één signaal alleen. Cluster als geheel beoordelen (connected component), niet paarsgewijs — een cluster met brugpunten naar meerdere regio's kan alsnog één samenhangend netwerk zijn.
 - **Schema-afwijking tussen `fietsnetwerken_vrij` en het eerder via DescribeFeatureType geziene `fietsknooppuntnetwerken`:** de `_vrij`-laag heeft `lokaalid` in plaats van `ogc_fid`. Importer moet robuust zijn tegen dit soort kleine schemaverschillen tussen laagvarianten.
-- **Limburg-uitzondering:** nog niet expliciet zichtbaar in `regio`/`provincie`-waarden uit de steekproef (die toonde alleen Utrecht/Gooi en Vechtstreek). Bij volledige import controleren of Limburgse regio's al server-side ontbreken, of dat er alsnog een filter nodig is.
+- **Limburg-uitzondering: BEVESTIGD, geen actie nodig (25-8-2026).** Een bbox middenin Limburg (Maastricht-Sittard-Heerlen-Roermond, vergelijkbare grootte als de eerdere testgebieden) leverde **nul nodes en nul edges** op. Ter vergelijking: een eerste, minder centrale poging (deels Noord-Brabant) gaf wel resultaten maar met vrijwel geen Limburg-`regio`-labels. De server sluit Limburg dus al zelf uit voor het `goknoop`-account — er is geen aparte filter in de importer nodig.
+- **Regio-generalisatie getest (25-8-2026):** matchtolerantie- en veldprofiel-tests herhaald in Groningen/Drenthe (476 nodes, 500 edges) ter controle of de Utrecht-bevindingen toeval waren. Resultaat: zelfde patroon — snel plateau bij matchtolerantie (68,9% binnen 2m → 70,4% bij 50m, vergelijkbare vorm als Utrecht's 77,7%→78,8%), vergelijkbare `rijrichting`-verdeling (82%/10%/8% vs Utrecht's 75%/16%/9%) en `soort_knooppunt`-verhouding. De eerdere conclusies zijn dus niet regio-specifiek toeval.
 
 ---
 
@@ -412,9 +413,9 @@ Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande on
         ↓
 10. Rijrichting semantiek-analyse      ⏸️ gepauzeerd — 2 hypotheses getest en verworpen, veilige default staat, geen blocker
         ↓
-11. Node ↔ edge volledige steekproef
+11. Node ↔ edge volledige steekproef  ✅ afgerond — patroon bevestigd in Groningen/Drenthe, niet regio-specifiek
         ↓
-12. Limburg-exclusie
+12. Limburg-exclusie                  ✅ afgerond — bevestigd server-side uitgesloten, geen filter nodig
         ↓
 13. Importer bouwen
         ↓
