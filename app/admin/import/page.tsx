@@ -104,7 +104,8 @@ export default function ImportAdminPage() {
 
         if (!res.ok) {
           attempt++;
-          log(`Fout bij startIndex=${currentStart}: ${data.error || res.status} (poging ${attempt}) — probeer opnieuw...`, true);
+          const errorDetail = [data.error, (data as { details?: string }).details].filter(Boolean).join(" — ");
+          log(`Fout bij startIndex=${currentStart}: ${errorDetail || res.status} (poging ${attempt}) — probeer opnieuw...`, true);
           if (attempt >= 5) {
             log("5 pogingen mislukt op rij, gestopt. Pas evt. de paginagrootte aan en tik nogmaals op start om te hervatten.", true);
             break;
