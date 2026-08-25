@@ -62,6 +62,10 @@ CREATE TABLE source_nodes (
     regio               TEXT NOT NULL,      -- ruwe brondata — ook GEEN garantie op unieke identiteit
     provincie           TEXT,
     soort_knooppunt     TEXT,
+    network_type        TEXT NOT NULL DEFAULT 'fiets',  -- Master Context sectie 8: niet hardcoded aan
+                                                          -- fiets — deze import is altijd 'fiets'
+                                                          -- (bron = fietsknooppunten_vrij), voorbereid op
+                                                          -- toekomstige wandel-/MTB-knooppuntlagen
     geom                GEOMETRY(Point, 28992) NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -74,6 +78,7 @@ CREATE TABLE logical_nodes (
     dataset_version_id BIGINT NOT NULL REFERENCES dataset_versions(id),
     display_number  TEXT NOT NULL,   -- afgeleid: knooppuntnr van (doorgaans) het representatieve source_node
     display_regio   TEXT NOT NULL,
+    network_type    TEXT NOT NULL DEFAULT 'fiets',  -- zie source_nodes.network_type
     geom            GEOMETRY(Point, 28992) NOT NULL,  -- afgeleid: bijv. centroid van gekoppelde source_nodes
     cluster_method  TEXT NOT NULL,    -- 'single' (1-op-1) | 'spatial_cluster' (samengevoegd)
     cluster_threshold_m INTEGER,      -- welke afstandsdrempel toegepast is, indien clustered
@@ -103,12 +108,21 @@ CREATE TABLE edges (
     from_node_id        BIGINT REFERENCES logical_nodes(id),  -- AFGELEID, niet uit bron
     to_node_id          BIGINT REFERENCES logical_nodes(id),  -- AFGELEID, niet uit bron
     match_confidence     TEXT,               -- 'matched' | 'unmatched_start' | 'unmatched_end' | 'unmatched_both'
+    -- Toekomstvaste velden (Master Context v2 sectie 3, 8, 22) — nu alleen als kolom,
+    -- functionaliteit die erop bouwt wordt NIET nu gebouwd (sectie 23: geen premature implementation):
+    mode                TEXT NOT NULL DEFAULT 'bicycle',  -- toegestane modaliteit; deze import is altijd 'bicycle'
+                                                            -- (bron = fietsnetwerken_vrij), voorkomt latere rewrite
+                                                            -- zodra wandel/MTB-lagen worden toegevoegd
+    network             TEXT,               -- welk netwerktype (regionaal fietsnetwerk, LF-route, etc.)
+    restrictions         JSONB,              -- toekomstige beperkingen (leeg in Phase 1, structuur al aanwezig)
+    quality_score        NUMERIC,            -- toekomstige routekwaliteit-scoring (ongebruikt in Phase 1)
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_edges_geom ON edges USING GIST (geom);
 CREATE INDEX idx_edges_dataset ON edges (dataset_version_id);
 CREATE INDEX idx_edges_from ON edges (from_node_id);
 CREATE INDEX idx_edges_to ON edges (to_node_id);
+CREATE INDEX idx_edges_mode ON edges (mode);  -- voorbereid op toekomstige multi-modaliteit queries
 
 -- Actieve versie: precies één rij, wijst naar de dataset_version die live staat
 CREATE TABLE active_dataset (
@@ -373,6 +387,27 @@ PostGIS/SQL kan dit deels zelf (bijv. nodes zonder edges via een LEFT JOIN), maa
 ## 9. UPDATE-FREQUENTIE
 
 Routedatabank actualiseert ~2x per maand (bevestigd door Jon Rietman). Voorstel: een geplande import (bijv. wekelijks, ruim binnen hun updatefrequentie) via een Vercel Cron Job die dezelfde importer-pipeline aanroept. Geen realtime sync nodig.
+
+---
+
+## 9B. TOETSING TEGEN MASTER CONTEXT v2 (25-8-2026)
+
+Vóór de importer wordt gebouwd (stap 13), is het ontwerp getoetst aan de langetermijn-architectuurvisie (Master Context v2, sectie 3 en 22: edge-structuur, gelaagde architectuur; sectie 23: geen premature implementation).
+
+**Al toekomstvast, geen aanpassing nodig:**
+- Gelaagde architectuur (`source_nodes` → `logical_nodes` → `edges`) komt overeen met Master Context's DATA → NORMALIZATION → GRAPH-lagen
+- Dataset-versionering met atomische activatie voorkomt dat een fundamentele rewrite nodig is bij toekomstige uitbreidingen
+- `directionality` als apart afgeleid veld (i.p.v. destructieve filtering) sluit aan bij "richting" als edge-attribuut uit sectie 3
+
+**Aangevuld naar aanleiding van deze toetsing (kolommen toegevoegd, GEEN functionaliteit gebouwd):**
+- `edges.mode` — toegestane modaliteit (Master Context sectie 8: "voorkom dat route-engine structureel afhankelijk wordt van mode=bicycle"). Deze import zet dit altijd op `'bicycle'` (bron is `fietsnetwerken_vrij`), maar het veld bestaat nu al zodat een toekomstige wandel- of MTB-import geen schema-rewrite vereist.
+- `edges.network`, `source_nodes.network_type`, `logical_nodes.network_type` — welk netwerktype, voorbereid op meerdere netwerklagen naast elkaar
+- `edges.restrictions` (JSONB, leeg) en `edges.quality_score` (ongebruikt) — placeholders voor toekomstige beperkingen en routekwaliteit-scoring uit sectie 3
+
+**Bewust uitgesteld — expliciet NIET nu gebouwd (Master Context sectie 23, harde "NIET"-lijst):**
+Route-object (sectie 7), Route Engine (sectie 3), Navigatie (sectie 4), GoKnoop UI (sectie 5), routekarakter/`RoutePreferences` (sectie 9), waypoints/"ik wil hier langs" (sectie 10), POI-laag (sectie 11), AI-routeassistent (sectie 12), persoonlijke voorkeuren (sectie 13), opgeslagen routes/varianten (sectie 14), route recovery (sectie 15), weerbewuste routes (sectie 16), e-bike/batterij (sectie 17), samen fietsen (sectie 18), offline (sectie 19), wearables (sectie 20), veiligheidslaag (sectie 21).
+
+Phase 1B/1C blijft exact wat het Master Context voorschrijft: `DATA → NORMALIZATION → GRAPH → VALIDATION`. Niets daarboven.
 
 ---
 
