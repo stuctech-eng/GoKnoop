@@ -253,27 +253,39 @@ Routedatabank actualiseert ~2x per maand (bevestigd door Jon Rietman). Voorstel:
 Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande onzekerheden uit dit document één voor één empirisch opgelost, in deze volgorde — elke stap bouwt op de vorige:
 
 ```
-1. Matchtolerantie-steekproef       (sectie 5, punt 3)
+1. Matchtolerantie                    ✅ afgerond — 5 meter
         ↓
-2. Onderzoek samengestelde knooppunten   (sectie 6 — Samengesteld_aan/uit)
+2. Samengestelde nodes detecteren     ✅ afgerond — 37% van records, substantieel
         ↓
-3. Onderzoek rijrichting              (sectie 4 — directionaliteit)
+3. Rijrichting-hypothese testen       ✅ afgerond — duplicaat-hypothese verworpen (3,5%)
         ↓
-4. Controleer node ↔ edge relaties    (matching op grotere steekproef, met 1+2+3 verwerkt)
+4. Source-value/schema profiling      🔜 volgende stap
         ↓
-5. Controleer Limburg-exclusie        (sectie 6)
+5. Composite-node geometrieanalyse    🔜
         ↓
-6. Importer bouwen                    (sectie 8, pipeline)
+6. Composite edge-attachment test     🔜 — cruciaal: voorkomt kunstmatige shortcuts bij samenvoegen
         ↓
-7. Volledige dataset importeren
+7. Rijrichting semantiek-analyse      🔜 — lengte/regio-correlatie, geen gok
         ↓
-8. Validatie                          (matched/unmatched-percentage, duplicaten)
+8. Node ↔ edge volledige steekproef
         ↓
-9. Graph genereren
+9. Limburg-exclusie
         ↓
-10. Graph-connectivity testen          (sectie 7 — connected components, isolated nodes, eilandjes)
+10. Importer bouwen
         ↓
-11. Dataset atomisch activeren
+11. Volledige dataset importeren
+        ↓
+12. Validatie
+        ↓
+13. Graph genereren
+        ↓
+14. Graph-connectivity testen          (sectie 7 — connected components, isolated nodes, eilandjes)
+        ↓
+15. Dataset atomisch activeren
 ```
 
-Pas na stap 11 begint de route-generator (Phase 2 van het Master Plan).
+**Belangrijk architectuurpunt bij composite nodes (stap 5-6):** een centroid van de samengestelde punten wordt NIET automatisch gebruikt als samenvoegstrategie. Eerst moet empirisch worden vastgesteld of de fysieke punten onder één `knooppuntnr` daadwerkelijk één logische locatie vertegenwoordigen (edges convergeren op alle punten) of toevallig hetzelfde nummer delen terwijl het separate locaties zijn (edges zijn verdeeld over de punten, samenvoegen zou een kunstmatige shortcut creëren). De edge-attachment-test (stap 6) beantwoordt dit per samengesteld knooppunt, niet met een blanket-regel voor de hele dataset.
+
+**Directionality-codering:** `bidirectional` | `forward` | `reverse` | `unknown` (niet slechts drie waarden) — `unknown` is expliciet een aparte status, geen synoniem voor `bidirectional`. Een routing policy kan `unknown` voorlopig als `bidirectional` behandelen, maar dat is een bewuste, herroepbare beslissing op routing-niveau, niet een aanname die in de brondata-interpretatie wordt vastgelegd.
+
+Pas na stap 15 begint de route-generator (Phase 2 van het Master Plan).

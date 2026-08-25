@@ -1,31 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
 
 /**
- * Phase 1C, stap 1: matchtolerantie-steekproef.
+ * Phase 1C — empirische validatie-suite.
  *
- * Haalt een steekproef nodes (fietsknooppunten_vrij) en edges (fietsnetwerken_vrij)
- * op uit hetzelfde geografische gebied (bbox, beide lagen al in EPSG:28992 —
- * geen CRS-conversie nodig), en berekent voor elk edge-eindpunt de afstand tot
- * de dichtstbijzijnde node. Retourneert een statistische samenvatting, geen
- * ruwe featuredata — dit is een eenmalig diagnose-hulpmiddel, geen dataset-export.
+ * Voert alle Phase 1C data-analyses in één route uit tegen een steekproef
+ * uit Routedatabank (fietsknooppunten_vrij + fietsnetwerken_vrij, zelfde bbox,
+ * beide al in EPSG:28992). Puur diagnostisch — retourneert samenvattingen,
+ * geen ruwe featuredata-export.
  *
- * Beveiligd met dezelfde DEBUG_SECRET als de andere debug-routes.
+ * Query params:
+ *   key      — DEBUG_SECRET
+ *   bbox     — "minx,miny,maxx,maxy" in EPSG:28992 (default: klein gebied Utrecht)
+ *   sample   — max features per laag (default 500, cap 2000)
+ *   tests    — comma-separated subset: tolerance,direction,fieldProfile,composite
+ *              (default: alle)
  */
 
-function parseNodes(xml: string) {
-  const nodes: { knooppuntnr: string; soort: string; x: number; y: number }[] = [];
+type Node = { objectid: string; knooppuntnr: string; soort: string; x: number; y: number };
+type EdgeFull = {
+  objectid: string;
+  rijrichting: string;
+  lengte_m: number;
+  regio: string;
+  provincie: string;
+  coords: [number, number][];
+};
+
+function extractField(block: string, field: string): string | null {
+  const m = new RegExp(`<routedatabank:${field}>([^<]*)</routedatabank:${field}>`).exec(block);
+  return m ? m[1] : null;
+}
+
+function parseNodes(xml: string): Node[] {
+  const nodes: Node[] = [];
   const memberRegex = /<routedatabank:fietsknooppunten_vrij[^>]*>([\s\S]*?)<\/routedatabank:fietsknooppunten_vrij>/g;
   let m: RegExpExecArray | null;
   while ((m = memberRegex.exec(xml))) {
     const block = m[1];
-    const nrMatch = /<routedatabank:knooppuntnr>([^<]*)<\/routedatabank:knooppuntnr>/.exec(block);
-    const soortMatch = /<routedatabank:soort_knooppunt>([^<]*)<\/routedatabank:soort_knooppunt>/.exec(block);
     const posMatch = /<gml:pos>([^<]*)<\/gml:pos>/.exec(block);
     if (posMatch) {
       const [x, y] = posMatch[1].trim().split(/\s+/).map(Number);
       nodes.push({
-        knooppuntnr: nrMatch ? nrMatch[1] : "",
-        soort: soortMatch ? soortMatch[1] : "",
+        objectid: extractField(block, "objectid") || "",
+        knooppuntnr: extractField(block, "knooppuntnr") || "",
+        soort: extractField(block, "soort_knooppunt") || "",
         x,
         y,
       });
@@ -34,95 +52,23 @@ function parseNodes(xml: string) {
   return nodes;
 }
 
-function parseEdges(xml: string) {
-  const edges: { rijrichting: string; lengte_m: number; start: [number, number]; end: [number, number] }[] = [];
+function parseEdgesFull(xml: string): EdgeFull[] {
+  const edges: EdgeFull[] = [];
   const memberRegex = /<routedatabank:fietsnetwerken_vrij[^>]*>([\s\S]*?)<\/routedatabank:fietsnetwerken_vrij>/g;
   let m: RegExpExecArray | null;
   while ((m = memberRegex.exec(xml))) {
     const block = m[1];
-    const rrMatch = /<routedatabank:rijrichting>([^<]*)<\/routedatabank:rijrichting>/.exec(block);
-    const lenMatch = /<routedatabank:lengte_m>([^<]*)<\/routedatabank:lengte_m>/.exec(block);
-    const posListMatch = /<gml:posList>([^<]*)<\/gml:posList>/.exec(block);
-    if (posListMatch) {
-      const coords = posListMatch[1].trim().split(/\s+/).map(Number);
-      if (coords.length >= 4) {
-        const start: [number, number] = [coords[0], coords[1]];
-        const end: [number, number] = [coords[coords.length - 2], coords[coords.length - 1]];
-        edges.push({
-          rijrichting: rrMatch ? rrMatch[1] : "",
-          lengte_m: lenMatch ? parseFloat(lenMatch[1]) : 0,
-          start,
-          end,
-        });
-      }
-    }
-  }
-  return edges;
-}
-
-function pointInBbox(point: [number, number], bbox: [number, number, number, number]): boolean {
-  const [minx, miny, maxx, maxy] = bbox;
-  return point[0] >= minx && point[0] <= maxx && point[1] >= miny && point[1] <= maxy;
-}
-
-function nearestDistance(point: [number, number], nodes: { x: number; y: number }[]): number {
-  let best = Infinity;
-  for (const n of nodes) {
-    const dx = n.x - point[0];
-    const dy = n.y - point[1];
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d < best) best = d;
-  }
-  return best;
-}
-
-function reverseCoords(coords: [number, number][]): [number, number][] {
-  return [...coords].reverse();
-}
-
-function geometryDistance(a: [number, number][], b: [number, number][]): number {
-  // Vergelijkt twee lijnen puntsgewijs (na eventueel omkeren) op basis van
-  // start- en eindpunt-afstand plus een steekproef van tussenpunten.
-  // Geen volledige Hausdorff-afstand nodig voor deze diagnose — start/eind/midden volstaat.
-  if (a.length === 0 || b.length === 0) return Infinity;
-  const distAt = (p1: [number, number], p2: [number, number]) =>
-    Math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2);
-  const startDist = distAt(a[0], b[0]);
-  const endDist = distAt(a[a.length - 1], b[b.length - 1]);
-  const midA = a[Math.floor(a.length / 2)];
-  const midB = b[Math.floor(b.length / 2)];
-  const midDist = distAt(midA, midB);
-  return Math.max(startDist, endDist, midDist);
-}
-
-function parseEdgesFull(xml: string) {
-  const edges: {
-    objectid: string;
-    rijrichting: string;
-    lengte_m: number;
-    regio: string;
-    coords: [number, number][];
-  }[] = [];
-  const memberRegex = /<routedatabank:fietsnetwerken_vrij[^>]*>([\s\S]*?)<\/routedatabank:fietsnetwerken_vrij>/g;
-  let m: RegExpExecArray | null;
-  while ((m = memberRegex.exec(xml))) {
-    const block = m[1];
-    const idMatch = /<routedatabank:objectid>([^<]*)<\/routedatabank:objectid>/.exec(block);
-    const rrMatch = /<routedatabank:rijrichting>([^<]*)<\/routedatabank:rijrichting>/.exec(block);
-    const lenMatch = /<routedatabank:lengte_m>([^<]*)<\/routedatabank:lengte_m>/.exec(block);
-    const regioMatch = /<routedatabank:regio>([^<]*)<\/routedatabank:regio>/.exec(block);
     const posListMatch = /<gml:posList>([^<]*)<\/gml:posList>/.exec(block);
     if (posListMatch) {
       const flat = posListMatch[1].trim().split(/\s+/).map(Number);
       const coords: [number, number][] = [];
-      for (let i = 0; i < flat.length; i += 2) {
-        coords.push([flat[i], flat[i + 1]]);
-      }
+      for (let i = 0; i < flat.length; i += 2) coords.push([flat[i], flat[i + 1]]);
       edges.push({
-        objectid: idMatch ? idMatch[1] : "",
-        rijrichting: rrMatch ? rrMatch[1] : "",
-        lengte_m: lenMatch ? parseFloat(lenMatch[1]) : 0,
-        regio: regioMatch ? regioMatch[1] : "",
+        objectid: extractField(block, "objectid") || "",
+        rijrichting: extractField(block, "rijrichting") || "",
+        lengte_m: parseFloat(extractField(block, "lengte_m") || "0"),
+        regio: extractField(block, "regio") || "",
+        provincie: extractField(block, "provincie") || "",
         coords,
       });
     }
@@ -130,60 +76,235 @@ function parseEdgesFull(xml: string) {
   return edges;
 }
 
-function runDirectionValidation(edgesFull: ReturnType<typeof parseEdgesFull>) {
-  const MATCH_TOLERANCE_M = 10; // start/eind/midden mogen tot 10m verschillen
-  const rijrichting2Edges = edgesFull.filter((e) => e.rijrichting === "2");
-  const others = edgesFull.filter((e) => e.rijrichting !== "2");
+function dist(a: [number, number], b: [number, number]): number {
+  return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
+}
 
-  const results: {
-    objectid: string;
-    matched: boolean;
-    counterpartObjectid?: string;
-    counterpartRijrichting?: string;
-    geometryDistance?: string;
-    lengthDiff?: string;
-  }[] = [];
+function pointInBbox(point: [number, number], bbox: [number, number, number, number]): boolean {
+  const [minx, miny, maxx, maxy] = bbox;
+  return point[0] >= minx && point[0] <= maxx && point[1] >= miny && point[1] <= maxy;
+}
 
-  for (const edge of rijrichting2Edges) {
-    const reversed = reverseCoords(edge.coords);
-    let best: { other: (typeof others)[number]; dist: number } | null = null;
-    for (const other of others) {
-      const dist = geometryDistance(reversed, other.coords);
-      if (dist < MATCH_TOLERANCE_M && (!best || dist < best.dist)) {
-        best = { other, dist };
+function nearestNode(point: [number, number], nodes: Node[]): { node: Node; d: number } | null {
+  let best: { node: Node; d: number } | null = null;
+  for (const n of nodes) {
+    const d = dist(point, [n.x, n.y]);
+    if (!best || d < best.d) best = { node: n, d };
+  }
+  return best;
+}
+
+// ---- Test 1: matchtolerantie ----
+function runToleranceTest(nodes: Node[], edges: EdgeFull[], bbox: [number, number, number, number]) {
+  const margin = 200;
+  const innerBbox: [number, number, number, number] = [
+    bbox[0] + margin,
+    bbox[1] + margin,
+    bbox[2] - margin,
+    bbox[3] - margin,
+  ];
+  const distances: number[] = [];
+  let excluded = 0;
+  for (const e of edges) {
+    const start = e.coords[0];
+    const end = e.coords[e.coords.length - 1];
+    for (const point of [start, end]) {
+      if (pointInBbox(point, innerBbox)) {
+        const nearest = nearestNode(point, nodes);
+        if (nearest) distances.push(nearest.d);
+      } else {
+        excluded++;
       }
     }
-    if (best) {
-      results.push({
-        objectid: edge.objectid,
-        matched: true,
-        counterpartObjectid: best.other.objectid,
-        counterpartRijrichting: best.other.rijrichting,
-        geometryDistance: best.dist.toFixed(2),
-        lengthDiff: Math.abs(edge.lengte_m - best.other.lengte_m).toFixed(1),
-      });
-    } else {
-      results.push({ objectid: edge.objectid, matched: false });
-    }
+  }
+  distances.sort((a, b) => a - b);
+  const thresholds = [2, 5, 10, 15, 20, 30, 50];
+  const withinThreshold: Record<string, string> = {};
+  for (const t of thresholds) {
+    const count = distances.filter((d) => d <= t).length;
+    withinThreshold[`within_${t}m`] = `${count}/${distances.length} (${((count / distances.length) * 100).toFixed(1)}%)`;
+  }
+  return {
+    endpointsAnalyzed: distances.length,
+    endpointsExcludedAsBoundaryClipping: excluded,
+    distanceStats: distances.length
+      ? {
+          min: distances[0].toFixed(2),
+          max: distances[distances.length - 1].toFixed(2),
+          median: distances[Math.floor(distances.length / 2)].toFixed(2),
+          p90: distances[Math.floor(distances.length * 0.9)].toFixed(2),
+          p99: distances[Math.floor(distances.length * 0.99)].toFixed(2),
+        }
+      : null,
+    withinThreshold,
+  };
+}
+
+// ---- Test 2: rijrichting duplicate-hypothese + lengte-correlatie ----
+function geometryDistanceReversed(a: [number, number][], b: [number, number][]): number {
+  if (a.length === 0 || b.length === 0) return Infinity;
+  const rev = [...a].reverse();
+  const startD = dist(rev[0], b[0]);
+  const endD = dist(rev[rev.length - 1], b[b.length - 1]);
+  const midD = dist(rev[Math.floor(rev.length / 2)], b[Math.floor(b.length / 2)]);
+  return Math.max(startD, endD, midD);
+}
+
+function runDirectionTests(edges: EdgeFull[]) {
+  const MATCH_TOLERANCE_M = 10;
+  const byRijrichting: Record<string, EdgeFull[]> = {};
+  for (const e of edges) {
+    (byRijrichting[e.rijrichting] ||= []).push(e);
   }
 
-  const matchedCount = results.filter((r) => r.matched).length;
-  const matchRate = rijrichting2Edges.length > 0 ? (matchedCount / rijrichting2Edges.length) * 100 : null;
+  const rijrichting2 = byRijrichting["2"] || [];
+  const others = edges.filter((e) => e.rijrichting !== "2");
+  let matched = 0;
+  const exceptions: string[] = [];
+  for (const e of rijrichting2) {
+    let found = false;
+    for (const other of others) {
+      if (geometryDistanceReversed(e.coords, other.coords) < MATCH_TOLERANCE_M) {
+        found = true;
+        break;
+      }
+    }
+    if (found) matched++;
+    else exceptions.push(e.objectid);
+  }
+
+  const stats = (arr: EdgeFull[]) => {
+    if (arr.length === 0) return null;
+    const lengths = arr.map((e) => e.lengte_m).sort((a, b) => a - b);
+    const sum = lengths.reduce((a, b) => a + b, 0);
+    const regioCounts: Record<string, number> = {};
+    for (const e of arr) regioCounts[e.regio] = (regioCounts[e.regio] || 0) + 1;
+    return {
+      count: arr.length,
+      avgLength: (sum / arr.length).toFixed(1),
+      medianLength: lengths[Math.floor(lengths.length / 2)].toFixed(1),
+      minLength: lengths[0].toFixed(1),
+      maxLength: lengths[lengths.length - 1].toFixed(1),
+      topRegios: Object.entries(regioCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5),
+    };
+  };
 
   return {
-    rijrichting2EdgeCount: rijrichting2Edges.length,
-    matchedWithReverseCounterpart: matchedCount,
-    noCounterpartFound: rijrichting2Edges.length - matchedCount,
-    matchRatePercent: matchRate !== null ? matchRate.toFixed(1) : "n/a (geen rijrichting=2 edges in steekproef)",
-    counterpartRijrichtingWaarden: results
-      .filter((r) => r.matched)
-      .reduce((acc: Record<string, number>, r) => {
-        const key = r.counterpartRijrichting || "?";
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {}),
-    exceptions: results.filter((r) => !r.matched).map((r) => r.objectid),
-    exampleMatches: results.filter((r) => r.matched).slice(0, 5),
+    duplicateHypothesisTest: {
+      rijrichting2EdgeCount: rijrichting2.length,
+      matchedWithReverseCounterpart: matched,
+      matchRatePercent: rijrichting2.length ? ((matched / rijrichting2.length) * 100).toFixed(1) : "n/a",
+      exceptionsSample: exceptions.slice(0, 10),
+    },
+    lengthCorrelationByRijrichting: {
+      "0": stats(byRijrichting["0"] || []),
+      "1": stats(byRijrichting["1"] || []),
+      "2": stats(byRijrichting["2"] || []),
+    },
+  };
+}
+
+// ---- Test 3: veldprofilering ----
+function profileField(values: string[]) {
+  const nonEmpty = values.filter((v) => v !== "" && v !== null);
+  const nullPercent = ((values.length - nonEmpty.length) / values.length) * 100;
+  const freq: Record<string, number> = {};
+  for (const v of nonEmpty) freq[v] = (freq[v] || 0) + 1;
+  const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+  return {
+    totalCount: values.length,
+    nullOrEmptyPercent: nullPercent.toFixed(1),
+    uniqueValueCount: sorted.length,
+    topValues: sorted.slice(0, 15).map(([v, c]) => ({ value: v, count: c })),
+  };
+}
+
+function runFieldProfile(nodes: Node[], edges: EdgeFull[]) {
+  return {
+    nodes: {
+      knooppuntnr: profileField(nodes.map((n) => n.knooppuntnr)),
+      soort_knooppunt: profileField(nodes.map((n) => n.soort)),
+    },
+    edges: {
+      rijrichting: profileField(edges.map((e) => e.rijrichting)),
+      regio: profileField(edges.map((e) => e.regio)),
+      provincie: profileField(edges.map((e) => e.provincie)),
+      lengte_m: {
+        min: Math.min(...edges.map((e) => e.lengte_m)).toFixed(1),
+        max: Math.max(...edges.map((e) => e.lengte_m)).toFixed(1),
+        avg: (edges.reduce((a, e) => a + e.lengte_m, 0) / edges.length).toFixed(1),
+      },
+    },
+  };
+}
+
+// ---- Test 4: samengesteld-knooppunt geometrie + edge-aansluiting ----
+function runCompositeNodeAnalysis(nodes: Node[], edges: EdgeFull[]) {
+  const byNr: Record<string, Node[]> = {};
+  for (const n of nodes) (byNr[n.knooppuntnr] ||= []).push(n);
+
+  const composites = Object.entries(byNr).filter(([, arr]) => arr.length > 1);
+
+  const EDGE_ATTACH_TOLERANCE_M = 10;
+
+  const analysis = composites.slice(0, 30).map(([nr, physicalPoints]) => {
+    let maxPairwise = 0;
+    let sumPairwise = 0;
+    let pairCount = 0;
+    for (let i = 0; i < physicalPoints.length; i++) {
+      for (let j = i + 1; j < physicalPoints.length; j++) {
+        const d = dist([physicalPoints[i].x, physicalPoints[i].y], [physicalPoints[j].x, physicalPoints[j].y]);
+        maxPairwise = Math.max(maxPairwise, d);
+        sumPairwise += d;
+        pairCount++;
+      }
+    }
+    const avgPairwise = pairCount ? sumPairwise / pairCount : 0;
+
+    // Edge-aansluiting per fysiek punt: hoeveel edge-eindpunten liggen dicht
+    // genoeg bij dit specifieke fysieke punt (i.p.v. bij de andere fysieke
+    // punten van hetzelfde knooppuntnummer)?
+    const edgesPerPhysicalPoint = physicalPoints.map((p) => {
+      let count = 0;
+      for (const e of edges) {
+        const start = e.coords[0];
+        const end = e.coords[e.coords.length - 1];
+        if (dist(start, [p.x, p.y]) < EDGE_ATTACH_TOLERANCE_M || dist(end, [p.x, p.y]) < EDGE_ATTACH_TOLERANCE_M) {
+          count++;
+        }
+      }
+      return { objectid: p.objectid, soort: p.soort, edgeCount: count };
+    });
+
+    let category: string;
+    if (maxPairwise < 5) category = "< 5m: waarschijnlijk één fysieke locatie";
+    else if (maxPairwise < 25) category = "5-25m: mogelijk meerdere aansluitpunten";
+    else if (maxPairwise < 100) category = "25-100m: nader onderzoeken";
+    else category = "> 100m: waarschijnlijk bewust verschillende locaties";
+
+    return {
+      knooppuntnr: nr,
+      physicalPointCount: physicalPoints.length,
+      maxPairwiseDistanceM: maxPairwise.toFixed(1),
+      avgPairwiseDistanceM: avgPairwise.toFixed(1),
+      category,
+      edgesPerPhysicalPoint,
+      allPointsHaveEdges: edgesPerPhysicalPoint.every((p) => p.edgeCount > 0),
+    };
+  });
+
+  const categoryCounts: Record<string, number> = {};
+  for (const a of analysis) categoryCounts[a.category] = (categoryCounts[a.category] || 0) + 1;
+
+  return {
+    totalCompositeKnooppuntnrs: composites.length,
+    analyzedSample: analysis.length,
+    categoryCounts,
+    allPointsHaveEdgesCount: analysis.filter((a) => a.allPointsHaveEdges).length,
+    someIsolatedPhysicalPointsCount: analysis.filter((a) => !a.allPointsHaveEdges).length,
+    details: analysis,
   };
 }
 
@@ -203,8 +324,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Ontbrekende Routedatabank env vars." }, { status: 500 });
   }
 
-  const bbox = req.nextUrl.searchParams.get("bbox") || "140000,465000,155000,475000";
+  const bboxStr = req.nextUrl.searchParams.get("bbox") || "140000,465000,155000,475000";
+  const bbox = bboxStr.split(",").map(Number) as [number, number, number, number];
   const sampleSize = Math.min(parseInt(req.nextUrl.searchParams.get("sample") || "500", 10), 2000);
+  const requestedTests = (req.nextUrl.searchParams.get("tests") || "tolerance,direction,fieldProfile,composite").split(",");
+
   const authHeader = "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
   const commonHeaders = {
     Authorization: authHeader,
@@ -218,16 +342,11 @@ export async function GET(req: NextRequest) {
       version: "2.0.0",
       request: "GetFeature",
       typeName,
-      bbox: `${bbox},urn:ogc:def:crs:EPSG::28992`,
+      bbox: `${bboxStr},urn:ogc:def:crs:EPSG::28992`,
       count: String(sampleSize),
     });
-    const res = await fetch(`${baseUrl}?${params.toString()}`, {
-      headers: commonHeaders,
-      cache: "no-store",
-    });
-    if (!res.ok) {
-      throw new Error(`${typeName} gaf status ${res.status}`);
-    }
+    const res = await fetch(`${baseUrl}?${params.toString()}`, { headers: commonHeaders, cache: "no-store" });
+    if (!res.ok) throw new Error(`${typeName} gaf status ${res.status}`);
     return res.text();
   }
 
@@ -238,80 +357,26 @@ export async function GET(req: NextRequest) {
     ]);
 
     const nodes = parseNodes(nodesXml);
-    const edges = parseEdges(edgesXml);
+    const edges = parseEdgesFull(edgesXml);
 
-    const bboxParts = bbox.split(",").map(Number) as [number, number, number, number];
-    // Kleine marge naar binnen, zodat we punten heel dicht bij de rand ook uitsluiten
-    // (die kunnen alsnog een node net buiten de opgehaalde node-bbox hebben).
-    const margin = 200; // meter
-    const innerBbox: [number, number, number, number] = [
-      bboxParts[0] + margin,
-      bboxParts[1] + margin,
-      bboxParts[2] - margin,
-      bboxParts[3] - margin,
-    ];
+    const result: Record<string, unknown> = {
+      sample: { bbox: bboxStr, nodesFetched: nodes.length, edgesFetched: edges.length },
+    };
 
-    const distances: number[] = [];
-    let excludedAsEdgeClipping = 0;
-    for (const edge of edges) {
-      for (const point of [edge.start, edge.end]) {
-        if (pointInBbox(point, innerBbox)) {
-          distances.push(nearestDistance(point, nodes));
-        } else {
-          excludedAsEdgeClipping++;
-        }
-      }
+    if (requestedTests.includes("tolerance")) {
+      result.toleranceTest = runToleranceTest(nodes, edges, bbox);
     }
-    distances.sort((a, b) => a - b);
-
-    const thresholds = [2, 5, 10, 15, 20, 30, 50];
-    const withinThreshold: Record<string, string> = {};
-    for (const t of thresholds) {
-      const count = distances.filter((d) => d <= t).length;
-      withinThreshold[`within_${t}m`] = `${count}/${distances.length} (${((count / distances.length) * 100).toFixed(1)}%)`;
+    if (requestedTests.includes("direction")) {
+      result.directionTests = runDirectionTests(edges);
+    }
+    if (requestedTests.includes("fieldProfile")) {
+      result.fieldProfile = runFieldProfile(nodes, edges);
+    }
+    if (requestedTests.includes("composite")) {
+      result.compositeNodeAnalysis = runCompositeNodeAnalysis(nodes, edges);
     }
 
-    const rijrichtingCounts: Record<string, number> = {};
-    for (const e of edges) {
-      rijrichtingCounts[e.rijrichting] = (rijrichtingCounts[e.rijrichting] || 0) + 1;
-    }
-
-    const soortCounts: Record<string, number> = {};
-    for (const n of nodes) {
-      soortCounts[n.soort] = (soortCounts[n.soort] || 0) + 1;
-    }
-
-    const knooppuntnrCounts: Record<string, number> = {};
-    for (const n of nodes) {
-      knooppuntnrCounts[n.knooppuntnr] = (knooppuntnrCounts[n.knooppuntnr] || 0) + 1;
-    }
-    const duplicateKnooppuntnrs = Object.entries(knooppuntnrCounts).filter(([, c]) => c > 1);
-
-    const edgesFull = parseEdgesFull(edgesXml);
-    const directionValidation = runDirectionValidation(edgesFull);
-
-    return NextResponse.json({
-      sample: {
-        bbox,
-        nodesFetched: nodes.length,
-        edgesFetched: edges.length,
-        endpointsAnalyzed: distances.length,
-        endpointsExcludedAsBoundaryClipping: excludedAsEdgeClipping,
-      },
-      distanceStats: {
-        min: distances[0]?.toFixed(2),
-        max: distances[distances.length - 1]?.toFixed(2),
-        median: distances[Math.floor(distances.length / 2)]?.toFixed(2),
-        p90: distances[Math.floor(distances.length * 0.9)]?.toFixed(2),
-        p99: distances[Math.floor(distances.length * 0.99)]?.toFixed(2),
-      },
-      withinThreshold,
-      rijrichtingWaarden: rijrichtingCounts,
-      soortKnooppuntWaarden: soortCounts,
-      knooppuntnrsMetMeerdereRecords: duplicateKnooppuntnrs.length,
-      voorbeeldDuplicateKnooppuntnrs: duplicateKnooppuntnrs.slice(0, 10).map(([nr, count]) => ({ nr, count })),
-      directionSemanticsValidation: directionValidation,
-    });
+    return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
       { error: "Analyse mislukt.", details: err instanceof Error ? err.message : String(err) },
