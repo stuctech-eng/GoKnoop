@@ -3,6 +3,8 @@ import { getDb } from "@/lib/firebase-admin";
 import { fetchWfsPage } from "@/lib/wfs-client";
 import { parseFietsnetwerkenVrij } from "@/lib/gml-parser";
 
+export const maxDuration = 60;
+
 /**
  * Phase 1C, stap 13 — importer, deel 2: edges.
  *
@@ -15,7 +17,7 @@ import { parseFietsnetwerkenVrij } from "@/lib/gml-parser";
  * Hervatbaar, zelfde patroon als /api/import/nodes.
  */
 
-const PAGE_SIZE_DEFAULT = 1000;
+const PAGE_SIZE_DEFAULT = 200;
 const FIRESTORE_BATCH_LIMIT = 500;
 
 export async function GET(req: NextRequest) {

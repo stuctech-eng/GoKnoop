@@ -3,6 +3,8 @@ import { getDb } from "@/lib/firebase-admin";
 import { fetchWfsPage } from "@/lib/wfs-client";
 import { parseFietsknooppuntenVrij } from "@/lib/gml-parser";
 
+export const maxDuration = 60;
+
 /**
  * Phase 1C, stap 13 — importer, deel 1: nodes.
  *
