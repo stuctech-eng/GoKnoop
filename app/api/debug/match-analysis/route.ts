@@ -60,6 +60,11 @@ function parseEdges(xml: string) {
   return edges;
 }
 
+function pointInBbox(point: [number, number], bbox: [number, number, number, number]): boolean {
+  const [minx, miny, maxx, maxy] = bbox;
+  return point[0] >= minx && point[0] <= maxx && point[1] >= miny && point[1] <= maxy;
+}
+
 function nearestDistance(point: [number, number], nodes: { x: number; y: number }[]): number {
   let best = Infinity;
   for (const n of nodes) {
@@ -88,7 +93,7 @@ export async function GET(req: NextRequest) {
   }
 
   const bbox = req.nextUrl.searchParams.get("bbox") || "140000,465000,155000,475000";
-  const sampleSize = Math.min(parseInt(req.nextUrl.searchParams.get("sample") || "500", 10), 1000);
+  const sampleSize = Math.min(parseInt(req.nextUrl.searchParams.get("sample") || "500", 10), 2000);
   const authHeader = "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
   const commonHeaders = {
     Authorization: authHeader,
@@ -124,10 +129,27 @@ export async function GET(req: NextRequest) {
     const nodes = parseNodes(nodesXml);
     const edges = parseEdges(edgesXml);
 
+    const bboxParts = bbox.split(",").map(Number) as [number, number, number, number];
+    // Kleine marge naar binnen, zodat we punten heel dicht bij de rand ook uitsluiten
+    // (die kunnen alsnog een node net buiten de opgehaalde node-bbox hebben).
+    const margin = 200; // meter
+    const innerBbox: [number, number, number, number] = [
+      bboxParts[0] + margin,
+      bboxParts[1] + margin,
+      bboxParts[2] - margin,
+      bboxParts[3] - margin,
+    ];
+
     const distances: number[] = [];
+    let excludedAsEdgeClipping = 0;
     for (const edge of edges) {
-      distances.push(nearestDistance(edge.start, nodes));
-      distances.push(nearestDistance(edge.end, nodes));
+      for (const point of [edge.start, edge.end]) {
+        if (pointInBbox(point, innerBbox)) {
+          distances.push(nearestDistance(point, nodes));
+        } else {
+          excludedAsEdgeClipping++;
+        }
+      }
     }
     distances.sort((a, b) => a - b);
 
@@ -160,6 +182,7 @@ export async function GET(req: NextRequest) {
         nodesFetched: nodes.length,
         edgesFetched: edges.length,
         endpointsAnalyzed: distances.length,
+        endpointsExcludedAsBoundaryClipping: excludedAsEdgeClipping,
       },
       distanceStats: {
         min: distances[0]?.toFixed(2),
