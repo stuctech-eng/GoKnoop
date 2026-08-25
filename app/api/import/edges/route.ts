@@ -17,7 +17,7 @@ export const maxDuration = 60;
  * Hervatbaar, zelfde patroon als /api/import/nodes.
  */
 
-const PAGE_SIZE_DEFAULT = 200;
+const PAGE_SIZE_DEFAULT = 100;
 const FIRESTORE_BATCH_LIMIT = 500;
 
 export async function GET(req: NextRequest) {
