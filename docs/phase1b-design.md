@@ -136,7 +136,38 @@ Voor elke edge:
 
 ---
 
-## 7. IMPORTER-PIPELINE
+## 7. GRAPH-CONNECTIVITY VALIDATIE
+
+Een hoog matched-percentage op edge-niveau (sectie 5) is niet voldoende om te weten of de graph bruikbaar is voor routegeneratie. Een dataset kan bijvoorbeeld 99% matched zijn en toch een cruciale verbinding missen waardoor een heel gebied onbereikbaar wordt vanuit de rest van het netwerk.
+
+**Verplichte validatiestap, ná matching en vóór de importer volledig wordt gebouwd (dus ook als losse steekproef-analyse, niet pas na de volledige import):**
+
+- Hoeveel nodes hebben minimaal één edge?
+- Hoeveel nodes hebben 2+ edges (een node met precies 1 edge is een doodlopend uiteinde — soms terecht, soms een datafout)?
+- Zijn er volledig geïsoleerde nodes (0 edges)?
+- Hoeveel **connected components** ontstaan er in de graph? Idealiter 1 (of een klein, verklaarbaar aantal — bijv. Waddeneilanden die terecht los liggen van het vasteland).
+- Zijn er onverwachte "eilandjes"/subgraphs die je niet zou verwachten (bijv. een regio die per ongeluk niet aansluit op de rest)?
+- Zijn er verbindingen die het netwerk alleen bij elkaar houden via één enkele edge (een "brug" in graph-theoretische zin) — dat is niet per se fout, maar wel een kwetsbaar punt om te kennen.
+
+Voorbeeld van het soort rapportage dat dit oplevert:
+
+```
+Graph validation
+Nodes:                 13.152
+Edges:                 28.067
+Matched edges:         99,2%
+Unmatched edges:         0,8%
+Connected components:       1
+Isolated nodes:              0
+Dead-end anomalies:         X
+Direction anomalies:        X
+```
+
+PostGIS/SQL kan dit deels zelf (bijv. nodes zonder edges via een LEFT JOIN), maar het tellen van connected components vraagt om een graph-library (bijv. in Python met `networkx`, na export van de node/edge-lijst) — dat hoeft niet in de database zelf te gebeuren, een eenmalige analysescript volstaat.
+
+---
+
+## 8. IMPORTER-PIPELINE
 
 ```
 1. Nieuwe dataset_versions-rij aanmaken (status: 'pending')
@@ -160,13 +191,13 @@ Voor elke edge:
 
 ---
 
-## 8. UPDATE-FREQUENTIE
+## 9. UPDATE-FREQUENTIE
 
 Routedatabank actualiseert ~2x per maand (bevestigd door Jon Rietman). Voorstel: een geplande import (bijv. wekelijks, ruim binnen hun updatefrequentie) via een Vercel Cron Job die dezelfde importer-pipeline aanroept. Geen realtime sync nodig.
 
 ---
 
-## 9. WAT DIT ONTWERP BEWUST NIET DOET
+## 10. WAT DIT ONTWERP BEWUST NIET DOET
 
 - Geen downloadbare export van de brondata aanbieden (Master Plan sectie 67) — de nodes/edges-tabellen zijn intern, de applicatie serveert alleen afgeleide routes/navigatie, nooit de ruwe dataset.
 - Geen realtime WFS-doorverbinding vanuit de frontend — alle WFS-verkeer blijft server-side, de frontend praat alleen met de eigen GoKnoop-database.
@@ -193,7 +224,7 @@ Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande on
         ↓
 5. Controleer Limburg-exclusie        (sectie 6)
         ↓
-6. Importer bouwen                    (sectie 7, pipeline)
+6. Importer bouwen                    (sectie 8, pipeline)
         ↓
 7. Volledige dataset importeren
         ↓
@@ -201,7 +232,7 @@ Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande on
         ↓
 9. Graph genereren
         ↓
-10. Graph-integriteit testen
+10. Graph-connectivity testen          (sectie 7 — connected components, isolated nodes, eilandjes)
         ↓
 11. Dataset atomisch activeren
 ```
