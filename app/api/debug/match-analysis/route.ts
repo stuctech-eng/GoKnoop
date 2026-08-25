@@ -314,6 +314,132 @@ function runCompositeNodeAnalysis(nodes: Node[], edges: EdgeFull[]) {
   };
 }
 
+// ---- Test 5: threshold sensitivity + topologische validatie (pure ruimtelijke clustering) ----
+
+class UnionFind {
+  parent: number[];
+  constructor(n: number) {
+    this.parent = Array.from({ length: n }, (_, i) => i);
+  }
+  find(x: number): number {
+    while (this.parent[x] !== x) {
+      this.parent[x] = this.parent[this.parent[x]];
+      x = this.parent[x];
+    }
+    return x;
+  }
+  union(a: number, b: number) {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra !== rb) this.parent[ra] = rb;
+  }
+}
+
+function clusterAtThreshold(nodes: Node[], thresholdM: number): number[][] {
+  const uf = new UnionFind(nodes.length);
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      if (dist([nodes[i].x, nodes[i].y], [nodes[j].x, nodes[j].y]) <= thresholdM) {
+        uf.union(i, j);
+      }
+    }
+  }
+  const groups: Record<number, number[]> = {};
+  for (let i = 0; i < nodes.length; i++) {
+    const root = uf.find(i);
+    (groups[root] ||= []).push(i);
+  }
+  return Object.values(groups);
+}
+
+function clusterDiameter(indices: number[], nodes: Node[]): number {
+  let max = 0;
+  for (let i = 0; i < indices.length; i++) {
+    for (let j = i + 1; j < indices.length; j++) {
+      const d = dist(
+        [nodes[indices[i]].x, nodes[indices[i]].y],
+        [nodes[indices[j]].x, nodes[indices[j]].y]
+      );
+      max = Math.max(max, d);
+    }
+  }
+  return max;
+}
+
+function runThresholdSensitivity(nodes: Node[], edges: EdgeFull[]) {
+  const thresholds = [10, 25, 50, 75, 100, 125, 150];
+  const EDGE_ATTACH_TOLERANCE_M = 10;
+
+  const results = thresholds.map((t) => {
+    const clusters = clusterAtThreshold(nodes, t);
+    const multiClusters = clusters.filter((c) => c.length > 1);
+    const mergedRecordCount = multiClusters.reduce((sum, c) => sum + c.length, 0);
+    const diameters = multiClusters.map((c) => clusterDiameter(c, nodes));
+    const largestCluster = multiClusters.reduce((max, c) => Math.max(max, c.length), 0);
+
+    // Attribuut-conflict: cluster waarin niet alle punten dezelfde (regio, knooppuntnr) delen.
+    let regioConflicts = 0;
+    let knooppuntnrConflicts = 0;
+    for (const c of multiClusters) {
+      const regios = new Set(c.map((i) => nodes[i].regio));
+      const nrs = new Set(c.map((i) => nodes[i].knooppuntnr));
+      if (regios.size > 1) regioConflicts++;
+      if (nrs.size > 1) knooppuntnrConflicts++;
+    }
+
+    // Topologische conflict-indicator: cluster waarin de aangesloten edges van de
+    // verschillende fysieke punten naar totaal andere gebieden lopen (mogelijk
+    // twee onafhankelijke lokale netwerken die toevallig dicht bij elkaar liggen).
+    let topologyConflicts = 0;
+    for (const c of multiClusters) {
+      if (c.length < 2) continue;
+      const edgeRegiosPerPoint = c.map((i) => {
+        const p = nodes[i];
+        const regios = new Set<string>();
+        for (const e of edges) {
+          const start = e.coords[0];
+          const end = e.coords[e.coords.length - 1];
+          if (dist(start, [p.x, p.y]) < EDGE_ATTACH_TOLERANCE_M || dist(end, [p.x, p.y]) < EDGE_ATTACH_TOLERANCE_M) {
+            regios.add(e.regio);
+          }
+        }
+        return regios;
+      });
+      // Conflict als de fysieke punten edges hebben met totaal disjuncte regio-sets
+      // (geen enkele gedeelde regio tussen de aangesloten edges van de verschillende punten).
+      const allRegios = edgeRegiosPerPoint.map((s) => Array.from(s));
+      let anyDisjoint = false;
+      for (let i = 0; i < allRegios.length; i++) {
+        for (let j = i + 1; j < allRegios.length; j++) {
+          const a = allRegios[i];
+          const b = allRegios[j];
+          if (a.length && b.length && !a.some((r) => b.includes(r))) {
+            anyDisjoint = true;
+          }
+        }
+      }
+      if (anyDisjoint) topologyConflicts++;
+    }
+
+    return {
+      thresholdM: t,
+      clusterCount: multiClusters.length,
+      mergedRecordCount,
+      largestClusterSize: largestCluster,
+      avgClusterDiameterM: diameters.length ? (diameters.reduce((a, b) => a + b, 0) / diameters.length).toFixed(1) : "0",
+      maxClusterDiameterM: diameters.length ? Math.max(...diameters).toFixed(1) : "0",
+      regioAttributeConflicts: regioConflicts,
+      knooppuntnrAttributeConflicts: knooppuntnrConflicts,
+      topologyConflicts,
+    };
+  });
+
+  return {
+    note: "Attribuut-conflicten (regio/knooppuntnr) bij een cluster betekenen: ruimtelijk dicht bij elkaar, maar delen NIET dezelfde brondata-identiteit — mogelijk toeval, nader te bekijken. Topologie-conflicten: aangesloten edges van de verschillende fysieke punten wijzen naar totaal andere regio's — sterk signaal tegen samenvoegen.",
+    perThreshold: results,
+  };
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -333,7 +459,7 @@ export async function GET(req: NextRequest) {
   const bboxStr = req.nextUrl.searchParams.get("bbox") || "140000,465000,155000,475000";
   const bbox = bboxStr.split(",").map(Number) as [number, number, number, number];
   const sampleSize = Math.min(parseInt(req.nextUrl.searchParams.get("sample") || "500", 10), 2000);
-  const requestedTests = (req.nextUrl.searchParams.get("tests") || "tolerance,direction,fieldProfile,composite").split(",");
+  const requestedTests = (req.nextUrl.searchParams.get("tests") || "tolerance,direction,fieldProfile,composite,thresholdSensitivity").split(",");
 
   const authHeader = "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
   const commonHeaders = {
@@ -380,6 +506,9 @@ export async function GET(req: NextRequest) {
     }
     if (requestedTests.includes("composite")) {
       result.compositeNodeAnalysis = runCompositeNodeAnalysis(nodes, edges);
+    }
+    if (requestedTests.includes("thresholdSensitivity")) {
+      result.thresholdSensitivity = runThresholdSensitivity(nodes, edges);
     }
 
     return NextResponse.json(result);

@@ -46,27 +46,49 @@ CREATE TABLE dataset_versions (
     validation_result JSONB
 );
 
--- Nodes: knooppunten
--- BELANGRIJK (ontdekt en verder aangescherpt 25-8-2026): knooppuntnr is NIET landelijk
--- uniek, en zelfs (regio, knooppuntnr) is dat niet betrouwbaar — grote regio's bevatten
--- meerdere onafhankelijk genummerde lokale netwerken. number/regio zijn dus uitsluitend
--- WEERGAVEWAARDEN richting de gebruiker, geen identiteitssleutel. De echte identiteit
--- van een logische node ontstaat pas na ruimtelijke clustering tijdens import (id hieronder).
-CREATE TABLE nodes (
+-- Nodes-datamodel in drie lagen (herzien 25-8-2026, na GPT-review):
+-- bronidentiteit en applicatie-identiteit worden nooit door elkaar gehaald.
+--
+-- SOURCE_NODES: exacte kopie van wat Routedatabank levert, ongewijzigd.
+-- LOGICAL_NODES: het knooppunt zoals de GoKnoop-graph het gebruikt (routing-eenheid).
+-- De koppeling ertussen (welke source_nodes vormen samen welke logical_node) is zelf
+-- een aparte, herleidbare mapping-tabel — nooit een destructieve samenvoeging.
+
+CREATE TABLE source_nodes (
+    id                  BIGSERIAL PRIMARY KEY,
+    dataset_version_id  BIGINT NOT NULL REFERENCES dataset_versions(id),
+    source_objectid     BIGINT NOT NULL,   -- objectid uit fietsknooppunten_vrij/wgs84
+    knooppuntnr         TEXT NOT NULL,      -- ruwe brondata — GEEN unieke sleutel (zie sectie 6)
+    regio               TEXT NOT NULL,      -- ruwe brondata — ook GEEN garantie op unieke identiteit
+    provincie           TEXT,
+    soort_knooppunt     TEXT,
+    geom                GEOMETRY(Point, 28992) NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_source_nodes_geom ON source_nodes USING GIST (geom);
+CREATE INDEX idx_source_nodes_dataset ON source_nodes (dataset_version_id);
+CREATE INDEX idx_source_nodes_regio_nr ON source_nodes (dataset_version_id, regio, knooppuntnr);
+
+CREATE TABLE logical_nodes (
     id              BIGSERIAL PRIMARY KEY,
     dataset_version_id BIGINT NOT NULL REFERENCES dataset_versions(id),
-    source_objectid BIGINT NOT NULL,       -- objectid uit fietsknooppunten_wgs84
-    number          TEXT NOT NULL,          -- knooppuntnr — weergavewaarde, GEEN unieke sleutel
-    regio           TEXT NOT NULL,          -- weergavecontext — ook GEEN garantie op unieke identiteit
-    provincie       TEXT,
-    soort_knooppunt TEXT,
-    geom            GEOMETRY(Point, 28992) NOT NULL,  -- opgeslagen in RD New voor matchprecisie
+    display_number  TEXT NOT NULL,   -- afgeleid: knooppuntnr van (doorgaans) het representatieve source_node
+    display_regio   TEXT NOT NULL,
+    geom            GEOMETRY(Point, 28992) NOT NULL,  -- afgeleid: bijv. centroid van gekoppelde source_nodes
+    cluster_method  TEXT NOT NULL,    -- 'single' (1-op-1) | 'spatial_cluster' (samengevoegd)
+    cluster_threshold_m INTEGER,      -- welke afstandsdrempel toegepast is, indien clustered
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_nodes_geom ON nodes USING GIST (geom);
-CREATE INDEX idx_nodes_dataset ON nodes (dataset_version_id);
--- Niet-unieke index, puur voor opzoeken/weergave — nooit gebruiken om identiteit te bepalen:
-CREATE INDEX idx_nodes_regio_number ON nodes (dataset_version_id, regio, number);
+CREATE INDEX idx_logical_nodes_geom ON logical_nodes USING GIST (geom);
+CREATE INDEX idx_logical_nodes_dataset ON logical_nodes (dataset_version_id);
+
+-- Herleidbare koppeling: welke source_nodes vormen samen welke logical_node.
+-- Blijft ALTIJD bewaard, ook na activatie — nooit overschreven of samengevoegd weggegooid.
+CREATE TABLE logical_node_sources (
+    logical_node_id BIGINT NOT NULL REFERENCES logical_nodes(id),
+    source_node_id  BIGINT NOT NULL REFERENCES source_nodes(id),
+    PRIMARY KEY (logical_node_id, source_node_id)
+);
 
 -- Edges: verbindingen tussen knooppunten
 CREATE TABLE edges (
@@ -78,8 +100,8 @@ CREATE TABLE edges (
     rijrichting         TEXT,
     distance_m          INTEGER,            -- lengte_m uit de bron
     geom                GEOMETRY(LineString, 28992) NOT NULL,
-    from_node_id        BIGINT REFERENCES nodes(id),  -- AFGELEID, niet uit bron
-    to_node_id          BIGINT REFERENCES nodes(id),  -- AFGELEID, niet uit bron
+    from_node_id        BIGINT REFERENCES logical_nodes(id),  -- AFGELEID, niet uit bron
+    to_node_id          BIGINT REFERENCES logical_nodes(id),  -- AFGELEID, niet uit bron
     match_confidence     TEXT,               -- 'matched' | 'unmatched_start' | 'unmatched_end' | 'unmatched_both'
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -181,18 +203,38 @@ Voor elke edge:
 
   **Kernbevinding: `regio` is niet fijnmazig genoeg als scope.** Een regio als "Utrecht" blijkt een groot gebied te zijn met meerdere lokale (sub)netwerken die onafhankelijk vanaf 1 nummeren — dus zelfs binnen één regio kunnen twee volstrekt losstaande fysieke knooppunten toevallig hetzelfde nummer delen. Attribuutmatching (`knooppuntnr`, ook met `regio` erbij) is dus **niet betrouwbaar genoeg** om vast te stellen of records daadwerkelijk hetzelfde fysieke knooppunt zijn.
 
-  **Definitieve merge-regel:** samenvoegen gebeurt uitsluitend op basis van **ruimtelijke nabijheid**, niet op attributen. `(regio, knooppuntnr)`-overeenkomst is hooguit een zwak, secundair signaal — geen voorwaarde en geen garantie.
+  **Herzien na GPT-review (25-8-2026): afstand alléén is een gevaarlijk criterium.** Twee ruimtelijk dichtbij gelegen punten kunnen ook **twee legitiem verschillende knooppunten** zijn (bijv. een kruising met twee aparte knooppunten, twee lokale netwerken die toevallig dicht bij elkaar liggen, weerszijden van een weg). Simpelweg "afstand ≤ 100m → samenvoegen" negeert dat omgekeerde risico.
+
+  **Definitieve aanpak: clustering + topologische validatie, geen los afstandscriterium.**
 
   ```
-  Kandidaat voor samenvoegen tot één logische node:
-    - afstand tussen de punten ≤ 100 meter
-    (regio/knooppuntnr-overeenkomst is informatief, niet doorslaggevend)
-
-  NIET samenvoegen, ondanks gedeeld (regio, knooppuntnr):
-    - afstand > 100 meter → toevallige nummerbotsing, apart behouden
+  Spatial candidate (binnen onderzoeksdrempel)
+          ↓
+  Geometric proximity
+          ↓
+  Edge attachment analysis  (welke edges hangen aan welk fysiek punt?)
+          ↓
+  Network/context compatibility  (horen de aangesloten edges bij hetzelfde netwerk/regio?)
+          ↓
+  Clustering
+          ↓
+  LogicalNode  (alleen als afstand ÉN topologie ÉN netwerkcompatibiliteit kloppen)
   ```
 
-  **Gevolg voor identiteit in het datamodel:** `knooppuntnr` (eventueel met `regio`) is bruikbaar als **weergavewaarde** richting de gebruiker, maar NIET als unieke sleutel voor node-identiteit in de database. De echte identiteit van een logische node ontstaat pas na de ruimtelijke clusteringstap tijdens import (een nieuw, intern gegenereerd ID). Twee database-nodes kunnen dus legitiem dezelfde `number`/`regio`-combinatie hebben als ze ruimtelijk ver genoeg uit elkaar liggen — dat is geen datafout, dat moet het datamodel toestaan.
+  **Verplichte stap vóór een definitieve drempel wordt vastgesteld: threshold sensitivity-analyse.** In plaats van 50/100/150m op gevoel te kiezen, wordt voor een reeks drempels (10/25/50/75/100/125/150m) gemeten: aantal clusters, aantal samengevoegde records, grootste cluster, gemiddelde/maximale clusterdiameter, aantal clusters met een regio- of knooppuntnr-attribuutconflict, en aantal clusters met een topologisch conflict (aangesloten edges van de verschillende fysieke punten wijzen naar disjuncte regio's — sterk signaal tegen samenvoegen). Doel is de **natuurlijke knik** in de verdeling, niet de drempel die de meeste records samenvoegt.
+
+  **Herleidbaarheid is niet optioneel:** de koppeling tussen brondata (`source_nodes`) en de uiteindelijke routing-eenheid (`logical_nodes`) wordt altijd bewaard via `logical_node_sources` (zie sectie 3) — nooit een destructieve samenvoeging.
+
+  **Definitieve merge-conditie (conceptueel, niet alleen afstand):**
+  ```
+  distance ≤ threshold
+      AND topological_compatibility   (geen kunstmatige shortcuts, geen vernietigde bestaande relaties)
+      AND network_compatibility       (aangesloten edges horen bij hetzelfde netwerk/regio)
+          ↓
+      MERGE tot LogicalNode
+  ```
+
+  **Gevolg voor identiteit in het datamodel:** `knooppuntnr`/`regio` zijn weergavewaarden richting de gebruiker, NIET de identiteitssleutel. De echte identiteit ontstaat via een expliciete, herleidbare mapping van brondata (`source_nodes`) naar routing-eenheid (`logical_nodes`) — zie het gelaagde datamodel in sectie 3.
 - **Schema-afwijking tussen `fietsnetwerken_vrij` en het eerder via DescribeFeatureType geziene `fietsknooppuntnetwerken`:** de `_vrij`-laag heeft `lokaalid` in plaats van `ogc_fid`. Importer moet robuust zijn tegen dit soort kleine schemaverschillen tussen laagvarianten.
 - **Limburg-uitzondering:** nog niet expliciet zichtbaar in `regio`/`provincie`-waarden uit de steekproef (die toonde alleen Utrecht/Gooi en Vechtstreek). Bij volledige import controleren of Limburgse regio's al server-side ontbreken, of dat er alsnog een filter nodig is.
 
@@ -282,33 +324,37 @@ Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande on
         ↓
 3. Rijrichting-hypothese testen       ✅ afgerond — duplicaat-hypothese verworpen (3,5%)
         ↓
-4. Source-value/schema profiling      🔜 volgende stap
+4. Source-value/schema profiling      ✅ afgerond (rijrichting, soort_knooppunt, regio, provincie, lengte_m)
         ↓
-5. Composite-node geometrieanalyse    🔜
+5. Composite-node geometrieanalyse    ✅ afgerond — regio-scope bleek onbetrouwbaar
         ↓
-6. Composite edge-attachment test     🔜 — cruciaal: voorkomt kunstmatige shortcuts bij samenvoegen
+6. Threshold sensitivity-analyse      🔜 volgende stap — 10/25/50/75/100/125/150m, zoek de natuurlijke knik
         ↓
-7. Rijrichting semantiek-analyse      🔜 — lengte/regio-correlatie, geen gok
+7. Topologische merge-validatie       🔜 — per kandidaatcluster: netwerkcompatibiliteit + shortcut-check
         ↓
-8. Node ↔ edge volledige steekproef
+8. Handmatige inspectie grensgevallen 🔜 — alleen clusters rond 25-50m, 50-100m, 100-150m
         ↓
-9. Limburg-exclusie
+9. Rijrichting semantiek-analyse      🔜 — lengte/regio-correlatie (deels gedaan), infrastructuurtype indien mogelijk
         ↓
-10. Importer bouwen
+10. Node ↔ edge volledige steekproef
         ↓
-11. Volledige dataset importeren
+11. Limburg-exclusie
         ↓
-12. Validatie
+12. Importer bouwen
         ↓
-13. Graph genereren
+13. Volledige dataset importeren
         ↓
-14. Graph-connectivity testen          (sectie 7 — connected components, isolated nodes, eilandjes)
+14. Validatie
         ↓
-15. Dataset atomisch activeren
+15. Graph genereren
+        ↓
+16. Graph-connectivity testen          (sectie 7 — connected components, isolated nodes, eilandjes)
+        ↓
+17. Dataset atomisch activeren
 ```
 
-**Belangrijk architectuurpunt bij composite nodes (stap 5-6):** een centroid van de samengestelde punten wordt NIET automatisch gebruikt als samenvoegstrategie. Eerst moet empirisch worden vastgesteld of de fysieke punten onder één `knooppuntnr` daadwerkelijk één logische locatie vertegenwoordigen (edges convergeren op alle punten) of toevallig hetzelfde nummer delen terwijl het separate locaties zijn (edges zijn verdeeld over de punten, samenvoegen zou een kunstmatige shortcut creëren). De edge-attachment-test (stap 6) beantwoordt dit per samengesteld knooppunt, niet met een blanket-regel voor de hele dataset.
+**Belangrijk architectuurpunt bij composite nodes (stap 6-8):** een centroid van de samengestelde punten wordt NIET automatisch gebruikt als samenvoegstrategie, en een enkel afstandscriterium ook niet. Zie de definitieve merge-conditie in sectie 6: afstand ÉN topologische compatibiliteit ÉN netwerkcompatibiliteit moeten alle drie kloppen. De threshold sensitivity-analyse (stap 6) bepaalt de drempel empirisch (natuurlijke knik in de verdeling, niet een gekozen ronde waarde); de topologische validatie (stap 7) voorkomt dat samenvoegen kunstmatige shortcuts creëert.
 
 **Directionality-codering:** `bidirectional` | `forward` | `reverse` | `unknown` (niet slechts drie waarden) — `unknown` is expliciet een aparte status, geen synoniem voor `bidirectional`. Een routing policy kan `unknown` voorlopig als `bidirectional` behandelen, maar dat is een bewuste, herroepbare beslissing op routing-niveau, niet een aanname die in de brondata-interpretatie wordt vastgelegd.
 
-Pas na stap 15 begint de route-generator (Phase 2 van het Master Plan).
+Pas na stap 17 begint de route-generator (Phase 2 van het Master Plan).
