@@ -1,7 +1,7 @@
 # GoKnoop — Phase 1B: Data Model + Importer Design
 
-**Datum:** 25 augustus 2026
-**Status:** Ontwerp — nog niet geïmplementeerd (dat is Phase 1C)
+**Datum:** 25 augustus 2026 (herzien: database Supabase → Firebase/Firestore, project `go-knoop`)
+**Status:** Ontwerp goedgekeurd, pre-flight checklist afgerond — klaar voor implementatie (Phase 1C stap 13)
 **Basis:** Phase 1A-auditrapport (`docs/phase1a-wfs-audit.md`), bevestigd met echte featuredata
 
 ---
@@ -21,128 +21,90 @@ Beide zijn de "vrije" varianten waar het account `goknoop` daadwerkelijk rechten
 
 ## 2. DOELDATABASE
 
-**Voorstel: Supabase (PostgreSQL + PostGIS).**
+**HERZIEN 25-8-2026: Firebase (Firestore), project `go-knoop` — niet Supabase.**
 
-Redenen:
-- Master Plan sectie 10 schrijft PostgreSQL + PostGIS voor als voorkeursdatabase (spatial indexes, nearest-neighbor queries, geometrieberekeningen)
-- Supabase is al onderdeel van de bestaande toolset (gebruikt in Polder) — geen nieuwe leverancier, wel een nieuwe database naast Firebase
-- Vercel + Supabase is een beproefde combinatie in de rest van de projectenportfolio
+**Aanleiding voor de wijziging:** Supabase-projectslots waren vol. Bij nader inzien is dit geen bezwaar: alle Phase 1C-analyses (matchtolerantie, clustering, threshold sensitivity) zijn in gewone JavaScript geïmplementeerd, niet met PostGIS-SQL-functies (`ST_DWithin`, `ST_Transform`, etc.) — de rekenlogica is dus al bewezen te werken zonder spatial database-functies. Firestore past bovendien beter bij de rest van de projectenportfolio (grotendeels Firebase-gebaseerd).
 
-**Let op — dit wijkt af van de meeste andere GoKnoop-achtige projecten die op Firebase draaien.** Firestore heeft geen bruikbare geo-spatial queries (geen PostGIS-equivalent), dus voor GoKnoop specifiek is Supabase de juiste keuze, niet Firebase. Dit is een bewuste afwijking, geen inconsistentie.
+**Consequenties, expliciet benoemd:**
+- Geen `GEOMETRY`-kolommen, geen `GIST`-index, geen `ST_*`-functies — coördinaten worden platte numerieke velden (`x`, `y` in EPSG:28992), berekeningen (afstand, clustering, matching) gebeuren in applicatiecode, exact zoals de Phase 1C-diagnostiek al deed.
+- Geen native nearest-neighbor query. Voor de eenmalige import (13.152 nodes, 28.067 edges — samen ruim binnen wat één keer in-memory verwerkt kan worden, seconden werk) is dat geen probleem. Voor toekomstige *runtime* route-queries (Phase 2, Route Engine) kan een grid-bucket-veld (`gridCell`, afgeleid van afgeronde x/y) nodig zijn om niet de hele collectie te hoeven doorzoeken — dat is een Phase 2-zorg, niet Phase 1.
+- Firestore's ingebouwde `GeoPoint`-type gaat uit van WGS84 lat/lon; omdat we bewust in RD New (EPSG:28992) blijven rekenen (matchprecisie in meters, zie sectie 3), wordt dat type NIET gebruikt — coördinaten blijven platte `x`/`y`-velden.
+
+**Benodigde environment variables (te zetten in Vercel zodra de importer gebouwd wordt):**
+```
+FIREBASE_PROJECT_ID=go-knoop
+FIREBASE_CLIENT_EMAIL=       (uit een Firebase Admin SDK service-account-sleutel)
+FIREBASE_PRIVATE_KEY=        (uit dezelfde service-account-sleutel — server-side only,
+                               nooit in NEXT_PUBLIC_*, zelfde beveiligingsprincipe als
+                               de Routedatabank-credentials)
+```
+Server-side toegang via de Firebase Admin SDK (niet de client-SDK) — de importer draait in een Vercel API-route, niet in de browser.
 
 ---
 
-## 3. DATAMODEL (PostGIS-schema, definitief voorstel)
+## 3. DATAMODEL (Firestore-collecties, definitief voorstel)
 
-```sql
--- Dataset-versies: elke import krijgt een eigen versie, activatie gebeurt atomisch
-CREATE TABLE dataset_versions (
-    id            BIGSERIAL PRIMARY KEY,
-    source        TEXT NOT NULL DEFAULT 'routedatabank',
-    imported_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    status        TEXT NOT NULL DEFAULT 'pending', -- pending | validated | active | superseded | failed
-    node_count    INTEGER,
-    edge_count    INTEGER,
-    validation_result JSONB
-);
+Zelfde drie-lagen-principe als voorheen (bronidentiteit en applicatie-identiteit nooit door elkaar), nu als Firestore-collecties in plaats van Postgres-tabellen. Elke collectie is top-level (geen diepe subcollecties) met een `datasetVersionId`-veld voor filtering — dat houdt queries eenvoudig en voorkomt onnodige joins.
 
--- Nodes-datamodel in drie lagen (herzien 25-8-2026, na GPT-review):
--- bronidentiteit en applicatie-identiteit worden nooit door elkaar gehaald.
---
--- SOURCE_NODES: exacte kopie van wat Routedatabank levert, ongewijzigd.
--- LOGICAL_NODES: het knooppunt zoals de GoKnoop-graph het gebruikt (routing-eenheid).
--- De koppeling ertussen (welke source_nodes vormen samen welke logical_node) is zelf
--- een aparte, herleidbare mapping-tabel — nooit een destructieve samenvoeging.
+```
+COLLECTION: datasetVersions
+  { id, source: 'routedatabank', importedAt, status: 'pending'|'validated'|'active'|'superseded'|'failed',
+    nodeCount, edgeCount, validationResult: {...} }
 
-CREATE TABLE source_nodes (
-    id                  BIGSERIAL PRIMARY KEY,
-    dataset_version_id  BIGINT NOT NULL REFERENCES dataset_versions(id),
-    source_objectid     BIGINT NOT NULL,   -- objectid uit fietsknooppunten_vrij/wgs84
-    knooppuntnr         TEXT NOT NULL,      -- ruwe brondata — GEEN unieke sleutel (zie sectie 6)
-    regio               TEXT NOT NULL,      -- ruwe brondata — ook GEEN garantie op unieke identiteit
-    provincie           TEXT,
-    soort_knooppunt     TEXT,
-    network_type        TEXT NOT NULL DEFAULT 'fiets',  -- Master Context sectie 8: niet hardcoded aan
-                                                          -- fiets — deze import is altijd 'fiets'
-                                                          -- (bron = fietsknooppunten_vrij), voorbereid op
-                                                          -- toekomstige wandel-/MTB-knooppuntlagen
-    geom                GEOMETRY(Point, 28992) NOT NULL,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_source_nodes_geom ON source_nodes USING GIST (geom);
-CREATE INDEX idx_source_nodes_dataset ON source_nodes (dataset_version_id);
-CREATE INDEX idx_source_nodes_regio_nr ON source_nodes (dataset_version_id, regio, knooppuntnr);
+COLLECTION: sourceNodes
+  -- Exacte kopie van Routedatabank, ongewijzigd. GEEN unieke sleutel op knooppuntnr/regio (zie sectie 6).
+  { id, datasetVersionId, sourceObjectId, knooppuntnr, regio, provincie, soortKnooppunt,
+    networkType: 'fiets',  // Master Context sectie 8 — voorbereid op wandel/MTB, deze import altijd 'fiets'
+    x, y,                  // EPSG:28992
+    logicalNodeId,         // toegevoegd NA de merge-stap — welke logical node dit source_node vertegenwoordigt
+    createdAt }
 
-CREATE TABLE logical_nodes (
-    id              BIGSERIAL PRIMARY KEY,
-    dataset_version_id BIGINT NOT NULL REFERENCES dataset_versions(id),
-    display_number  TEXT NOT NULL,   -- afgeleid: knooppuntnr van (doorgaans) het representatieve source_node
-    display_regio   TEXT NOT NULL,
-    network_type    TEXT NOT NULL DEFAULT 'fiets',  -- zie source_nodes.network_type
-    geom            GEOMETRY(Point, 28992) NOT NULL,  -- afgeleid: bijv. centroid van gekoppelde source_nodes
-    cluster_method  TEXT NOT NULL,    -- 'single' (1-op-1) | 'spatial_cluster' (samengevoegd)
-    cluster_threshold_m INTEGER,      -- welke afstandsdrempel toegepast is, indien clustered
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_logical_nodes_geom ON logical_nodes USING GIST (geom);
-CREATE INDEX idx_logical_nodes_dataset ON logical_nodes (dataset_version_id);
+COLLECTION: logicalNodes
+  -- De routing-eenheid zoals de graph 'm gebruikt.
+  { id, datasetVersionId, displayNumber, displayRegio,
+    networkType: 'fiets',
+    x, y,                  // afgeleid, bijv. centroid van gekoppelde source_nodes
+    clusterMethod: 'single' | 'spatial_cluster',
+    clusterThresholdM,     // welke drempel toegepast is, indien clustered
+    sourceNodeMappings: [  // ARRAY, embedded — herleidbaarheid zonder aparte join-collectie
+      { sourceNodeId, mergeDecision: 'merged' | 'protected_single' | 'rejected_distance'
+                                     | 'rejected_topology' | 'exception_review' }
+    ],
+    createdAt }
+  -- Elk source_node krijgt een mapping-entry, ook als het NIET wordt samengevoegd
+  -- ('protected_single' — wijst dan naar zijn eigen, unieke logicalNode). Dit array-veld
+  -- vervult exact dezelfde rol als de eerder voorgestelde logical_node_sources-tabel
+  -- (GPT-review 25-8-2026: de 4% soort_knooppunt-uitzonderingen blijven zichtbaar/doorzoekbaar),
+  -- nu als embedded array — idiomatischer voor Firestore, en nooit destructief overschreven:
+  -- alleen aangevuld bij aanmaak, nooit gewijzigd na activatie.
 
--- Herleidbare koppeling: welke source_nodes vormen samen welke logical_node.
--- Blijft ALTIJD bewaard, ook na activatie — nooit overschreven of samengevoegd weggegooid.
--- merge_decision legt vast WAAROM elk source_node wel/niet is samengevoegd (GPT-review
--- 25-8-2026) — de 4% uitzonderingen bij soort_knooppunt mogen niet worden weggepoetst,
--- ze moeten zichtbaar en doorzoekbaar blijven, niet stilzwijgend in een aanname verdwijnen.
-CREATE TABLE logical_node_sources (
-    logical_node_id BIGINT NOT NULL REFERENCES logical_nodes(id),
-    source_node_id  BIGINT NOT NULL REFERENCES source_nodes(id),
-    merge_decision  TEXT NOT NULL,  -- 'merged' | 'protected_single' | 'rejected_distance'
-                                     -- | 'rejected_topology' | 'exception_review'
-    PRIMARY KEY (logical_node_id, source_node_id)
-);
+COLLECTION: edges
+  { id, datasetVersionId, sourceObjectId, regio, provincie,
+    rijrichting,            // RUW, ongewijzigd bewaard (zie sectie 4/6)
+    directionality: 'unknown',  // AFGELEID — nooit 1-op-1 kopie van rijrichting
+    distanceM,               // lengte_m uit de bron
+    coords: [{x, y}, ...],   // volledige lijngeometrie, EPSG:28992
+    fromLogicalNodeId,       // AFGELEID, nullable — niet elke edge heeft aan beide kanten een match
+    toLogicalNodeId,         // AFGELEID, nullable
+    matchConfidence: 'matched' | 'unmatched_start' | 'unmatched_end' | 'unmatched_both',
+    -- Toekomstvaste velden (Master Context v2 sectie 3, 8, 22) — nu alleen als veld,
+    -- functionaliteit die erop bouwt wordt NIET nu gebouwd (sectie 23):
+    mode: 'bicycle',         // toegestane modaliteit; deze import altijd 'bicycle'
+    network,                 // welk netwerktype (regionaal fietsnetwerk, LF-route, etc.)
+    restrictions: {},        // toekomstige beperkingen, leeg in Phase 1
+    qualityScore: null,      // toekomstige routekwaliteit-scoring, ongebruikt in Phase 1
+    createdAt }
 
--- Elk source_node krijgt een rij, ook als het NIET wordt samengevoegd (protected_single):
--- dan wijst het naar zijn eigen, unieke logical_node. Zo blijft ieder source_node
--- traceerbaar, conform het herleidbaarheidsprincipe — geen source_node zonder mapping.
-
--- Edges: verbindingen tussen knooppunten
-CREATE TABLE edges (
-    id                  BIGSERIAL PRIMARY KEY,
-    dataset_version_id  BIGINT NOT NULL REFERENCES dataset_versions(id),
-    source_objectid     BIGINT NOT NULL,   -- objectid uit fietsnetwerken_vrij
-    regio               TEXT,
-    provincie           TEXT,
-    rijrichting         TEXT,
-    distance_m          INTEGER,            -- lengte_m uit de bron
-    geom                GEOMETRY(LineString, 28992) NOT NULL,
-    from_node_id        BIGINT REFERENCES logical_nodes(id),  -- AFGELEID, niet uit bron
-    to_node_id          BIGINT REFERENCES logical_nodes(id),  -- AFGELEID, niet uit bron
-    match_confidence     TEXT,               -- 'matched' | 'unmatched_start' | 'unmatched_end' | 'unmatched_both'
-    -- Toekomstvaste velden (Master Context v2 sectie 3, 8, 22) — nu alleen als kolom,
-    -- functionaliteit die erop bouwt wordt NIET nu gebouwd (sectie 23: geen premature implementation):
-    mode                TEXT NOT NULL DEFAULT 'bicycle',  -- toegestane modaliteit; deze import is altijd 'bicycle'
-                                                            -- (bron = fietsnetwerken_vrij), voorkomt latere rewrite
-                                                            -- zodra wandel/MTB-lagen worden toegevoegd
-    network             TEXT,               -- welk netwerktype (regionaal fietsnetwerk, LF-route, etc.)
-    restrictions         JSONB,              -- toekomstige beperkingen (leeg in Phase 1, structuur al aanwezig)
-    quality_score        NUMERIC,            -- toekomstige routekwaliteit-scoring (ongebruikt in Phase 1)
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_edges_geom ON edges USING GIST (geom);
-CREATE INDEX idx_edges_dataset ON edges (dataset_version_id);
-CREATE INDEX idx_edges_from ON edges (from_node_id);
-CREATE INDEX idx_edges_to ON edges (to_node_id);
-CREATE INDEX idx_edges_mode ON edges (mode);  -- voorbereid op toekomstige multi-modaliteit queries
-
--- Actieve versie: precies één rij, wijst naar de dataset_version die live staat
-CREATE TABLE active_dataset (
-    singleton   BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
-    dataset_version_id BIGINT NOT NULL REFERENCES dataset_versions(id)
-);
+DOCUMENT: config/activeDataset
+  -- Eén document, wijst naar de dataset_version die live staat.
+  { datasetVersionId }
 ```
 
-**Waarom `from_node_id`/`to_node_id` nullable zijn:** niet elke edge hoeft aan beide kanten een matchende node te hebben (zie sectie 6, datakwaliteit). Een edge zonder volledige match wordt niet stilzwijgend genegeerd, maar opgeslagen met `match_confidence` zodat de omvang van het probleem zichtbaar en meetbaar is.
+**Indexering:** Firestore composite indexes op `(datasetVersionId, ...)` waar nodig voor filtering (bijv. `sourceNodes` op `(datasetVersionId, regio, knooppuntnr)` voor opzoeken/weergave — nooit voor identiteitsbepaling, zie sectie 6). Geen spatial index nodig voor de import zelf; alle matching/clustering gebeurt in-memory tijdens de importer-run.
 
-**Waarom alles in RD New (EPSG:28992) staat:** matchtolerantie werkt het natuurlijkst in meters. WGS84 (lat/lon) vervormt afstanden afhankelijk van breedtegraad. Nodes uit `fietsknooppunten_wgs84` worden dus bij import geconverteerd naar EPSG:28992 (`ST_Transform`).
+**Waarom `fromLogicalNodeId`/`toLogicalNodeId` nullable zijn:** niet elke edge hoeft aan beide kanten een matchende node te hebben (zie sectie 6, datakwaliteit). Een edge zonder volledige match wordt niet stilzwijgend genegeerd, maar opgeslagen met `matchConfidence` zodat de omvang van het probleem zichtbaar en meetbaar is.
+
+**Waarom alles in RD New (EPSG:28992) staat:** matchtolerantie werkt het natuurlijkst in meters. WGS84 (lat/lon) vervormt afstanden afhankelijk van breedtegraad. Nodes uit `fietsknooppunten_wgs84` worden dus bij import geconverteerd naar EPSG:28992 (dezelfde conversie die de Phase 1C-diagnostiek al toepaste).
 
 ---
 
@@ -196,14 +158,7 @@ Match rate:                  3,5%
 
 **Verplichte Phase 1C-onderzoeksstap, vóór de importer gebouwd wordt:** de daadwerkelijke betekenis van elke `rijrichting`-waarde vaststellen — via een combinatie van (a) documentatie/navraag bij Routedatabank indien nodig, en (b) visuele/steekproefsgewijze validatie: geometrierichting van de lijn vergelijken met bekende praktijksituaties (bijv. een brug of eenrichtingsfietspad dat bekend staat als eenrichtingsverkeer).
 
-**Gevolg voor het datamodel:** `edges` krijgt een extra kolom `directionality` (`bidirectional` | `forward_only` | `backward_only`), afgeleid van `rijrichting` tijdens import — niet 1-op-1 overgenomen totdat de codering bevestigd is.
-
-```sql
-ALTER TABLE edges ADD COLUMN directionality TEXT NOT NULL DEFAULT 'bidirectional';
--- Waarden: 'bidirectional' | 'forward_only' | 'backward_only'
--- 'forward_only'/'backward_only' verwijzen naar de richting van de brongeometrie
--- (ST_StartPoint → ST_EndPoint = 'forward')
-```
+**Gevolg voor het datamodel:** `edges` heeft een apart veld `directionality` (`bidirectional` | `forward` | `reverse` | `unknown`, zie sectie 3), afgeleid van `rijrichting` tijdens import — niet 1-op-1 overgenomen totdat de codering bevestigd is. `forward`/`reverse` verwijzen naar de richting van de brongeometrie (eerste → laatste coördinaat van `coords[]` = 'forward').
 
 ---
 
@@ -211,8 +166,8 @@ ALTER TABLE edges ADD COLUMN directionality TEXT NOT NULL DEFAULT 'bidirectional
 
 Voor elke edge:
 
-1. Bepaal het eerste punt (`ST_StartPoint`) en laatste punt (`ST_EndPoint`) van de lijngeometrie.
-2. Zoek voor elk eindpunt de dichtstbijzijnde node binnen een tolerantie, met PostGIS `ST_DWithin` + `ORDER BY geom <-> point LIMIT 1` (index-versneld via de GIST-index).
+1. Bepaal het eerste en laatste coördinaat (`coords[0]` en `coords[coords.length - 1]`) van de edge-lijngeometrie.
+2. Zoek voor elk eindpunt de dichtstbijzijnde node binnen een tolerantie — in-memory Euclidische afstand over alle `sourceNodes` van de betreffende `datasetVersionId` (exact dezelfde aanpak als de Phase 1C-diagnostiek al toepaste; bij 13.152 nodes ruim haalbaar voor een eenmalige importer-run zonder spatial index).
 3. **Matchtolerantie: 5 meter (empirisch bevestigd, 25-8-2026).** Steekproef van 449 nodes / 917 edges (bbox rond Utrecht/Gooi en Vechtstreek) toont: mediaan afstand tot dichtstbijzijnde node is **0,00 meter** (veel exacte coördinaat-matches), 77,7% matcht al binnen 2m, en oprekken tot 50m voegt slechts 1 procentpunt toe (78,8%). Een ruimere tolerantie dan ~5m levert dus geen echte winst en vergroot alleen het risico op foutieve matches. **Definitieve waarde: 5 meter.**
 
 **BELANGRIJK — twee aparte constanten, nooit samenvoegen tot één `distance_threshold` (GPT-review 25-8-2026):** matchtolerantie (node↔edge-eindpunt matching) en de composite-node-clusteringdrempel (sectie 6) zijn twee verschillende geometrische problemen met verschillende waarden. Bij implementatie expliciet als aparte, apart genoemde constanten definiëren:
@@ -372,31 +327,33 @@ Dead-end anomalies:         X
 Direction anomalies:        X
 ```
 
-PostGIS/SQL kan dit deels zelf (bijv. nodes zonder edges via een LEFT JOIN), maar het tellen van connected components vraagt om een graph-library (bijv. in Python met `networkx`, na export van de node/edge-lijst) — dat hoeft niet in de database zelf te gebeuren, een eenmalige analysescript volstaat.
+Dit gebeurt volledig in de importer-code zelf (bijv. nodes zonder edges via een simpele lookup, connected components tellen met een graph-library zoals `graphology` of een eigen union-find-implementatie — dezelfde aanpak als de `UnionFind`-klasse die de Phase 1C-diagnostiek al gebruikte voor de threshold sensitivity-test) — geen database-query nodig, een eenmalig analysescript na de import volstaat.
 
 ---
 
 ## 8. IMPORTER-PIPELINE
 
 ```
-1. Nieuwe dataset_versions-rij aanmaken (status: 'pending')
+1. Nieuw document in datasetVersions aanmaken (status: 'pending')
 2. Nodes ophalen (fietsknooppunten_wgs84, gepagineerd via startIndex+count, GEEN cap —
    dit is de eigen database-import, niet de publieke debug-route)
 3. Edges ophalen (fietsnetwerken_vrij, zelfde paginering)
 4. Transform: nodes van EPSG:4326 → EPSG:28992
-5. Bulk-insert nodes en edges, gekoppeld aan de nieuwe dataset_version_id
-6. Node/edge-matching uitvoeren (sectie 5), match_confidence en directionality invullen
+5. Batch-writes naar sourceNodes en edges (Firestore batched writes, max 500 writes per
+   batch), gekoppeld aan de nieuwe datasetVersionId
+6. Node/edge-matching uitvoeren (sectie 5), matchConfidence en directionality invullen
 7. Validatie: tel matched/unmatched, controleer op duplicaten, ontbrekende geometrieën
 8. Bij voldoende kwaliteit (drempel te bepalen, bijv. >98% matched): status → 'validated'
-9. Atomische activatie: active_dataset.dataset_version_id bijwerken naar de nieuwe versie
-   (één UPDATE-statement — de oude versie blijft ongewijzigd in de database staan)
-10. Oude dataset_version(s) markeren als 'superseded', niet meteen verwijderen
+9. Atomische activatie: config/activeDataset-document bijwerken naar de nieuwe
+   datasetVersionId (één Firestore document-update — de oude versie blijft ongewijzigd
+   in de database staan)
+10. Oude datasetVersions markeren als 'superseded', niet meteen verwijderen
     (rollback-mogelijkheid, en historische vergelijking)
 ```
 
-**Belangrijk:** de applicatie query't nooit rechtstreeks op de nieuwste `dataset_version_id` — altijd via `active_dataset`. Dat is wat "atomische activatie" concreet betekent: gebruikers zien nooit een halfslachtig geïmporteerde dataset, ook niet tijdens een lopende import.
+**Belangrijk:** de applicatie query't nooit rechtstreeks op de nieuwste `datasetVersionId` — altijd via `config/activeDataset`. Dat is wat "atomische activatie" concreet betekent: gebruikers zien nooit een halfslachtig geïmporteerde dataset, ook niet tijdens een lopende import.
 
-**Paginering:** WFS 2.0.0 ondersteunt `startIndex` + `count` voor het ophalen van grote datasets in delen (bijv. 1000 per aanvraag). Met 13.152 nodes en 28.067 edges is dat orde grootte 14 + 29 = ~43 requests voor een volledige import — ruim binnen redelijke grenzen voor een Vercel serverless function met een timeout, mits elke pagina apart wordt opgehaald (niet in één functie-aanroep — waarschijnlijk een aparte import-route of achtergrondtaak nodig, te bepalen bij implementatie).
+**Paginering:** WFS 2.0.0 ondersteunt `startIndex` + `count` voor het ophalen van grote datasets in delen (bijv. 1000 per aanvraag). Met 13.152 nodes en 28.067 edges is dat orde grootte 14 + 29 = ~43 requests voor een volledige import — ruim binnen redelijke grenzen voor een Vercel serverless function met een timeout, mits elke pagina apart wordt opgehaald (niet in één functie-aanroep — waarschijnlijk een aparte import-route of achtergrondtaak nodig, te bepalen bij implementatie). Firestore's limiet van 500 writes per batch betekent dat de ~41.000 records over ~82 batches verdeeld moeten worden.
 
 ---
 
@@ -443,23 +400,23 @@ Phase 1B/1C blijft exact wat het Master Context voorschrijft: `DATA → NORMALIZ
 
 Geen nieuwe onderzoeksfase — een korte controle op de importer-implementatie zelf, vóór productiegebruik.
 
-1. **Idempotentie.** Dezelfde brondata twee keer importeren mag geen dubbele nodes/edges opleveren. Elke import krijgt een nieuwe `dataset_version_id`; binnen één import mogen `source_objectid`-waarden niet dubbel verwerkt worden.
+1. **Idempotentie.** Dezelfde brondata twee keer importeren mag geen dubbele nodes/edges opleveren. Elke import krijgt een nieuwe `datasetVersionId`; binnen één import mogen `sourceObjectId`-waarden niet dubbel verwerkt worden.
 
-2. **Brondata blijft immutable.** `source_nodes`/edges-brondata is een exacte, ongewijzigde kopie van wat Routedatabank levert. Normalisatie (clustering, directionality-interpretatie) maakt altijd nieuwe, afgeleide records — nooit bronvelden overschrijven.
+2. **Brondata blijft immutable.** `sourceNodes`/edges-brondata is een exacte, ongewijzigde kopie van wat Routedatabank levert. Normalisatie (clustering, directionality-interpretatie) maakt altijd nieuwe, afgeleide velden/documenten — nooit bronvelden overschrijven.
 
 3. **Composite merge is volledig reproduceerbaar.** Dezelfde input + dezelfde regels = exact dezelfde `logical_node_id`/mapping. ID-generatie moet deterministisch vastliggen (bijv. gebaseerd op een stabiele volgorde/hash van de samenstellende `source_objectid`'s) — geen willekeurige UUID als een herhaalde import identieke IDs moet opleveren.
 
-4. **`logical_node_sources` is compleet.** Iedere `logical_node` moet terug te voeren zijn naar één of meer `source_nodes`. Ook `source_nodes` die uiteindelijk NIET worden samengevoegd (`protected_single`) krijgen een rij en blijven traceerbaar — nooit een source_node zonder mapping.
+4. **`sourceNodeMappings` is compleet.** Iedere `logicalNode` moet terug te voeren zijn naar één of meer `sourceNodes`. Ook `sourceNodes` die uiteindelijk NIET worden samengevoegd (`protected_single`) krijgen een mapping-entry en blijven traceerbaar — nooit een sourceNode zonder mapping.
 
-5. **Edge-endpoints mogen niet stilzwijgend verdwijnen.** Iedere geïmporteerde edge moet na normalisatie naar geldige `logical_nodes` verwijzen óf expliciet `match_confidence = 'unmatched_...'` krijgen. Geen stille drops — zie sectie 3.
+5. **Edge-endpoints mogen niet stilzwijgend verdwijnen.** Iedere geïmporteerde edge moet na normalisatie naar geldige `logicalNodes` verwijzen óf expliciet `matchConfidence = 'unmatched_...'` krijgen. Geen stille drops — zie sectie 3.
 
 6. **Rijrichting blijft onzeker, en dat is correct zo.** Raw `0`/`1`/`2` bewaren in `rijrichting`; `directionality = 'unknown'`; routing-policy mag dit voorlopig als `bidirectional` behandelen. **Geen `rijrichting=2`-filter** — beide geteste hypotheses zijn verworpen (sectie 4), een filter zou een niet-onderbouwde aanname in productiecode vastleggen.
 
-7. **Atomische datasetactivatie.** Volgorde: import → validate → graph genereren → connectivity tests (sectie 7) → pas dán `active_dataset` bijwerken. Bij één kritieke fout in een van de tussenstappen blijft de vorige `active` dataset gewoon actief — nooit een halfslachtige of ongevalideerde dataset live zetten.
+7. **Atomische datasetactivatie.** Volgorde: import → validate → graph genereren → connectivity tests (sectie 7) → pas dán `config/activeDataset` bijwerken. Bij één kritieke fout in een van de tussenstappen blijft de vorige `active` dataset gewoon actief — nooit een halfslachtige of ongevalideerde dataset live zetten.
 
 **Twee losse implementatiepunten uit dezelfde review, al verwerkt in het schema hierboven:**
 - Matchtolerantie (5m) en composite-clustering-drempel (50m) zijn twee aparte constanten (zie sectie 3) — nooit één generieke `distance_threshold`.
-- `merge_decision` op `logical_node_sources` (zie sectie 3) houdt de 4% uitzonderingen bij `soort_knooppunt` zichtbaar en doorzoekbaar, in plaats van ze weg te poetsen.
+- `mergeDecision` binnen `sourceNodeMappings` (zie sectie 3) houdt de 4% uitzonderingen bij `soort_knooppunt` zichtbaar en doorzoekbaar, in plaats van ze weg te poetsen.
 
 **GO/NO-GO: GO.** De Phase 1B/1C-basis is empirisch onderbouwd en architectonisch getoetst. Geen verder onderzoek nodig vóór de bouw van de importer.
 
