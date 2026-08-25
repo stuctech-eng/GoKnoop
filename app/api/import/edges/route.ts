@@ -55,7 +55,10 @@ export async function GET(req: NextRequest) {
       const chunk = edges.slice(i, i + FIRESTORE_BATCH_LIMIT);
       const batch = db.batch();
       for (const e of chunk) {
-        const ref = db.collection("edges").doc();
+        // Deterministische ID (datasetVersionId + sourceObjectId): een herhaalde
+        // of gedeeltelijk mislukte aanroep overschrijft hetzelfde document in
+        // plaats van een duplicaat aan te maken (pre-flight checklist punt 1).
+        const ref = db.collection("edges").doc(`${datasetVersionId}_${e.sourceObjectId}`);
         batch.set(ref, {
           datasetVersionId,
           sourceObjectId: e.sourceObjectId,

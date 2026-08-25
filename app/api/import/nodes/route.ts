@@ -72,7 +72,10 @@ export async function GET(req: NextRequest) {
       const chunk = nodes.slice(i, i + FIRESTORE_BATCH_LIMIT);
       const batch = db.batch();
       for (const n of chunk) {
-        const ref = db.collection("sourceNodes").doc();
+        // Deterministische ID (datasetVersionId + sourceObjectId): een herhaalde
+        // of gedeeltelijk mislukte aanroep overschrijft hetzelfde document in
+        // plaats van een duplicaat aan te maken (pre-flight checklist punt 1).
+        const ref = db.collection("sourceNodes").doc(`${datasetVersionId}_${n.sourceObjectId}`);
         batch.set(ref, {
           datasetVersionId,
           sourceObjectId: n.sourceObjectId,
