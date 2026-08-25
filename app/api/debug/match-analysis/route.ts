@@ -16,7 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
  *              (default: alle)
  */
 
-type Node = { objectid: string; knooppuntnr: string; soort: string; x: number; y: number };
+type Node = { objectid: string; knooppuntnr: string; regio: string; soort: string; x: number; y: number };
 type EdgeFull = {
   objectid: string;
   rijrichting: string;
@@ -43,6 +43,7 @@ function parseNodes(xml: string): Node[] {
       nodes.push({
         objectid: extractField(block, "objectid") || "",
         knooppuntnr: extractField(block, "knooppuntnr") || "",
+        regio: extractField(block, "regio") || "",
         soort: extractField(block, "soort_knooppunt") || "",
         x,
         y,
@@ -242,14 +243,18 @@ function runFieldProfile(nodes: Node[], edges: EdgeFull[]) {
 
 // ---- Test 4: samengesteld-knooppunt geometrie + edge-aansluiting ----
 function runCompositeNodeAnalysis(nodes: Node[], edges: EdgeFull[]) {
-  const byNr: Record<string, Node[]> = {};
-  for (const n of nodes) (byNr[n.knooppuntnr] ||= []).push(n);
+  const byKey: Record<string, Node[]> = {};
+  for (const n of nodes) {
+    const key = `${n.regio}::${n.knooppuntnr}`;
+    (byKey[key] ||= []).push(n);
+  }
 
-  const composites = Object.entries(byNr).filter(([, arr]) => arr.length > 1);
+  const composites = Object.entries(byKey).filter(([, arr]) => arr.length > 1);
 
   const EDGE_ATTACH_TOLERANCE_M = 10;
 
-  const analysis = composites.slice(0, 30).map(([nr, physicalPoints]) => {
+  const analysis = composites.slice(0, 30).map(([key, physicalPoints]) => {
+    const [regio, knooppuntnr] = key.split("::");
     let maxPairwise = 0;
     let sumPairwise = 0;
     let pairCount = 0;
@@ -285,7 +290,8 @@ function runCompositeNodeAnalysis(nodes: Node[], edges: EdgeFull[]) {
     else category = "> 100m: waarschijnlijk bewust verschillende locaties";
 
     return {
-      knooppuntnr: nr,
+      regio,
+      knooppuntnr,
       physicalPointCount: physicalPoints.length,
       maxPairwiseDistanceM: maxPairwise.toFixed(1),
       avgPairwiseDistanceM: avgPairwise.toFixed(1),
