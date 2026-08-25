@@ -76,6 +76,117 @@ function nearestDistance(point: [number, number], nodes: { x: number; y: number 
   return best;
 }
 
+function reverseCoords(coords: [number, number][]): [number, number][] {
+  return [...coords].reverse();
+}
+
+function geometryDistance(a: [number, number][], b: [number, number][]): number {
+  // Vergelijkt twee lijnen puntsgewijs (na eventueel omkeren) op basis van
+  // start- en eindpunt-afstand plus een steekproef van tussenpunten.
+  // Geen volledige Hausdorff-afstand nodig voor deze diagnose — start/eind/midden volstaat.
+  if (a.length === 0 || b.length === 0) return Infinity;
+  const distAt = (p1: [number, number], p2: [number, number]) =>
+    Math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2);
+  const startDist = distAt(a[0], b[0]);
+  const endDist = distAt(a[a.length - 1], b[b.length - 1]);
+  const midA = a[Math.floor(a.length / 2)];
+  const midB = b[Math.floor(b.length / 2)];
+  const midDist = distAt(midA, midB);
+  return Math.max(startDist, endDist, midDist);
+}
+
+function parseEdgesFull(xml: string) {
+  const edges: {
+    objectid: string;
+    rijrichting: string;
+    lengte_m: number;
+    regio: string;
+    coords: [number, number][];
+  }[] = [];
+  const memberRegex = /<routedatabank:fietsnetwerken_vrij[^>]*>([\s\S]*?)<\/routedatabank:fietsnetwerken_vrij>/g;
+  let m: RegExpExecArray | null;
+  while ((m = memberRegex.exec(xml))) {
+    const block = m[1];
+    const idMatch = /<routedatabank:objectid>([^<]*)<\/routedatabank:objectid>/.exec(block);
+    const rrMatch = /<routedatabank:rijrichting>([^<]*)<\/routedatabank:rijrichting>/.exec(block);
+    const lenMatch = /<routedatabank:lengte_m>([^<]*)<\/routedatabank:lengte_m>/.exec(block);
+    const regioMatch = /<routedatabank:regio>([^<]*)<\/routedatabank:regio>/.exec(block);
+    const posListMatch = /<gml:posList>([^<]*)<\/gml:posList>/.exec(block);
+    if (posListMatch) {
+      const flat = posListMatch[1].trim().split(/\s+/).map(Number);
+      const coords: [number, number][] = [];
+      for (let i = 0; i < flat.length; i += 2) {
+        coords.push([flat[i], flat[i + 1]]);
+      }
+      edges.push({
+        objectid: idMatch ? idMatch[1] : "",
+        rijrichting: rrMatch ? rrMatch[1] : "",
+        lengte_m: lenMatch ? parseFloat(lenMatch[1]) : 0,
+        regio: regioMatch ? regioMatch[1] : "",
+        coords,
+      });
+    }
+  }
+  return edges;
+}
+
+function runDirectionValidation(edgesFull: ReturnType<typeof parseEdgesFull>) {
+  const MATCH_TOLERANCE_M = 10; // start/eind/midden mogen tot 10m verschillen
+  const rijrichting2Edges = edgesFull.filter((e) => e.rijrichting === "2");
+  const others = edgesFull.filter((e) => e.rijrichting !== "2");
+
+  const results: {
+    objectid: string;
+    matched: boolean;
+    counterpartObjectid?: string;
+    counterpartRijrichting?: string;
+    geometryDistance?: string;
+    lengthDiff?: string;
+  }[] = [];
+
+  for (const edge of rijrichting2Edges) {
+    const reversed = reverseCoords(edge.coords);
+    let best: { other: (typeof others)[number]; dist: number } | null = null;
+    for (const other of others) {
+      const dist = geometryDistance(reversed, other.coords);
+      if (dist < MATCH_TOLERANCE_M && (!best || dist < best.dist)) {
+        best = { other, dist };
+      }
+    }
+    if (best) {
+      results.push({
+        objectid: edge.objectid,
+        matched: true,
+        counterpartObjectid: best.other.objectid,
+        counterpartRijrichting: best.other.rijrichting,
+        geometryDistance: best.dist.toFixed(2),
+        lengthDiff: Math.abs(edge.lengte_m - best.other.lengte_m).toFixed(1),
+      });
+    } else {
+      results.push({ objectid: edge.objectid, matched: false });
+    }
+  }
+
+  const matchedCount = results.filter((r) => r.matched).length;
+  const matchRate = rijrichting2Edges.length > 0 ? (matchedCount / rijrichting2Edges.length) * 100 : null;
+
+  return {
+    rijrichting2EdgeCount: rijrichting2Edges.length,
+    matchedWithReverseCounterpart: matchedCount,
+    noCounterpartFound: rijrichting2Edges.length - matchedCount,
+    matchRatePercent: matchRate !== null ? matchRate.toFixed(1) : "n/a (geen rijrichting=2 edges in steekproef)",
+    counterpartRijrichtingWaarden: results
+      .filter((r) => r.matched)
+      .reduce((acc: Record<string, number>, r) => {
+        const key = r.counterpartRijrichting || "?";
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {}),
+    exceptions: results.filter((r) => !r.matched).map((r) => r.objectid),
+    exampleMatches: results.filter((r) => r.matched).slice(0, 5),
+  };
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -176,6 +287,9 @@ export async function GET(req: NextRequest) {
     }
     const duplicateKnooppuntnrs = Object.entries(knooppuntnrCounts).filter(([, c]) => c > 1);
 
+    const edgesFull = parseEdgesFull(edgesXml);
+    const directionValidation = runDirectionValidation(edgesFull);
+
     return NextResponse.json({
       sample: {
         bbox,
@@ -196,6 +310,7 @@ export async function GET(req: NextRequest) {
       soortKnooppuntWaarden: soortCounts,
       knooppuntnrsMetMeerdereRecords: duplicateKnooppuntnrs.length,
       voorbeeldDuplicateKnooppuntnrs: duplicateKnooppuntnrs.slice(0, 10).map(([nr, count]) => ({ nr, count })),
+      directionSemanticsValidation: directionValidation,
     });
   } catch (err) {
     return NextResponse.json(

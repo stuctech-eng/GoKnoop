@@ -97,9 +97,44 @@ CREATE TABLE active_dataset (
 
 ## 4. DIRECTIONALITEIT — `rijrichting`
 
-De steekproef toont een `rijrichting`-veld met geziene waarden `0` en `1` (numeriek/enum, geen vrije tekst). Dit is nog niet geïnterpreteerd en heeft directe gevolgen voor het graphmodel:
+**Architectuurprincipe: directie-interpretatie hoort in de normalisatielaag, niet als destructief filter op de brondata.**
 
-**Update 25-8-2026:** empirische steekproef (917 edges) bevestigt drie waarden, niet twee: `0` (688×, 75%), `1` (143×, 16%), `2` (86×, 9%). De aanname van een simpele bidirectioneel/eenrichting-codering met twee waarden klopt dus niet — er is een derde categorie die nog niet verklaard is (mogelijk: onbekend/niet-geregistreerd, of een tweede type beperking zoals "verplichte rijrichting voor bromfietsers" of vergelijkbaar). Dit moet worden opgehelderd voordat `directionality` betrouwbaar kan worden afgeleid.
+```
+RAW DATA (ongewijzigd, inclusief originele rijrichting-waarde)
+   ↓
+NORMALIZATION (interpretatie van rijrichting vastleggen)
+   ↓
+DIRECTION INTERPRETATION (afgeleide directionality-waarde)
+   ↓
+VALIDATION (empirisch getoetst, zie hieronder)
+   ↓
+GRAPH
+```
+
+Concreet betekent dit voor het datamodel: **de brontabel bewaart `rijrichting` (ruwe waarde uit de bron, ongewijzigd) én `directionality` (afgeleide, geïnterpreteerde waarde) als aparte kolommen** — nooit de ene stilzwijgend vervangen door de andere. Als Routedatabank later een andere laag of versie levert, kan de interpretatiestap worden aangepast zonder de Route Engine of eerder geïmporteerde data te hoeven wijzigen.
+
+```sql
+-- Aanvulling op de eerdere edges-tabel uit sectie 3:
+-- rijrichting            TEXT   -- staat er al: ruwe brondata, ongewijzigd
+-- directionality         TEXT   -- staat er al: afgeleide waarde, NOOIT rechtstreeks 1-op-1 kopie van rijrichting
+```
+
+**Empirische validatietest: "Direction Semantics Validation" (verplichte Phase 1C-stap, vóór productiegebruik van de interpretatie).**
+
+Hypothese (gebaseerd op een Fietsplatform-FAQ over een mogelijk verwante laag): `rijrichting=2` markeert een duplicaat-edge die de omgekeerde richting van een reeds bestaande edge vertegenwoordigt.
+
+Test per `rijrichting=2`-edge:
+1. Zoek een andere edge met (vrijwel) dezelfde geometrie.
+2. Controleer of die geometrie exact/near-exact in omgekeerde volgorde loopt.
+3. Vergelijk start- en eindknoop van beide edges.
+4. Controleer of de tegenhanger `rijrichting=0` of `rijrichting=1` heeft.
+5. Vergelijk overige attributen (regio, lengte) tussen het paar.
+6. Bereken het percentage `rijrichting=2`-edges waarvoor zo'n tegenhanger bestaat.
+7. Rapporteer uitzonderingen expliciet, niet stilzwijgend negeren.
+
+**Beslisregel:** een match rate rond de 90%+ is sterke empirische ondersteuning voor de hypothese en rechtvaardigt het vastleggen van de interpretatie in de normalisatielaag. Een lage match rate (bijv. <50%) betekent dat de hypothese voor déze specifieke laag waarschijnlijk niet opgaat, en dat een andere verklaring voor `rijrichting=2` gezocht moet worden — eventueel alsnog via Jon of Routedatabank, als laatste redmiddel.
+
+**Tot deze test is uitgevoerd en het resultaat is vastgelegd, wordt `rijrichting=2` NIET blind gefilterd of anders behandeld dan de andere waarden in enige productiecode.**
 
 - Als `rijrichting` een eenrichtingsbeperking aangeeft (bijv. `0` = beide richtingen, `1` = alleen in de richting van de lijngeometrie, of een vergelijkbare codering), dan is een edge **niet automatisch symmetrisch** (`24 ↔ 31`), maar kan die directioneel zijn (`24 → 31`).
 - Voor de route-engine is dit essentieel: een gegenereerde route die een eenrichtingspad tegen de richting in gebruikt, is voor een fietser ongeldig of zelfs verboden.
