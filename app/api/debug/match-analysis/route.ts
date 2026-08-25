@@ -499,6 +499,89 @@ function runConflictDetail(nodes: Node[], edges: EdgeFull[], thresholdM: number)
   return { thresholdM, conflictingClusterCount: details.length, details };
 }
 
+// ---- Test 6: semantische merge-classificatie (soort_knooppunt als primair signaal) ----
+
+type ClusterClassification =
+  | "enkelvoudig_only"        // alle punten Enkelvoudig — GEEN automatische merge-kandidaat
+  | "samengesteld_only"        // alle punten Samengesteld_aan/uit — sterke merge-kandidaat
+  | "mixed";                   // combinatie van Enkelvoudig en Samengesteld — apart beoordelen
+
+function classifyCluster(points: Node[]): ClusterClassification {
+  const soorten = new Set(points.map((p) => (p.soort.startsWith("Samengesteld") ? "samengesteld" : "enkelvoudig")));
+  if (soorten.size === 1) {
+    return soorten.has("samengesteld") ? "samengesteld_only" : "enkelvoudig_only";
+  }
+  return "mixed";
+}
+
+function runSemanticMergeAnalysis(nodes: Node[], edges: EdgeFull[], thresholdM: number) {
+  const EDGE_ATTACH_TOLERANCE_M = 10;
+  const clusters = clusterAtThreshold(nodes, thresholdM).filter((c) => c.length > 1);
+
+  const classified = clusters.map((c) => {
+    const points = c.map((i) => nodes[i]);
+    const classification = classifyCluster(points);
+    const regios = new Set(points.map((p) => p.regio));
+    const nrs = new Set(points.map((p) => p.knooppuntnr));
+
+    // Cluster ALS GEHEEL beoordeeld (niet paarsgewijs): verzamel alle regio's die
+    // via aangesloten edges bij dit cluster horen. Een "brugpunt" dat naar twee
+    // regio's leidt, telt niet als conflict zolang het cluster als geheel een
+    // samenhangend netwerk vormt (elke regio wordt door minstens één punt gedeeld
+    // met een ander punt in het cluster).
+    const edgeRegiosPerPoint = points.map((p) => {
+      const regiosForPoint = new Set<string>();
+      for (const e of edges) {
+        const start = e.coords[0];
+        const end = e.coords[e.coords.length - 1];
+        if (dist(start, [p.x, p.y]) < EDGE_ATTACH_TOLERANCE_M || dist(end, [p.x, p.y]) < EDGE_ATTACH_TOLERANCE_M) {
+          regiosForPoint.add(e.regio);
+        }
+      }
+      return regiosForPoint;
+    });
+    const allEdgeRegios = new Set<string>();
+    edgeRegiosPerPoint.forEach((s) => s.forEach((r) => allEdgeRegios.add(r)));
+    // Samenhangend: elk punt deelt minstens één regio met de vereniging van de rest
+    // (eenvoudige proxy — geen volledige graaftheorie nodig voor deze diagnose).
+    const isCoherentNetwork = edgeRegiosPerPoint.every((s) => Array.from(s).some((r) => allEdgeRegios.has(r)));
+
+    return {
+      diameterM: clusterDiameter(c, nodes).toFixed(1),
+      size: c.length,
+      classification,
+      regioCount: regios.size,
+      knooppuntnrCount: nrs.size,
+      involvedRegios: Array.from(allEdgeRegios),
+      isCoherentNetwork,
+      recommendedAction:
+        classification === "enkelvoudig_only"
+          ? "standaard NIET samenvoegen (Enkelvoudig-only cluster)"
+          : classification === "samengesteld_only"
+          ? isCoherentNetwork
+            ? "samenvoegen (Samengesteld-only, samenhangend netwerk)"
+            : "nader onderzoeken (Samengesteld-only, maar netwerk lijkt niet samenhangend)"
+          : "handmatig beoordelen (gemengd Enkelvoudig/Samengesteld in één cluster)",
+    };
+  });
+
+  const summary = {
+    totalClusters: classified.length,
+    enkelvoudigOnlyClusters: classified.filter((c) => c.classification === "enkelvoudig_only").length,
+    samengesteldOnlyClusters: classified.filter((c) => c.classification === "samengesteld_only").length,
+    mixedClusters: classified.filter((c) => c.classification === "mixed").length,
+  };
+
+  return {
+    thresholdM,
+    summary,
+    note:
+      "enkelvoudig_only-clusters zijn de kritieke test: als dit aantal hoog is, betekent dat dat 'Enkelvoudig' als brondata-signaal NIET betrouwbaar 'nooit samenvoegen' garandeert, en moet de regel worden bijgesteld. Mixed-clusters zijn per definitie handmatige beoordelingsgevallen.",
+    enkelvoudigOnlyDetails: classified.filter((c) => c.classification === "enkelvoudig_only"),
+    mixedDetails: classified.filter((c) => c.classification === "mixed"),
+  };
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -572,6 +655,10 @@ export async function GET(req: NextRequest) {
     if (requestedTests.includes("conflictDetail")) {
       const conflictThreshold = parseInt(req.nextUrl.searchParams.get("conflictThreshold") || "50", 10);
       result.conflictDetail = runConflictDetail(nodes, edges, conflictThreshold);
+    }
+    if (requestedTests.includes("semanticMerge")) {
+      const semanticThreshold = parseInt(req.nextUrl.searchParams.get("conflictThreshold") || "50", 10);
+      result.semanticMergeAnalysis = runSemanticMergeAnalysis(nodes, edges, semanticThreshold);
     }
 
     return NextResponse.json(result);

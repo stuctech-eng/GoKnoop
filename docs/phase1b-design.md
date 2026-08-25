@@ -241,18 +241,50 @@ Voor elke edge:
 
 **Openstaande actie vóór importer:** de specifieke conflicterende clusters bij 50m (5 stuks, met enige overlap tussen de categorieën) moeten los geïnspecteerd worden — dit zijn precies de grensgevallen die handmatige beoordeling verdienen vóór de merge-logica wordt vastgezet.
 
-  **Herleidbaarheid is niet optioneel:** de koppeling tussen brondata (`source_nodes`) en de uiteindelijke routing-eenheid (`logical_nodes`) wordt altijd bewaard via `logical_node_sources` (zie sectie 3) — nooit een destructieve samenvoeging.
+**Handmatige inspectie van de 4 conflicterende clusters bij 50m (25-8-2026) — doorslaggevende bevinding:**
 
-  **Definitieve merge-conditie (conceptueel, niet alleen afstand):**
-  ```
-  distance ≤ threshold
-      AND topological_compatibility   (geen kunstmatige shortcuts, geen vernietigde bestaande relaties)
-      AND network_compatibility       (aangesloten edges horen bij hetzelfde netwerk/regio)
-          ↓
-      MERGE tot LogicalNode
-  ```
+| Cluster | Diameter | Conflict-type | Bevinding | Actie |
+|---|---|---|---|---|
+| 1 | 12,4m | knooppuntnr (`45` vs `-`) | Beide Almere, edges naar Almere | Samenvoegen |
+| 2 | 31,0m | regio (Gooi/Utrecht) | Zelfde knooppuntnr `75`, edges convergeren naar Utrecht | Samenvoegen |
+| 3 | 49,4m | knooppuntnr (`99` vs `67`) | **Beide "Enkelvoudig"** — twee complete, zelfstandige knooppunten die toevallig dicht bij elkaar liggen | **NIET samenvoegen** |
+| 4 | 73,1m | regio + topologie | 5 punten, allemaal `Samengesteld_aan/uit`, twee brugpunten tussen regio's — één samenhangend grensknooppunt | Samenvoegen |
 
-  **Gevolg voor identiteit in het datamodel:** `knooppuntnr`/`regio` zijn weergavewaarden richting de gebruiker, NIET de identiteitssleutel. De echte identiteit ontstaat via een expliciete, herleidbare mapping van brondata (`source_nodes`) naar routing-eenheid (`logical_nodes`) — zie het gelaagde datamodel in sectie 3.
+**Sleutelbevinding:** in alle 4 gevallen voorspelt `soort_knooppunt` correct of samenvoegen terecht is. Cluster 3 (de enige die niet samengevoegd moet worden) is ook de enige waar **beide** punten "Enkelvoudig" zijn — de bron markeert dit dus zelf al als twee volwaardige, aparte knooppunten. Clusters 1, 2 en 4 bevatten allemaal minstens één "Samengesteld"-punt.
+
+**Wat dit wél en niet bewijst:** dit zijn 4 voorbeelden, geen dekkend bewijs voor alle 13.152 nodes. Vóór dit als harde productieregel wordt gebruikt, moet eerst empirisch worden vastgesteld hoe vaak een cluster van **uitsluitend "Enkelvoudig"-punten** toch een geldige merge-kandidaat blijkt (`enkelvoudig_only`-telling over de volledige dataset). Bij 0 of alleen evidente uitzonderingen: sterk bewijs voor een harde regel. Bij een substantieel aantal: de regel moet worden bijgesteld.
+
+**Herziene merge-regel — `soort_knooppunt` is het primaire semantische signaal, geen absolute regel:**
+
+```
+soort_knooppunt = Enkelvoudig
+        ↓
+    standaard NIET automatisch merge-kandidaat
+    (te heroverwegen als de enkelvoudig_only-analyse over de volle dataset
+     aantoont dat dit patroon consistent is)
+
+soort_knooppunt = Samengesteld_aan / Samengesteld_uit
+        ↓
+    merge-kandidaat
+        ↓
+    ruimtelijke nabijheid (drempel 50m, zie hierboven)
+        ↓
+    cluster-topologie ALS GEHEEL beoordeeld (niet paarsgewijs — zie Cluster 4:
+    paarsgewijze beoordeling gaf een vals-conflict, terwijl het cluster als geheel
+    via brugpunten wél samenhangend is)
+        ↓
+    MERGE tot LogicalNode
+```
+
+**Signaalhiërarchie (geen van deze is op zichzelf een identiteitssleutel):**
+```
+soort_knooppunt   ← primair semantisch signaal (bron zegt: is dit een deel van een geheel?)
+knooppuntnr       ← secundair associatiesignaal (versterkt een match, bewijst niets alleen)
+regio             ← contextsignaal (grenspunten tussen regio's zijn legitiem, geen harde grens)
+geometry/afstand  ← ruimtelijk signaal (kandidaatvorming, niet de beslissing zelf)
+```
+
+De uiteindelijke merge-beslissing = combinatie van alle vier, nooit één signaal alleen. Cluster als geheel beoordelen (connected component), niet paarsgewijs — een cluster met brugpunten naar meerdere regio's kan alsnog één samenhangend netwerk zijn.
 - **Schema-afwijking tussen `fietsnetwerken_vrij` en het eerder via DescribeFeatureType geziene `fietsknooppuntnetwerken`:** de `_vrij`-laag heeft `lokaalid` in plaats van `ogc_fid`. Importer moet robuust zijn tegen dit soort kleine schemaverschillen tussen laagvarianten.
 - **Limburg-uitzondering:** nog niet expliciet zichtbaar in `regio`/`provincie`-waarden uit de steekproef (die toonde alleen Utrecht/Gooi en Vechtstreek). Bij volledige import controleren of Limburgse regio's al server-side ontbreken, of dat er alsnog een filter nodig is.
 
@@ -348,31 +380,33 @@ Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande on
         ↓
 6. Threshold sensitivity-analyse      ✅ afgerond — 50 meter, natuurlijke knik empirisch bevestigd
         ↓
-7. Topologische merge-validatie       🔜 volgende stap — per kandidaatcluster: netwerkcompatibiliteit + shortcut-check
+7. Topologische merge-validatie       ✅ afgerond — cluster-als-geheel i.p.v. paarsgewijs (voorkomt vals-conflict zoals Cluster 4)
         ↓
-8. Handmatige inspectie grensgevallen 🔜 — specifiek de 5 conflicterende clusters bij 50m
+8. Handmatige inspectie grensgevallen ✅ afgerond — 4 clusters bij 50m geïnspecteerd, soort_knooppunt blijkt sterke voorspeller
         ↓
-9. Rijrichting semantiek-analyse      🔜 — lengte/regio-correlatie (deels gedaan), infrastructuurtype indien mogelijk
+9. Enkelvoudig-only classificatie op volledige dataset  🔜 volgende stap — bewijst of de regel hard mag worden
         ↓
-10. Node ↔ edge volledige steekproef
+10. Rijrichting semantiek-analyse      🔜 — lengte/regio-correlatie (deels gedaan), infrastructuurtype indien mogelijk
         ↓
-11. Limburg-exclusie
+11. Node ↔ edge volledige steekproef
         ↓
-12. Importer bouwen
+12. Limburg-exclusie
         ↓
-13. Volledige dataset importeren
+13. Importer bouwen
         ↓
-14. Validatie
+14. Volledige dataset importeren
         ↓
-15. Graph genereren
+15. Validatie
         ↓
-16. Graph-connectivity testen          (sectie 7 — connected components, isolated nodes, eilandjes)
+16. Graph genereren
         ↓
-17. Dataset atomisch activeren
+17. Graph-connectivity testen          (sectie 7 — connected components, isolated nodes, eilandjes)
+        ↓
+18. Dataset atomisch activeren
 ```
 
 **Belangrijk architectuurpunt bij composite nodes (stap 6-8):** een centroid van de samengestelde punten wordt NIET automatisch gebruikt als samenvoegstrategie, en een enkel afstandscriterium ook niet. Zie de definitieve merge-conditie in sectie 6: afstand ÉN topologische compatibiliteit ÉN netwerkcompatibiliteit moeten alle drie kloppen. De threshold sensitivity-analyse (stap 6) bepaalt de drempel empirisch (natuurlijke knik in de verdeling, niet een gekozen ronde waarde); de topologische validatie (stap 7) voorkomt dat samenvoegen kunstmatige shortcuts creëert.
 
 **Directionality-codering:** `bidirectional` | `forward` | `reverse` | `unknown` (niet slechts drie waarden) — `unknown` is expliciet een aparte status, geen synoniem voor `bidirectional`. Een routing policy kan `unknown` voorlopig als `bidirectional` behandelen, maar dat is een bewuste, herroepbare beslissing op routing-niveau, niet een aanname die in de brondata-interpretatie wordt vastgelegd.
 
-Pas na stap 17 begint de route-generator (Phase 2 van het Master Plan).
+Pas na stap 18 begint de route-generator (Phase 2 van het Master Plan).
