@@ -13,6 +13,7 @@ import { useState, useRef } from "react";
  */
 
 type ImportKind = "nodes" | "edges";
+type RunningKind = ImportKind | "cluster";
 
 type LogLine = { time: string; text: string; isError?: boolean };
 
@@ -21,7 +22,7 @@ export default function ImportAdminPage() {
   const [datasetVersionId, setDatasetVersionId] = useState("");
   const [pageSize, setPageSize] = useState(10);
   const [logs, setLogs] = useState<LogLine[]>([]);
-  const [running, setRunning] = useState<ImportKind | null>(null);
+  const [running, setRunning] = useState<RunningKind | null>(null);
   const [progress, setProgress] = useState<Record<ImportKind, number>>({ nodes: 0, edges: 0 });
   const stopRef = useRef(false);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
@@ -150,6 +151,86 @@ export default function ImportAdminPage() {
     setRunning(null);
   }
 
+  async function runClusterNodes() {
+    if (!debugKey || !datasetVersionId) {
+      log("Geef eerst de sleutel en datasetVersionId op.", true);
+      return;
+    }
+    stopRef.current = false;
+    setRunning("cluster");
+    await acquireWakeLock();
+
+    let writeOffset = 0;
+    let attempt = 0;
+
+    while (!stopRef.current) {
+      const url = new URL("/api/import/cluster-nodes", window.location.origin);
+      url.searchParams.set("key", debugKey);
+      url.searchParams.set("datasetVersionId", datasetVersionId);
+      url.searchParams.set("writeOffset", String(writeOffset));
+
+      try {
+        const res = await fetch(url.toString());
+        const rawText = await res.text();
+        let data: {
+          error?: string;
+          details?: string;
+          newWriteOffset?: number;
+          totalLogicalNodes?: number;
+          done?: boolean;
+          summary?: { merged: number; single: number; exceptionReview: number };
+        };
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          attempt++;
+          log(`Server gaf geen geldige JSON terug (status ${res.status}): ${rawText.slice(0, 200)} (poging ${attempt})`, true);
+          if (attempt >= 10) {
+            log("Gestopt na 10 mislukte pogingen. Tik nogmaals op start om te hervatten.", true);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+
+        if (!res.ok) {
+          attempt++;
+          log(`Fout: ${[data.error, data.details].filter(Boolean).join(" — ")} (poging ${attempt})`, true);
+          if (attempt >= 10) {
+            log("Gestopt na 10 mislukte pogingen.", true);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+
+        attempt = 0;
+        log(`clustering: ${data.newWriteOffset} / ${data.totalLogicalNodes} logical nodes geschreven`);
+
+        if (data.done) {
+          log(
+            `Klaar — samengevoegd: ${data.summary?.merged}, los: ${data.summary?.single}, ter review: ${data.summary?.exceptionReview}.`
+          );
+          break;
+        }
+
+        writeOffset = data.newWriteOffset ?? writeOffset;
+        await new Promise((r) => setTimeout(r, 200));
+      } catch (err) {
+        attempt++;
+        log(`Onverwachte fout: ${err instanceof Error ? err.message : String(err)} (poging ${attempt})`, true);
+        if (attempt >= 10) {
+          log("Gestopt na 10 mislukte pogingen.", true);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+
+    releaseWakeLock();
+    setRunning(null);
+  }
+
   return (
     <main style={{ fontFamily: "system-ui", padding: "1.5rem", maxWidth: 600, margin: "0 auto" }}>
       <h1>GoKnoop — Import Admin</h1>
@@ -203,6 +284,13 @@ export default function ImportAdminPage() {
           style={{ padding: "10px 16px", fontSize: 16 }}
         >
           {progress.edges > 0 ? `Hervat edges (vanaf ${progress.edges})` : "Start edges-import"}
+        </button>
+        <button
+          disabled={running !== null || !datasetVersionId}
+          onClick={() => runClusterNodes()}
+          style={{ padding: "10px 16px", fontSize: 16 }}
+        >
+          Start node-clustering
         </button>
         <button
           disabled={running === null}
