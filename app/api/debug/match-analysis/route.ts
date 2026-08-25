@@ -440,6 +440,65 @@ function runThresholdSensitivity(nodes: Node[], edges: EdgeFull[]) {
   };
 }
 
+function runConflictDetail(nodes: Node[], edges: EdgeFull[], thresholdM: number) {
+  const EDGE_ATTACH_TOLERANCE_M = 10;
+  const clusters = clusterAtThreshold(nodes, thresholdM);
+  const multiClusters = clusters.filter((c) => c.length > 1);
+
+  const details = multiClusters
+    .map((c) => {
+      const points = c.map((i) => nodes[i]);
+      const regios = new Set(points.map((p) => p.regio));
+      const nrs = new Set(points.map((p) => p.knooppuntnr));
+
+      const edgeRegiosPerPoint = points.map((p) => {
+        const regiosForPoint = new Set<string>();
+        const attachedEdges: string[] = [];
+        for (const e of edges) {
+          const start = e.coords[0];
+          const end = e.coords[e.coords.length - 1];
+          if (dist(start, [p.x, p.y]) < EDGE_ATTACH_TOLERANCE_M || dist(end, [p.x, p.y]) < EDGE_ATTACH_TOLERANCE_M) {
+            regiosForPoint.add(e.regio);
+            attachedEdges.push(e.objectid);
+          }
+        }
+        return { point: p, regios: Array.from(regiosForPoint), attachedEdges };
+      });
+
+      const allRegioSets = edgeRegiosPerPoint.map((e) => e.regios);
+      let topologyConflict = false;
+      for (let i = 0; i < allRegioSets.length; i++) {
+        for (let j = i + 1; j < allRegioSets.length; j++) {
+          const a = allRegioSets[i];
+          const b = allRegioSets[j];
+          if (a.length && b.length && !a.some((r) => b.includes(r))) topologyConflict = true;
+        }
+      }
+
+      const hasConflict = regios.size > 1 || nrs.size > 1 || topologyConflict;
+      if (!hasConflict) return null;
+
+      return {
+        clusterSize: c.length,
+        diameterM: clusterDiameter(c, nodes).toFixed(1),
+        regioConflict: regios.size > 1,
+        knooppuntnrConflict: nrs.size > 1,
+        topologyConflict,
+        points: edgeRegiosPerPoint.map((e) => ({
+          objectid: e.point.objectid,
+          knooppuntnr: e.point.knooppuntnr,
+          regio: e.point.regio,
+          soort: e.point.soort,
+          attachedEdgeRegios: e.regios,
+          attachedEdgeCount: e.attachedEdges.length,
+        })),
+      };
+    })
+    .filter((d) => d !== null);
+
+  return { thresholdM, conflictingClusterCount: details.length, details };
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -509,6 +568,10 @@ export async function GET(req: NextRequest) {
     }
     if (requestedTests.includes("thresholdSensitivity")) {
       result.thresholdSensitivity = runThresholdSensitivity(nodes, edges);
+    }
+    if (requestedTests.includes("conflictDetail")) {
+      const conflictThreshold = parseInt(req.nextUrl.searchParams.get("conflictThreshold") || "50", 10);
+      result.conflictDetail = runConflictDetail(nodes, edges, conflictThreshold);
     }
 
     return NextResponse.json(result);

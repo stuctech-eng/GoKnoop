@@ -221,7 +221,25 @@ Voor elke edge:
   LogicalNode  (alleen als afstand ÉN topologie ÉN netwerkcompatibiliteit kloppen)
   ```
 
-  **Verplichte stap vóór een definitieve drempel wordt vastgesteld: threshold sensitivity-analyse.** In plaats van 50/100/150m op gevoel te kiezen, wordt voor een reeks drempels (10/25/50/75/100/125/150m) gemeten: aantal clusters, aantal samengevoegde records, grootste cluster, gemiddelde/maximale clusterdiameter, aantal clusters met een regio- of knooppuntnr-attribuutconflict, en aantal clusters met een topologisch conflict (aangesloten edges van de verschillende fysieke punten wijzen naar disjuncte regio's — sterk signaal tegen samenvoegen). Doel is de **natuurlijke knik** in de verdeling, niet de drempel die de meeste records samenvoegt.
+  **Resultaat threshold sensitivity-test (25-8-2026, 449 nodes):**
+
+| Drempel | Clusters | Samengevoegde records | Regio-conflicten | Knooppuntnr-conflicten | Topologie-conflicten |
+|---|---|---|---|---|---|
+| 10m | 3 | 6 | 0 | 0 | 0 |
+| 25m | 36 | 85 | 0 | 1 | 0 |
+| 50m | 50 | 133 | 2 | 2 | 1 |
+| 75m | 57 | 149 | 2 | 2 | 1 |
+| 100m | 60 | 159 | 2 | 5 | 1 |
+| 125m | 63 | 166 | 3 | 8 | 2 |
+| 150m | 69 | 179 | 3 | 15 | 2 |
+
+**Groeisnelheid (nieuwe clusters per meter):** 10-25m: 2,2/m → 25-50m: 0,56/m → 50-75m: 0,28/m → 75-100m: 0,12/m → 100-125m: 0,12/m → 125-150m: 0,24/m.
+
+**Natuurlijke knik zit tussen 25 en 50 meter** — groeisnelheid valt daar met een factor 4 terug. Vanaf 75-100m beginnen de `knooppuntnrAttributeConflicts` bovendien bijna te verdubbelen per stap (2 → 5 → 8 → 15), een duidelijk signaal dat vanaf daar steeds meer punten worden samengevoegd die zelfs qua brondata-identiteit niet bij elkaar horen.
+
+**Definitieve drempel: 50 meter** (niet de eerder aangenomen 100m). Op 50m: 133 samengevoegde records met een conflictniveau van ~3,8% (2 regio + 2 knooppuntnr + 1 topologie-conflict) — de meeste winst, nog beperkte ruis.
+
+**Openstaande actie vóór importer:** de specifieke conflicterende clusters bij 50m (5 stuks, met enige overlap tussen de categorieën) moeten los geïnspecteerd worden — dit zijn precies de grensgevallen die handmatige beoordeling verdienen vóór de merge-logica wordt vastgezet.
 
   **Herleidbaarheid is niet optioneel:** de koppeling tussen brondata (`source_nodes`) en de uiteindelijke routing-eenheid (`logical_nodes`) wordt altijd bewaard via `logical_node_sources` (zie sectie 3) — nooit een destructieve samenvoeging.
 
@@ -328,11 +346,11 @@ Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande on
         ↓
 5. Composite-node geometrieanalyse    ✅ afgerond — regio-scope bleek onbetrouwbaar
         ↓
-6. Threshold sensitivity-analyse      🔜 volgende stap — 10/25/50/75/100/125/150m, zoek de natuurlijke knik
+6. Threshold sensitivity-analyse      ✅ afgerond — 50 meter, natuurlijke knik empirisch bevestigd
         ↓
-7. Topologische merge-validatie       🔜 — per kandidaatcluster: netwerkcompatibiliteit + shortcut-check
+7. Topologische merge-validatie       🔜 volgende stap — per kandidaatcluster: netwerkcompatibiliteit + shortcut-check
         ↓
-8. Handmatige inspectie grensgevallen 🔜 — alleen clusters rond 25-50m, 50-100m, 100-150m
+8. Handmatige inspectie grensgevallen 🔜 — specifiek de 5 conflicterende clusters bij 50m
         ↓
 9. Rijrichting semantiek-analyse      🔜 — lengte/regio-correlatie (deels gedaan), infrastructuurtype indien mogelijk
         ↓
