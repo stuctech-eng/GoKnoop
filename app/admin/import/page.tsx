@@ -190,13 +190,58 @@ export default function ImportAdminPage() {
     setRunning("cluster");
     await acquireWakeLock();
 
+    // Fase 1: compute (één keer, resultaat wordt server-side gecachet)
+    log("Berekeningsfase gestart — dit kan even duren...");
+    try {
+      const computeUrl = new URL("/api/import/cluster-nodes", window.location.origin);
+      computeUrl.searchParams.set("key", debugKey);
+      computeUrl.searchParams.set("datasetVersionId", datasetVersionId);
+      computeUrl.searchParams.set("phase", "compute");
+
+      const res = await fetch(computeUrl.toString());
+      const rawText = await res.text();
+      let data: {
+        error?: string;
+        details?: string;
+        totalLogicalNodes?: number;
+        timingMs?: { read: number; cluster: number; cacheWrite: number; total: number };
+      };
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        log(`Berekeningsfase gaf geen geldige JSON (status ${res.status}): ${rawText.slice(0, 300)}`, true);
+        releaseWakeLock();
+        setRunning(null);
+        return;
+      }
+
+      if (!res.ok) {
+        log(`Berekeningsfase mislukt: ${[data.error, data.details].filter(Boolean).join(" — ")}`, true);
+        releaseWakeLock();
+        setRunning(null);
+        return;
+      }
+
+      log(
+        `Berekening klaar: ${data.totalLogicalNodes} logical nodes bepaald (read ${data.timingMs?.read}ms, cluster ${data.timingMs?.cluster}ms, cache-write ${data.timingMs?.cacheWrite}ms, totaal ${data.timingMs?.total}ms).`
+      );
+    } catch (err) {
+      log(`Berekeningsfase — onverwachte fout: ${err instanceof Error ? err.message : String(err)}`, true);
+      releaseWakeLock();
+      setRunning(null);
+      return;
+    }
+
+    // Fase 2: gepagineerd wegschrijven vanuit de cache
     let writeOffset = 0;
     let attempt = 0;
+    const totals = { merged: 0, single: 0, exceptionReview: 0 };
 
     while (!stopRef.current) {
       const url = new URL("/api/import/cluster-nodes", window.location.origin);
       url.searchParams.set("key", debugKey);
       url.searchParams.set("datasetVersionId", datasetVersionId);
+      url.searchParams.set("phase", "write");
       url.searchParams.set("writeOffset", String(writeOffset));
 
       try {
@@ -208,7 +253,7 @@ export default function ImportAdminPage() {
           newWriteOffset?: number;
           totalLogicalNodes?: number;
           done?: boolean;
-          summary?: { merged: number; single: number; exceptionReview: number };
+          sliceSummary?: { merged: number; single: number; exceptionReview: number };
         };
         try {
           data = JSON.parse(rawText);
@@ -235,12 +280,15 @@ export default function ImportAdminPage() {
         }
 
         attempt = 0;
-        log(`clustering: ${data.newWriteOffset} / ${data.totalLogicalNodes} logical nodes geschreven`);
+        if (data.sliceSummary) {
+          totals.merged += data.sliceSummary.merged;
+          totals.single += data.sliceSummary.single;
+          totals.exceptionReview += data.sliceSummary.exceptionReview;
+        }
+        log(`schrijven: ${data.newWriteOffset} / ${data.totalLogicalNodes} logical nodes`);
 
         if (data.done) {
-          log(
-            `Klaar — samengevoegd: ${data.summary?.merged}, los: ${data.summary?.single}, ter review: ${data.summary?.exceptionReview}.`
-          );
+          log(`Klaar — samengevoegd: ${totals.merged}, los: ${totals.single}, ter review: ${totals.exceptionReview}.`);
           break;
         }
 

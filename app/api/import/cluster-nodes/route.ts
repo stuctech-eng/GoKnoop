@@ -209,7 +209,7 @@ function resolveClusters(nodes: SourceNode[]): LogicalNodeResult[] {
   return results;
 }
 
-const FIRESTORE_BATCH_LIMIT = 500;
+const CACHE_CHUNK_SIZE = 1000; // logicalNode-kandidaten per cache-document
 
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -224,45 +224,113 @@ export async function GET(req: NextRequest) {
   if (!datasetVersionId) {
     return NextResponse.json({ error: "datasetVersionId is verplicht." }, { status: 400 });
   }
+  const phase = req.nextUrl.searchParams.get("phase") || "compute"; // 'compute' | 'write'
   const writeOffset = parseInt(req.nextUrl.searchParams.get("writeOffset") || "0", 10);
   const writeBatchSize = parseInt(req.nextUrl.searchParams.get("writeBatchSize") || "300", 10);
 
   try {
     const db = getDb();
+    const cacheMetaRef = db.collection("clusterComputeCache").doc(datasetVersionId);
 
-    const snapshot = await db
-      .collection("sourceNodes")
-      .where("datasetVersionId", "==", datasetVersionId)
-      .get();
+    if (phase === "compute") {
+      const t0 = Date.now();
+      const snapshot = await db
+        .collection("sourceNodes")
+        .where("datasetVersionId", "==", datasetVersionId)
+        .get();
+      const readMs = Date.now() - t0;
 
-    const nodes: SourceNode[] = snapshot.docs.map((doc) => {
-      const d = doc.data();
-      return {
-        id: doc.id,
-        sourceObjectId: d.sourceObjectId,
-        knooppuntnr: d.knooppuntnr,
-        regio: d.regio,
-        provincie: d.provincie,
-        soortKnooppunt: d.soortKnooppunt,
-        x: d.x,
-        y: d.y,
-      };
-    });
+      const nodes: SourceNode[] = snapshot.docs.map((doc) => {
+        const d = doc.data();
+        return {
+          id: doc.id,
+          sourceObjectId: d.sourceObjectId,
+          knooppuntnr: d.knooppuntnr,
+          regio: d.regio,
+          provincie: d.provincie,
+          soortKnooppunt: d.soortKnooppunt,
+          x: d.x,
+          y: d.y,
+        };
+      });
 
-    if (nodes.length === 0) {
-      return NextResponse.json({ error: "Geen sourceNodes gevonden voor deze datasetVersionId." }, { status: 404 });
+      if (nodes.length === 0) {
+        return NextResponse.json({ error: "Geen sourceNodes gevonden voor deze datasetVersionId." }, { status: 404 });
+      }
+
+      const t1 = Date.now();
+      const logicalNodesToWrite = resolveClusters(nodes);
+      const clusterMs = Date.now() - t1;
+
+      // Resultaat opslaan in gechunkte cache-documenten (elk ruim onder de
+      // 1MiB Firestore-limiet per document) — zodat de write-fase dit nooit
+      // opnieuw hoeft te berekenen.
+      const t2 = Date.now();
+      const chunks: LogicalNodeResult[][] = [];
+      for (let i = 0; i < logicalNodesToWrite.length; i += CACHE_CHUNK_SIZE) {
+        chunks.push(logicalNodesToWrite.slice(i, i + CACHE_CHUNK_SIZE));
+      }
+      const cacheBatch = db.batch();
+      chunks.forEach((chunk, i) => {
+        const ref = db.collection("clusterComputeCache").doc(`${datasetVersionId}_chunk${i}`);
+        cacheBatch.set(ref, { datasetVersionId, chunkIndex: i, items: chunk });
+      });
+      await cacheBatch.commit();
+      await cacheMetaRef.set({
+        datasetVersionId,
+        totalLogicalNodes: logicalNodesToWrite.length,
+        chunkCount: chunks.length,
+        computedAt: new Date().toISOString(),
+      });
+      const cacheMs = Date.now() - t2;
+
+      return NextResponse.json({
+        phase: "compute",
+        datasetVersionId,
+        totalSourceNodes: nodes.length,
+        totalLogicalNodes: logicalNodesToWrite.length,
+        timingMs: { read: readMs, cluster: clusterMs, cacheWrite: cacheMs, total: Date.now() - t0 },
+        nextStep: `Roep nu phase=write aan (met writeOffset=0) om de resultaten daadwerkelijk naar logicalNodes te schrijven.`,
+      });
     }
 
-    const logicalNodesToWrite = resolveClusters(nodes);
+    // phase === "write": lees uit de cache, schrijf een slice naar logicalNodes.
+    const metaSnap = await cacheMetaRef.get();
+    if (!metaSnap.exists) {
+      return NextResponse.json(
+        { error: "Geen cache gevonden. Roep eerst phase=compute aan." },
+        { status: 400 }
+      );
+    }
+    const meta = metaSnap.data() as { totalLogicalNodes: number; chunkCount: number };
 
-    const slice = logicalNodesToWrite.slice(writeOffset, writeOffset + writeBatchSize);
+    // Bepaal welke cache-chunk(s) nodig zijn voor deze writeOffset-slice.
+    const startChunk = Math.floor(writeOffset / CACHE_CHUNK_SIZE);
+    const endChunk = Math.floor((writeOffset + writeBatchSize - 1) / CACHE_CHUNK_SIZE);
+    let slice: LogicalNodeResult[] = [];
+    for (let c = startChunk; c <= endChunk && c < meta.chunkCount; c++) {
+      const chunkSnap = await db.collection("clusterComputeCache").doc(`${datasetVersionId}_chunk${c}`).get();
+      const chunkData = chunkSnap.data() as { items: LogicalNodeResult[] } | undefined;
+      if (chunkData) slice = slice.concat(chunkData.items);
+    }
+    const localOffset = writeOffset - startChunk * CACHE_CHUNK_SIZE;
+    slice = slice.slice(localOffset, localOffset + writeBatchSize);
 
-    for (let i = 0; i < slice.length; i += FIRESTORE_BATCH_LIMIT) {
-      const chunk = slice.slice(i, i + FIRESTORE_BATCH_LIMIT);
-      const batch = db.batch();
-      for (const ln of chunk) {
-        const logicalRef = db.collection("logicalNodes").doc();
-        batch.set(logicalRef, {
+    // Bouw de platte lijst van schrijfoperaties (elke logicalNode = 1 set +
+    // N updates naar de gekoppelde sourceNodes) en chunk DAAROP, niet op het
+    // aantal logicalNode-entries — anders kan één batch onopgemerkt boven
+    // Firestore's harde limiet van 500 operaties per batch uitkomen.
+    type WriteOp =
+      | { kind: "setLogical"; ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }
+      | { kind: "updateSource"; ref: FirebaseFirestore.DocumentReference; logicalNodeId: string };
+
+    const ops: WriteOp[] = [];
+    for (const ln of slice) {
+      const logicalRef = db.collection("logicalNodes").doc();
+      ops.push({
+        kind: "setLogical",
+        ref: logicalRef,
+        data: {
           datasetVersionId,
           displayNumber: ln.displayNumber,
           displayRegio: ln.displayRegio,
@@ -273,37 +341,49 @@ export async function GET(req: NextRequest) {
           clusterThresholdM: ln.clusterThresholdM,
           sourceNodeMappings: ln.sourceNodeMappings,
           createdAt: new Date().toISOString(),
+        },
+      });
+      for (const mapping of ln.sourceNodeMappings) {
+        ops.push({
+          kind: "updateSource",
+          ref: db.collection("sourceNodes").doc(mapping.sourceNodeId),
+          logicalNodeId: logicalRef.id,
         });
-        for (const mapping of ln.sourceNodeMappings) {
-          const sourceRef = db.collection("sourceNodes").doc(mapping.sourceNodeId);
-          batch.update(sourceRef, { logicalNodeId: logicalRef.id });
+      }
+    }
+
+    const FIRESTORE_OP_LIMIT = 450; // marge onder de harde 500-limiet
+    for (let i = 0; i < ops.length; i += FIRESTORE_OP_LIMIT) {
+      const chunk = ops.slice(i, i + FIRESTORE_OP_LIMIT);
+      const batch = db.batch();
+      for (const op of chunk) {
+        if (op.kind === "setLogical") {
+          batch.set(op.ref, op.data);
+        } else {
+          batch.update(op.ref, { logicalNodeId: op.logicalNodeId });
         }
       }
       await batch.commit();
     }
 
     const newWriteOffset = writeOffset + slice.length;
-    const done = newWriteOffset >= logicalNodesToWrite.length;
+    const done = newWriteOffset >= meta.totalLogicalNodes;
 
     return NextResponse.json({
+      phase: "write",
       datasetVersionId,
-      totalSourceNodes: nodes.length,
-      totalLogicalNodes: logicalNodesToWrite.length,
+      totalLogicalNodes: meta.totalLogicalNodes,
       writeOffset,
       written: slice.length,
       newWriteOffset,
       done,
-      summary: done
-        ? {
-            merged: logicalNodesToWrite.filter((l) => l.clusterMethod === "spatial_cluster").length,
-            single: logicalNodesToWrite.filter(
-              (l) => l.clusterMethod === "single" && l.sourceNodeMappings[0].mergeDecision === "protected_single"
-            ).length,
-            exceptionReview: logicalNodesToWrite.filter(
-              (l) => l.sourceNodeMappings[0].mergeDecision === "exception_review"
-            ).length,
-          }
-        : null,
+      sliceSummary: {
+        merged: slice.filter((l) => l.clusterMethod === "spatial_cluster").length,
+        single: slice.filter(
+          (l) => l.clusterMethod === "single" && l.sourceNodeMappings[0].mergeDecision === "protected_single"
+        ).length,
+        exceptionReview: slice.filter((l) => l.sourceNodeMappings[0].mergeDecision === "exception_review").length,
+      },
     });
   } catch (err) {
     return NextResponse.json(
