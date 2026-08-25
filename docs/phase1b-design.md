@@ -89,11 +89,20 @@ CREATE INDEX idx_logical_nodes_dataset ON logical_nodes (dataset_version_id);
 
 -- Herleidbare koppeling: welke source_nodes vormen samen welke logical_node.
 -- Blijft ALTIJD bewaard, ook na activatie — nooit overschreven of samengevoegd weggegooid.
+-- merge_decision legt vast WAAROM elk source_node wel/niet is samengevoegd (GPT-review
+-- 25-8-2026) — de 4% uitzonderingen bij soort_knooppunt mogen niet worden weggepoetst,
+-- ze moeten zichtbaar en doorzoekbaar blijven, niet stilzwijgend in een aanname verdwijnen.
 CREATE TABLE logical_node_sources (
     logical_node_id BIGINT NOT NULL REFERENCES logical_nodes(id),
     source_node_id  BIGINT NOT NULL REFERENCES source_nodes(id),
+    merge_decision  TEXT NOT NULL,  -- 'merged' | 'protected_single' | 'rejected_distance'
+                                     -- | 'rejected_topology' | 'exception_review'
     PRIMARY KEY (logical_node_id, source_node_id)
 );
+
+-- Elk source_node krijgt een rij, ook als het NIET wordt samengevoegd (protected_single):
+-- dan wijst het naar zijn eigen, unieke logical_node. Zo blijft ieder source_node
+-- traceerbaar, conform het herleidbaarheidsprincipe — geen source_node zonder mapping.
 
 -- Edges: verbindingen tussen knooppunten
 CREATE TABLE edges (
@@ -205,6 +214,13 @@ Voor elke edge:
 1. Bepaal het eerste punt (`ST_StartPoint`) en laatste punt (`ST_EndPoint`) van de lijngeometrie.
 2. Zoek voor elk eindpunt de dichtstbijzijnde node binnen een tolerantie, met PostGIS `ST_DWithin` + `ORDER BY geom <-> point LIMIT 1` (index-versneld via de GIST-index).
 3. **Matchtolerantie: 5 meter (empirisch bevestigd, 25-8-2026).** Steekproef van 449 nodes / 917 edges (bbox rond Utrecht/Gooi en Vechtstreek) toont: mediaan afstand tot dichtstbijzijnde node is **0,00 meter** (veel exacte coördinaat-matches), 77,7% matcht al binnen 2m, en oprekken tot 50m voegt slechts 1 procentpunt toe (78,8%). Een ruimere tolerantie dan ~5m levert dus geen echte winst en vergroot alleen het risico op foutieve matches. **Definitieve waarde: 5 meter.**
+
+**BELANGRIJK — twee aparte constanten, nooit samenvoegen tot één `distance_threshold` (GPT-review 25-8-2026):** matchtolerantie (node↔edge-eindpunt matching) en de composite-node-clusteringdrempel (sectie 6) zijn twee verschillende geometrische problemen met verschillende waarden. Bij implementatie expliciet als aparte, apart genoemde constanten definiëren:
+```
+NODE_EDGE_MATCH_TOLERANCE_M = 5    // sectie 3: welke node hoort bij welk edge-eindpunt
+COMPOSITE_CLUSTER_THRESHOLD_M = 50 // sectie 6: welke source_nodes vormen samen één logical_node
+```
+Een generieke `DISTANCE_THRESHOLD`-variabele die voor beide wordt (her)gebruikt is een designfout die tot subtiele bugs leidt zodra één van de twee waarden ooit wordt bijgesteld.
 
 4. **~21% van de edge-eindpunten blijft structureel unmatched, ook bij grote tolerantie — dit is verwacht gedrag, geen bug.** Waarschijnlijke oorzaak: de `_vrij`-lagen voor nodes en edges zijn per regio onafhankelijk vrijgegeven. Een edge kan "vrij" zijn terwijl het knooppunt waarop hij aansluit in een aangrenzende, niet-vrijgegeven regio ligt en dus alleen in de ontoegankelijke volledige laag bestaat. Dit is een karakteristiek van de toegestane dataset, geen matchingfout — de importer moet deze edges gewoon opslaan met `match_confidence = 'unmatched_start'/'unmatched_end'`, niet proberen te forceren.
 4. Sla het resultaat op: beide kanten gematcht → `match_confidence = 'matched'`; anders het toepasselijke label.
@@ -420,6 +436,32 @@ Phase 1B/1C blijft exact wat het Master Context voorschrijft: `DATA → NORMALIZ
 ---
 
 ## STATUS: GOEDGEKEURD ALS PHASE 1B
+
+---
+
+## PRE-FLIGHT CHECKLIST — VÓÓR DE EERSTE ECHTE IMPORT (GPT GO/NO-GO-REVIEW, 25-8-2026)
+
+Geen nieuwe onderzoeksfase — een korte controle op de importer-implementatie zelf, vóór productiegebruik.
+
+1. **Idempotentie.** Dezelfde brondata twee keer importeren mag geen dubbele nodes/edges opleveren. Elke import krijgt een nieuwe `dataset_version_id`; binnen één import mogen `source_objectid`-waarden niet dubbel verwerkt worden.
+
+2. **Brondata blijft immutable.** `source_nodes`/edges-brondata is een exacte, ongewijzigde kopie van wat Routedatabank levert. Normalisatie (clustering, directionality-interpretatie) maakt altijd nieuwe, afgeleide records — nooit bronvelden overschrijven.
+
+3. **Composite merge is volledig reproduceerbaar.** Dezelfde input + dezelfde regels = exact dezelfde `logical_node_id`/mapping. ID-generatie moet deterministisch vastliggen (bijv. gebaseerd op een stabiele volgorde/hash van de samenstellende `source_objectid`'s) — geen willekeurige UUID als een herhaalde import identieke IDs moet opleveren.
+
+4. **`logical_node_sources` is compleet.** Iedere `logical_node` moet terug te voeren zijn naar één of meer `source_nodes`. Ook `source_nodes` die uiteindelijk NIET worden samengevoegd (`protected_single`) krijgen een rij en blijven traceerbaar — nooit een source_node zonder mapping.
+
+5. **Edge-endpoints mogen niet stilzwijgend verdwijnen.** Iedere geïmporteerde edge moet na normalisatie naar geldige `logical_nodes` verwijzen óf expliciet `match_confidence = 'unmatched_...'` krijgen. Geen stille drops — zie sectie 3.
+
+6. **Rijrichting blijft onzeker, en dat is correct zo.** Raw `0`/`1`/`2` bewaren in `rijrichting`; `directionality = 'unknown'`; routing-policy mag dit voorlopig als `bidirectional` behandelen. **Geen `rijrichting=2`-filter** — beide geteste hypotheses zijn verworpen (sectie 4), een filter zou een niet-onderbouwde aanname in productiecode vastleggen.
+
+7. **Atomische datasetactivatie.** Volgorde: import → validate → graph genereren → connectivity tests (sectie 7) → pas dán `active_dataset` bijwerken. Bij één kritieke fout in een van de tussenstappen blijft de vorige `active` dataset gewoon actief — nooit een halfslachtige of ongevalideerde dataset live zetten.
+
+**Twee losse implementatiepunten uit dezelfde review, al verwerkt in het schema hierboven:**
+- Matchtolerantie (5m) en composite-clustering-drempel (50m) zijn twee aparte constanten (zie sectie 3) — nooit één generieke `distance_threshold`.
+- `merge_decision` op `logical_node_sources` (zie sectie 3) houdt de 4% uitzonderingen bij `soort_knooppunt` zichtbaar en doorzoekbaar, in plaats van ze weg te poetsen.
+
+**GO/NO-GO: GO.** De Phase 1B/1C-basis is empirisch onderbouwd en architectonisch getoetst. Geen verder onderzoek nodig vóór de bouw van de importer.
 
 ---
 
