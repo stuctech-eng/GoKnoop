@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 /**
  * Admin-importpagina. Draait de import-lus in de browser (niet server-side),
@@ -10,7 +10,12 @@ import { useState, useRef } from "react";
  *
  * Screen Wake Lock: voorkomt dat iOS Safari de pagina op de achtergrond zet
  * (en JS pauzeert) wanneer het scherm zou vergrendelen tijdens een lange import.
+ *
+ * Velden worden bewaard in localStorage (alleen op dit toestel, niet in de
+ * broncode) zodat een herlading niet steeds opnieuw invullen vereist.
  */
+
+const STORAGE_KEY = "goknoop-import-admin";
 
 type ImportKind = "nodes" | "edges";
 type RunningKind = ImportKind | "cluster";
@@ -26,6 +31,31 @@ export default function ImportAdminPage() {
   const [progress, setProgress] = useState<Record<ImportKind, number>>({ nodes: 0, edges: 0 });
   const stopRef = useRef(false);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
+
+  // Bij het laden: eerder opgeslagen waarden terugzetten (alleen dit toestel).
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.debugKey) setDebugKey(parsed.debugKey);
+        if (parsed.datasetVersionId) setDatasetVersionId(parsed.datasetVersionId);
+        if (parsed.pageSize) setPageSize(parsed.pageSize);
+        if (parsed.progress) setProgress(parsed.progress);
+      }
+    } catch {
+      // localStorage niet beschikbaar of corrupte data — gewoon leeg beginnen.
+    }
+  }, []);
+
+  // Bij elke wijziging: opslaan.
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ debugKey, datasetVersionId, pageSize, progress }));
+    } catch {
+      // storage vol of niet beschikbaar — negeren, niet kritiek.
+    }
+  }, [debugKey, datasetVersionId, pageSize, progress]);
 
   function log(text: string, isError = false) {
     setLogs((prev) => [...prev, { time: new Date().toLocaleTimeString("nl-NL"), text, isError }]);
