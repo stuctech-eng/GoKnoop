@@ -164,6 +164,10 @@ Match rate:                  3,5%
 
 **Nog openstaand:** welke exacte waarde (`0`, `1`, `2`) met welke fysieke betekenis overeenkomt, is nog niet vastgesteld. Voorlopig advies: **niet raden.** Bij Phase 1C-implementatie: sla `rijrichting` op zoals het binnenkomt, laat `directionality` op `bidirectional` (veiligste default) staan totdat de exacte codering is bevestigd — een edge onterecht als eenrichtingsverkeer behandelen is voor een route-engine schadelijker dan een edge onterecht als tweerichtingsverkeer behandelen.
 
+**Tweede hypothese getest en verworpen (25-8-2026): parallelle-baan-theorie.** Getest of `rijrichting=1`/`2`-edges vaker een nabije, gelijkgerichte (niet-omgekeerde) tweelingedge hebben dan `rijrichting=0` — wat zou wijzen op gescheiden lijnstukken per richting (bijv. een dijk met een baan per richting) in plaats van een simpele eenrichtingsbeperking. Resultaat: `0`: 0,0% (0/484), `1`: 2,5% (2/79), `2`: 0,0% (0/37) — geen enkel bruikbaar signaal.
+
+**Conclusie: rijrichting-onderzoek gepauzeerd, niet opgelost.** Twee redelijke geometrische hypotheses (duplicaat-omkering, parallelle baan) zijn getest en beide verworpen, zonder verdere aanknopingspunten in de beschikbare data of documentatie (Jon Rietman kon dit zelf niet toelichten). Verder gokken zonder nieuwe informatiebron levert waarschijnlijk niets op. De veilige default (`unknown`/`bidirectional`) blokkeert de importer niet — dit onderzoek kan later hervat worden als een nieuwe informatiebron beschikbaar komt (bijv. een reactie van Routedatabank, of een vergelijkbaar project dat de codering al heeft ontrafeld).
+
 - Als `rijrichting` een eenrichtingsbeperking aangeeft (bijv. `0` = beide richtingen, `1` = alleen in de richting van de lijngeometrie, of een vergelijkbare codering), dan is een edge **niet automatisch symmetrisch** (`24 ↔ 31`), maar kan die directioneel zijn (`24 → 31`).
 - Voor de route-engine is dit essentieel: een gegenereerde route die een eenrichtingspad tegen de richting in gebruikt, is voor een fietser ongeldig of zelfs verboden.
 
@@ -253,6 +257,26 @@ Voor elke edge:
 **Sleutelbevinding:** in alle 4 gevallen voorspelt `soort_knooppunt` correct of samenvoegen terecht is. Cluster 3 (de enige die niet samengevoegd moet worden) is ook de enige waar **beide** punten "Enkelvoudig" zijn — de bron markeert dit dus zelf al als twee volwaardige, aparte knooppunten. Clusters 1, 2 en 4 bevatten allemaal minstens één "Samengesteld"-punt.
 
 **Wat dit wél en niet bewijst:** dit zijn 4 voorbeelden, geen dekkend bewijs voor alle 13.152 nodes. Vóór dit als harde productieregel wordt gebruikt, moet eerst empirisch worden vastgesteld hoe vaak een cluster van **uitsluitend "Enkelvoudig"-punten** toch een geldige merge-kandidaat blijkt (`enkelvoudig_only`-telling over de volledige dataset). Bij 0 of alleen evidente uitzonderingen: sterk bewijs voor een harde regel. Bij een substantieel aantal: de regel moet worden bijgesteld.
+
+**Resultaat `enkelvoudig_only`-telling (25-8-2026, 50 clusters totaal bij 50m):** 48 `samengesteld_only` (96%), 0 `mixed`, slechts **2 `enkelvoudig_only`** (4%).
+
+Bij nadere inspectie bleek Cluster 1 uit de handmatige beoordeling hierboven (12,4m, Almere, `45` vs `-`) **ook** `Enkelvoudig`-only te zijn — de eerdere handmatige beoordeling ("samenvoegen") hield hier onvoldoende rekening met het `soort_knooppunt`-veld. Herbeoordeeld:
+- **12,4m, "45" vs "-":** zeer kleine diameter, lege knooppuntnr ("-") suggereert een onvolledig/hulprecord. Waarschijnlijk alsnog een terechte duplicaat, ondanks het "Enkelvoudig"-label — een **grensgeval**, geen duidelijk tegenvoorbeeld tegen de regel.
+- **49,4m, "99" vs "67":** twee expliciet verschillende nummers, grotere afstand — duidelijk twee aparte, terecht beschermde knooppunten.
+
+**Definitieve, genuanceerde regel (4% uitzonderingspercentage rechtvaardigt "standaard beschermd", geen absolute wet):**
+
+```
+soort_knooppunt = Enkelvoudig
+  EN afstand < 20 meter (extreem klein — waarschijnlijk toch echte duplicaat)
+        ↓
+    ALSNOG merge-kandidaat, markeren voor review
+
+soort_knooppunt = Enkelvoudig
+  EN afstand ≥ 20 meter
+        ↓
+    standaard NIET samenvoegen (hoofdregel, ~96% correct volgens steekproef)
+```
 
 **Herziene merge-regel — `soort_knooppunt` is het primaire semantische signaal, geen absolute regel:**
 
@@ -384,9 +408,9 @@ Phase 1C bouwt niet direct de volledige importer. Eerst worden de openstaande on
         ↓
 8. Handmatige inspectie grensgevallen ✅ afgerond — 4 clusters bij 50m geïnspecteerd, soort_knooppunt blijkt sterke voorspeller
         ↓
-9. Enkelvoudig-only classificatie op volledige dataset  🔜 volgende stap — bewijst of de regel hard mag worden
+9. Enkelvoudig-only classificatie op volledige dataset  ✅ afgerond — 4% uitzonderingspercentage, regel bevestigd als "standaard beschermd" met 20m-uitzondering
         ↓
-10. Rijrichting semantiek-analyse      🔜 — lengte/regio-correlatie (deels gedaan), infrastructuurtype indien mogelijk
+10. Rijrichting semantiek-analyse      ⏸️ gepauzeerd — 2 hypotheses getest en verworpen, veilige default staat, geen blocker
         ↓
 11. Node ↔ edge volledige steekproef
         ↓
