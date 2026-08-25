@@ -14,7 +14,9 @@
 | Authenticatie (Basic Auth) | ✅ Werkt | Credentials bevestigd correct — server retourneert echte structuur i.p.v. 401 |
 | GetCapabilities | ✅ Werkt | Volledige laagstructuur opgehaald |
 | DescribeFeatureType | ✅ Werkt | Schema van 2 kernlagen opgehaald |
-| GetFeature | ⚠️ Geblokkeerd | Consistent `403 Forbidden — Request forbidden by administrative rules`, ongeacht outputFormat, CRS of count. Vermoedelijke oorzaak: blokkade van cloud-hosting IP-reeksen (Vercel) door Routedatabank's server, specifiek op deze operatie. Ligt bij Routedatabank, niet bij GoKnoop-configuratie. Uitstaand bij Jon Rietman. |
+| GetFeature | ✅ Werkt (op specifieke lagen) | **Doorbraak 25-8-2026:** GetFeature faalde consistent op `fietsknooppunten` en `fietsknooppuntnetwerken` (13 combinaties getest, allemaal 403), maar werkt foutloos op de `_vrij`/`_wgs84`-varianten: `fietsknooppunten_wgs84` en `fietsnetwerken_vrij`. Oorzaak: laag-niveau autorisatie, niet een IP/WAF-blokkade — bevestigd door Jon Rietman. Het account `goknoop` heeft alleen rechten op de "vrije" lagen (data van regio's die expliciet toestemming voor open/publieksgebruik hebben gegeven), niet op de volledige NL-brede lagen die ook niet-vrijgegeven regio's bevatten. |
+
+**Correctie op eerdere conclusie:** de 13 eerdere 403-tests (GET/POST, alle WFS-versies, beide endpoints, met/zonder headers) waren stuk voor stuk correct qua techniek — het probleem zat in de laagkeuze, niet in de requestopbouw. Waardevolle les voor toekomstige debugging: test altijd ook de laagvarianten voordat een blokkade als serverbreed wordt bestempeld.
 
 ---
 
@@ -83,14 +85,13 @@
 
 ## 5. NODE/EDGE-RELATIE — KERNBEVINDING
 
-**`fietsknooppuntnetwerken` bevat geen `from_node`/`to_node`-velden.**
+**`fietsnetwerken_vrij` (de werkende edge-laag) bevat, net als eerder vermoed, geen `from_node`/`to_node`-velden.** Bevestigde velden: `objectid`, `regio`, `rijrichting`, `provincie`, `last_edited_date`, `lokaalid`, `lengte_m`, `shape_length`, `uitlev_akk`, `wkb_geometry` (LineString, EPSG:28992). Let op: dit schema wijkt licht af van het eerder via DescribeFeatureType geziene schema van `fietsknooppuntnetwerken` (dat had `ogc_fid` i.p.v. `lokaalid`) — de `_vrij`-laag is dus niet simpelweg een gefilterde kopie, maar mogelijk een aparte view/tabel.
 
-Er is dus geen directe foreign-key-relatie tussen edges en nodes. De graph kan niet via ID-koppeling worden opgebouwd. De meest waarschijnlijke aanpak is **ruimtelijke matching**: het eindpunt van een edge-lijngeometrie vergelijken met de coördinaten van node-punten (binnen een kleine tolerantie, bijv. enkele meters, i.v.m. afrondingsverschillen).
+Er is dus nog steeds geen directe foreign-key-relatie tussen edges en nodes. De graph moet **ruimtelijk** worden afgeleid: het eindpunt van een edge-lijngeometrie vergelijken met de coördinaten van node-punten (binnen een kleine tolerantie).
 
-**Dit is nog niet bevestigd met echte featuredata** — GetFeature is nog niet beschikbaar geweest. Zodra dat werkt, moet als eerste stap worden geverifieerd:
-1. Komen edge-eindpunten exact (of binnen tolerantie) overeen met node-coördinaten?
-2. Is er een consistente tolerantiewaarde nodig, en zo ja welke?
-3. Zijn er edges zonder matchende node aan een of beide uiteinden (datakwaliteitsprobleem)?
+**Belangrijk voor Phase 1B:** `fietsknooppunten_wgs84` levert coördinaten in EPSG:4326 (lat/lon), terwijl `fietsnetwerken_vrij` coördinaten levert in EPSG:28992 (RD New). Voor ruimtelijke matching moeten beide lagen naar hetzelfde CRS worden geconverteerd — waarschijnlijk RD New (EPSG:28992), aangezien dat de meter-gebaseerde precisie geeft die nodig is voor een matchtolerantie in meters.
+
+Nu GetFeature werkt, kan dit in Phase 1B daadwerkelijk empirisch geverifieerd worden op een steekproef.
 
 ---
 
