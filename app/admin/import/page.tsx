@@ -47,7 +47,30 @@ export default function ImportAdminPage() {
 
       try {
         const res = await fetch(url.toString());
-        const data = await res.json();
+        const rawText = await res.text();
+
+        let data: {
+          error?: string;
+          datasetVersionId?: string;
+          newStartIndex?: number;
+          numberMatched?: number;
+          done?: boolean;
+        };
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          attempt++;
+          log(
+            `Server gaf geen geldige JSON terug (status ${res.status}): ${rawText.slice(0, 200)} (poging ${attempt})`,
+            true
+          );
+          if (attempt >= 5) {
+            log("5 pogingen mislukt op rij, gestopt.", true);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
 
         if (!res.ok) {
           attempt++;
@@ -67,7 +90,7 @@ export default function ImportAdminPage() {
         }
 
         log(
-          `${kind}: ${data.newStartIndex} / ${data.numberMatched} (${((data.newStartIndex / data.numberMatched) * 100).toFixed(1)}%)`
+          `${kind}: ${data.newStartIndex} / ${data.numberMatched} (${(((data.newStartIndex ?? 0) / (data.numberMatched ?? 1)) * 100).toFixed(1)}%)`
         );
 
         if (data.done) {
@@ -75,10 +98,10 @@ export default function ImportAdminPage() {
           break;
         }
 
-        currentStart = data.newStartIndex;
+        currentStart = data.newStartIndex ?? currentStart;
       } catch (err) {
         attempt++;
-        log(`Netwerkfout: ${err instanceof Error ? err.message : String(err)} (poging ${attempt})`, true);
+        log(`Onverwachte fout: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)} (poging ${attempt})`, true);
         if (attempt >= 5) {
           log("5 pogingen mislukt op rij, gestopt.", true);
           break;
