@@ -7,6 +7,9 @@ import { useState, useRef } from "react";
  * zodat elke individuele API-aanroep klein genoeg blijft voor Vercel's
  * functietijdslimiet, terwijl de gebruiker niet handmatig hoeft te klikken
  * per pagina. Alleen voor eigen gebruik — niet gelinkt vanuit de publieke UI.
+ *
+ * Screen Wake Lock: voorkomt dat iOS Safari de pagina op de achtergrond zet
+ * (en JS pauzeert) wanneer het scherm zou vergrendelen tijdens een lange import.
  */
 
 type ImportKind = "nodes" | "edges";
@@ -16,13 +19,38 @@ type LogLine = { time: string; text: string; isError?: boolean };
 export default function ImportAdminPage() {
   const [debugKey, setDebugKey] = useState("");
   const [datasetVersionId, setDatasetVersionId] = useState("");
-  const [pageSize, setPageSize] = useState(100);
+  const [pageSize, setPageSize] = useState(10);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [running, setRunning] = useState<ImportKind | null>(null);
+  const [progress, setProgress] = useState<Record<ImportKind, number>>({ nodes: 0, edges: 0 });
   const stopRef = useRef(false);
+  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
 
   function log(text: string, isError = false) {
     setLogs((prev) => [...prev, { time: new Date().toLocaleTimeString("nl-NL"), text, isError }]);
+  }
+
+  async function acquireWakeLock() {
+    try {
+      if ("wakeLock" in navigator) {
+        wakeLockRef.current = await (navigator as unknown as {
+          wakeLock: { request: (type: "screen") => Promise<WakeLockSentinel> };
+        }).wakeLock.request("screen");
+        log("Scherm-wakelock actief — telefoon vergrendelt niet vanzelf tijdens de import.");
+      } else {
+        log("Wake Lock API niet ondersteund in deze browser — houd het scherm handmatig actief (niet vergrendelen).", true);
+      }
+    } catch (err) {
+      log(
+        `Kon wake lock niet activeren: ${err instanceof Error ? err.message : String(err)} — houd het scherm handmatig actief.`,
+        true
+      );
+    }
+  }
+
+  function releaseWakeLock() {
+    wakeLockRef.current?.release().catch(() => {});
+    wakeLockRef.current = null;
   }
 
   async function runImport(kind: ImportKind, startAt: number) {
@@ -32,6 +60,8 @@ export default function ImportAdminPage() {
     }
     stopRef.current = false;
     setRunning(kind);
+    await acquireWakeLock();
+
     let currentStart = startAt;
     let currentDatasetVersionId = datasetVersionId;
     let attempt = 0;
@@ -65,7 +95,7 @@ export default function ImportAdminPage() {
             true
           );
           if (attempt >= 5) {
-            log("5 pogingen mislukt op rij, gestopt.", true);
+            log("5 pogingen mislukt op rij, gestopt. Tik nogmaals op start om te hervatten vanaf het laatste punt.", true);
             break;
           }
           await new Promise((r) => setTimeout(r, 2000));
@@ -76,7 +106,7 @@ export default function ImportAdminPage() {
           attempt++;
           log(`Fout bij startIndex=${currentStart}: ${data.error || res.status} (poging ${attempt}) — probeer opnieuw...`, true);
           if (attempt >= 5) {
-            log("5 pogingen mislukt op rij, gestopt. Pas evt. de paginagrootte aan en hervat handmatig.", true);
+            log("5 pogingen mislukt op rij, gestopt. Pas evt. de paginagrootte aan en tik nogmaals op start om te hervatten.", true);
             break;
           }
           await new Promise((r) => setTimeout(r, 2000));
@@ -93,6 +123,10 @@ export default function ImportAdminPage() {
           `${kind}: ${data.newStartIndex} / ${data.numberMatched} (${(((data.newStartIndex ?? 0) / (data.numberMatched ?? 1)) * 100).toFixed(1)}%)`
         );
 
+        if (typeof data.newStartIndex === "number") {
+          setProgress((prev) => ({ ...prev, [kind]: data.newStartIndex as number }));
+        }
+
         if (data.done) {
           log(`Klaar — alle ${kind} geïmporteerd.`);
           break;
@@ -103,13 +137,14 @@ export default function ImportAdminPage() {
         attempt++;
         log(`Onverwachte fout: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)} (poging ${attempt})`, true);
         if (attempt >= 5) {
-          log("5 pogingen mislukt op rij, gestopt.", true);
+          log("5 pogingen mislukt op rij, gestopt. Tik nogmaals op start om te hervatten vanaf het laatste punt.", true);
           break;
         }
         await new Promise((r) => setTimeout(r, 2000));
       }
     }
 
+    releaseWakeLock();
     setRunning(null);
   }
 
@@ -155,28 +190,33 @@ export default function ImportAdminPage() {
       <div style={{ marginTop: "1.5rem", display: "flex", gap: 8 }}>
         <button
           disabled={running !== null}
-          onClick={() => runImport("nodes", 0)}
+          onClick={() => runImport("nodes", progress.nodes)}
           style={{ padding: "10px 16px", fontSize: 16 }}
         >
-          Start nodes-import
+          {progress.nodes > 0 ? `Hervat nodes (vanaf ${progress.nodes})` : "Start nodes-import"}
         </button>
         <button
           disabled={running !== null || !datasetVersionId}
-          onClick={() => runImport("edges", 0)}
+          onClick={() => runImport("edges", progress.edges)}
           style={{ padding: "10px 16px", fontSize: 16 }}
         >
-          Start edges-import
+          {progress.edges > 0 ? `Hervat edges (vanaf ${progress.edges})` : "Start edges-import"}
         </button>
         <button
           disabled={running === null}
           onClick={() => {
             stopRef.current = true;
+            releaseWakeLock();
           }}
           style={{ padding: "10px 16px", fontSize: 16 }}
         >
           Stop
         </button>
       </div>
+
+      <p style={{ fontSize: 13, color: "#666", marginTop: 8 }}>
+        Belangrijk: laat het scherm actief (niet vergrendelen, niet van app wisselen) — de wake lock helpt, maar is geen garantie op elk toestel.
+      </p>
 
       <div
         style={{
