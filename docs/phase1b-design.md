@@ -47,16 +47,17 @@ CREATE TABLE dataset_versions (
 );
 
 -- Nodes: knooppunten
--- BELANGRIJK (ontdekt 25-8-2026): knooppuntnr is NIET landelijk uniek — elk regionaal
--- netwerk lijkt onafhankelijk te nummeren, dus "knooppunt 1" komt in meerdere regio's
--- voor als volstrekt verschillende, niet-gerelateerde locaties. De echte identiteit
--- is de combinatie (regio, knooppuntnr), niet knooppuntnr alleen.
+-- BELANGRIJK (ontdekt en verder aangescherpt 25-8-2026): knooppuntnr is NIET landelijk
+-- uniek, en zelfs (regio, knooppuntnr) is dat niet betrouwbaar — grote regio's bevatten
+-- meerdere onafhankelijk genummerde lokale netwerken. number/regio zijn dus uitsluitend
+-- WEERGAVEWAARDEN richting de gebruiker, geen identiteitssleutel. De echte identiteit
+-- van een logische node ontstaat pas na ruimtelijke clustering tijdens import (id hieronder).
 CREATE TABLE nodes (
     id              BIGSERIAL PRIMARY KEY,
     dataset_version_id BIGINT NOT NULL REFERENCES dataset_versions(id),
     source_objectid BIGINT NOT NULL,       -- objectid uit fietsknooppunten_wgs84
-    number          TEXT NOT NULL,          -- knooppuntnr (string, niet int) — NIET uniek op zichzelf
-    regio           TEXT NOT NULL,          -- onderdeel van de logische identiteit samen met number
+    number          TEXT NOT NULL,          -- knooppuntnr — weergavewaarde, GEEN unieke sleutel
+    regio           TEXT NOT NULL,          -- weergavecontext — ook GEEN garantie op unieke identiteit
     provincie       TEXT,
     soort_knooppunt TEXT,
     geom            GEOMETRY(Point, 28992) NOT NULL,  -- opgeslagen in RD New voor matchprecisie
@@ -64,6 +65,7 @@ CREATE TABLE nodes (
 );
 CREATE INDEX idx_nodes_geom ON nodes USING GIST (geom);
 CREATE INDEX idx_nodes_dataset ON nodes (dataset_version_id);
+-- Niet-unieke index, puur voor opzoeken/weergave — nooit gebruiken om identiteit te bepalen:
 CREATE INDEX idx_nodes_regio_number ON nodes (dataset_version_id, regio, number);
 
 -- Edges: verbindingen tussen knooppunten
@@ -173,7 +175,24 @@ Voor elke edge:
 ## 6. DATAKWALITEIT — VERWACHTE AANDACHTSPUNTEN
 
 - **`uitlev_akk`-veld:** bevestigd in de steekproef altijd `"Ja; vrij"` op de geteste records. Toch bij import blijven controleren of dit per record klopt, niet aannemen dat de hele laag uniform is.
-- **`soort_knooppunt` met waarden als "Samengesteld_aan"/"Samengesteld_uit" — bevestigd substantieel (37% van records), maar de eerder gerapporteerde "98 knooppuntnummers met meerdere records" was FOUTIEF gemeten.** Die telling groepeerde alleen op `knooppuntnr`, zonder rekening te houden met het feit dat `knooppuntnr` niet landelijk uniek is (zie hierboven). Een correcte hertelling, gegroepeerd op `(regio, knooppuntnr)`, is nog nodig — de 37% Samengesteld-verdeling zelf blijft wel geldig (dat is direct een veldwaarde, geen afgeleide groepering). **Openstaande actie: composite-node-analyse opnieuw uitvoeren met de gecorrigeerde groepering, inclusief de edge-attachment-test per fysiek punt.**
+- **`soort_knooppunt` met waarden als "Samengesteld_aan"/"Samengesteld_uit" — bevestigd substantieel (37% van records). Merge-strategie definitief herzien op basis van hertest met `(regio, knooppuntnr)`-groepering (25-8-2026).**
+
+  Resultaat van de hertest (30 samples uit 106 `(regio, knooppuntnr)`-groepen met meerdere records): 3 binnen 5-25m, 5 binnen 25-100m, **22 van de 30 nog steeds >100m uit elkaar — tot 25.437 meter, zelfs bínnen dezelfde regio.**
+
+  **Kernbevinding: `regio` is niet fijnmazig genoeg als scope.** Een regio als "Utrecht" blijkt een groot gebied te zijn met meerdere lokale (sub)netwerken die onafhankelijk vanaf 1 nummeren — dus zelfs binnen één regio kunnen twee volstrekt losstaande fysieke knooppunten toevallig hetzelfde nummer delen. Attribuutmatching (`knooppuntnr`, ook met `regio` erbij) is dus **niet betrouwbaar genoeg** om vast te stellen of records daadwerkelijk hetzelfde fysieke knooppunt zijn.
+
+  **Definitieve merge-regel:** samenvoegen gebeurt uitsluitend op basis van **ruimtelijke nabijheid**, niet op attributen. `(regio, knooppuntnr)`-overeenkomst is hooguit een zwak, secundair signaal — geen voorwaarde en geen garantie.
+
+  ```
+  Kandidaat voor samenvoegen tot één logische node:
+    - afstand tussen de punten ≤ 100 meter
+    (regio/knooppuntnr-overeenkomst is informatief, niet doorslaggevend)
+
+  NIET samenvoegen, ondanks gedeeld (regio, knooppuntnr):
+    - afstand > 100 meter → toevallige nummerbotsing, apart behouden
+  ```
+
+  **Gevolg voor identiteit in het datamodel:** `knooppuntnr` (eventueel met `regio`) is bruikbaar als **weergavewaarde** richting de gebruiker, maar NIET als unieke sleutel voor node-identiteit in de database. De echte identiteit van een logische node ontstaat pas na de ruimtelijke clusteringstap tijdens import (een nieuw, intern gegenereerd ID). Twee database-nodes kunnen dus legitiem dezelfde `number`/`regio`-combinatie hebben als ze ruimtelijk ver genoeg uit elkaar liggen — dat is geen datafout, dat moet het datamodel toestaan.
 - **Schema-afwijking tussen `fietsnetwerken_vrij` en het eerder via DescribeFeatureType geziene `fietsknooppuntnetwerken`:** de `_vrij`-laag heeft `lokaalid` in plaats van `ogc_fid`. Importer moet robuust zijn tegen dit soort kleine schemaverschillen tussen laagvarianten.
 - **Limburg-uitzondering:** nog niet expliciet zichtbaar in `regio`/`provincie`-waarden uit de steekproef (die toonde alleen Utrecht/Gooi en Vechtstreek). Bij volledige import controleren of Limburgse regio's al server-side ontbreken, of dat er alsnog een filter nodig is.
 
