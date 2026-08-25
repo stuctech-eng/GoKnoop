@@ -47,12 +47,16 @@ CREATE TABLE dataset_versions (
 );
 
 -- Nodes: knooppunten
+-- BELANGRIJK (ontdekt 25-8-2026): knooppuntnr is NIET landelijk uniek — elk regionaal
+-- netwerk lijkt onafhankelijk te nummeren, dus "knooppunt 1" komt in meerdere regio's
+-- voor als volstrekt verschillende, niet-gerelateerde locaties. De echte identiteit
+-- is de combinatie (regio, knooppuntnr), niet knooppuntnr alleen.
 CREATE TABLE nodes (
     id              BIGSERIAL PRIMARY KEY,
     dataset_version_id BIGINT NOT NULL REFERENCES dataset_versions(id),
     source_objectid BIGINT NOT NULL,       -- objectid uit fietsknooppunten_wgs84
-    number          TEXT NOT NULL,          -- knooppuntnr (string, niet int)
-    regio           TEXT,
+    number          TEXT NOT NULL,          -- knooppuntnr (string, niet int) — NIET uniek op zichzelf
+    regio           TEXT NOT NULL,          -- onderdeel van de logische identiteit samen met number
     provincie       TEXT,
     soort_knooppunt TEXT,
     geom            GEOMETRY(Point, 28992) NOT NULL,  -- opgeslagen in RD New voor matchprecisie
@@ -60,7 +64,7 @@ CREATE TABLE nodes (
 );
 CREATE INDEX idx_nodes_geom ON nodes USING GIST (geom);
 CREATE INDEX idx_nodes_dataset ON nodes (dataset_version_id);
-CREATE INDEX idx_nodes_number ON nodes (dataset_version_id, number);
+CREATE INDEX idx_nodes_regio_number ON nodes (dataset_version_id, regio, number);
 
 -- Edges: verbindingen tussen knooppunten
 CREATE TABLE edges (
@@ -169,7 +173,7 @@ Voor elke edge:
 ## 6. DATAKWALITEIT — VERWACHTE AANDACHTSPUNTEN
 
 - **`uitlev_akk`-veld:** bevestigd in de steekproef altijd `"Ja; vrij"` op de geteste records. Toch bij import blijven controleren of dit per record klopt, niet aannemen dat de hele laag uniform is.
-- **`soort_knooppunt` met waarden als "Samengesteld_aan"/"Samengesteld_uit" — BEVESTIGD SUBSTANTIEEL, geen randgeval.** Empirische steekproef (449 nodes): 165 van de 449 records (37%) zijn "Samengesteld" (aan of uit), en 98 unieke knooppuntnummers hebben meerdere records — tot 8 records onder één nummer (bijv. nr. "10"). De hypothese dat één logisch knooppunt uit meerdere fysieke puntrecords kan bestaan is dus bevestigd én het komt vaak genoeg voor dat de importer dit expliciet moet afhandelen (samenvoegen tot één logische node), niet als uitzondering behandelen.
+- **`soort_knooppunt` met waarden als "Samengesteld_aan"/"Samengesteld_uit" — bevestigd substantieel (37% van records), maar de eerder gerapporteerde "98 knooppuntnummers met meerdere records" was FOUTIEF gemeten.** Die telling groepeerde alleen op `knooppuntnr`, zonder rekening te houden met het feit dat `knooppuntnr` niet landelijk uniek is (zie hierboven). Een correcte hertelling, gegroepeerd op `(regio, knooppuntnr)`, is nog nodig — de 37% Samengesteld-verdeling zelf blijft wel geldig (dat is direct een veldwaarde, geen afgeleide groepering). **Openstaande actie: composite-node-analyse opnieuw uitvoeren met de gecorrigeerde groepering, inclusief de edge-attachment-test per fysiek punt.**
 - **Schema-afwijking tussen `fietsnetwerken_vrij` en het eerder via DescribeFeatureType geziene `fietsknooppuntnetwerken`:** de `_vrij`-laag heeft `lokaalid` in plaats van `ogc_fid`. Importer moet robuust zijn tegen dit soort kleine schemaverschillen tussen laagvarianten.
 - **Limburg-uitzondering:** nog niet expliciet zichtbaar in `regio`/`provincie`-waarden uit de steekproef (die toonde alleen Utrecht/Gooi en Vechtstreek). Bij volledige import controleren of Limburgse regio's al server-side ontbreken, of dat er alsnog een filter nodig is.
 
