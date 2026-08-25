@@ -119,22 +119,22 @@ Concreet betekent dit voor het datamodel: **de brontabel bewaart `rijrichting` (
 -- directionality         TEXT   -- staat er al: afgeleide waarde, NOOIT rechtstreeks 1-op-1 kopie van rijrichting
 ```
 
-**Empirische validatietest: "Direction Semantics Validation" (verplichte Phase 1C-stap, vóór productiegebruik van de interpretatie).**
+**Resultaat empirische validatietest (25-8-2026, steekproef 917 edges, 86 met `rijrichting=2`):**
 
-Hypothese (gebaseerd op een Fietsplatform-FAQ over een mogelijk verwante laag): `rijrichting=2` markeert een duplicaat-edge die de omgekeerde richting van een reeds bestaande edge vertegenwoordigt.
+```
+rijrichting=2 edges:          86
+Matched reverse counterpart:   3
+No counterpart:               83
+Match rate:                  3,5%
+```
 
-Test per `rijrichting=2`-edge:
-1. Zoek een andere edge met (vrijwel) dezelfde geometrie.
-2. Controleer of die geometrie exact/near-exact in omgekeerde volgorde loopt.
-3. Vergelijk start- en eindknoop van beide edges.
-4. Controleer of de tegenhanger `rijrichting=0` of `rijrichting=1` heeft.
-5. Vergelijk overige attributen (regio, lengte) tussen het paar.
-6. Bereken het percentage `rijrichting=2`-edges waarvoor zo'n tegenhanger bestaat.
-7. Rapporteer uitzonderingen expliciet, niet stilzwijgend negeren.
+**Hypothese verworpen.** Ver onder de 50%-drempel — `rijrichting=2` is in deze laag geen duplicaat-marker.
 
-**Beslisregel:** een match rate rond de 90%+ is sterke empirische ondersteuning voor de hypothese en rechtvaardigt het vastleggen van de interpretatie in de normalisatielaag. Een lage match rate (bijv. <50%) betekent dat de hypothese voor déze specifieke laag waarschijnlijk niet opgaat, en dat een andere verklaring voor `rijrichting=2` gezocht moet worden — eventueel alsnog via Jon of Routedatabank, als laatste redmiddel.
+**Herziene, beter onderbouwde verklaring:** Fietsplatform's officiële FAQ maakt onderscheid tussen twee datasets: de "hartlijnen" RD-dataset (kleine lijnstukjes, beleidsdoeleinden, wél in twee richtingen gedigitaliseerd — daar geldt de filter-regel) en de "geaggregeerde" consumenten-dataset (knooppunt-tot-knooppunt, expliciet omschreven als *"worden altijd in één richting aangeboden"*). Onze `fietsnetwerken_vrij`-laag is qua structuur (lange, geaggregeerde lijnen) de laatste categorie — en die kent per definitie geen duplicaten. Dat verklaart de lage match rate.
 
-**Tot deze test is uitgevoerd en het resultaat is vastgelegd, wordt `rijrichting=2` NIET blind gefilterd of anders behandeld dan de andere waarden in enige productiecode.**
+**Werktheorie (nog niet 100% bevestigd, wel de best onderbouwde):** `rijrichting` codeert waarschijnlijk een **echte fysieke rijrichtingsbeperking** op het traject zelf (bijv. eenrichtingsfietspad, jaagpad, natuurgebied-beperking) — niet een data-artefact. Dat betekent `directionality` inderdaad relevant is voor de route-engine, en niet simpelweg genegeerd kan worden.
+
+**Nog openstaand:** welke exacte waarde (`0`, `1`, `2`) met welke fysieke betekenis overeenkomt, is nog niet vastgesteld. Voorlopig advies: **niet raden.** Bij Phase 1C-implementatie: sla `rijrichting` op zoals het binnenkomt, laat `directionality` op `bidirectional` (veiligste default) staan totdat de exacte codering is bevestigd — een edge onterecht als eenrichtingsverkeer behandelen is voor een route-engine schadelijker dan een edge onterecht als tweerichtingsverkeer behandelen.
 
 - Als `rijrichting` een eenrichtingsbeperking aangeeft (bijv. `0` = beide richtingen, `1` = alleen in de richting van de lijngeometrie, of een vergelijkbare codering), dan is een edge **niet automatisch symmetrisch** (`24 ↔ 31`), maar kan die directioneel zijn (`24 → 31`).
 - Voor de route-engine is dit essentieel: een gegenereerde route die een eenrichtingspad tegen de richting in gebruikt, is voor een fietser ongeldig of zelfs verboden.
