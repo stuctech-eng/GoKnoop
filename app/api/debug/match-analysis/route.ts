@@ -582,6 +582,88 @@ function runSemanticMergeAnalysis(nodes: Node[], edges: EdgeFull[], thresholdM: 
   };
 }
 
+// ---- Test 7: rijrichting semantiek — parallelle-edge-detectie ----
+// Test niet "omgekeerde duplicaat" (dat is al verworpen), maar: heeft een
+// 1/2-edge vaak een NABIJE, GELIJKGERICHTE (niet omgekeerde) tweelingedge?
+// Dat zou duiden op een gescheiden pad per rijrichting (twee aparte lijnstukken
+// voor bijv. een dijk met een baan per richting), in plaats van een simpele
+// eenrichtingsbeperking op één gedeeld pad.
+
+function resample(coords: [number, number][], n: number): [number, number][] {
+  if (coords.length === 1) return Array(n).fill(coords[0]);
+  // Cumulatieve lengte langs de lijn, dan n punten op gelijke afstand interpoleren.
+  const cum: number[] = [0];
+  for (let i = 1; i < coords.length; i++) {
+    cum.push(cum[i - 1] + dist(coords[i - 1], coords[i]));
+  }
+  const total = cum[cum.length - 1] || 1;
+  const out: [number, number][] = [];
+  for (let k = 0; k < n; k++) {
+    const target = (k / (n - 1)) * total;
+    let idx = cum.findIndex((c) => c >= target);
+    if (idx <= 0) idx = 1;
+    const segStart = cum[idx - 1];
+    const segEnd = cum[idx];
+    const t = segEnd > segStart ? (target - segStart) / (segEnd - segStart) : 0;
+    const p0 = coords[idx - 1];
+    const p1 = coords[idx];
+    out.push([p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t]);
+  }
+  return out;
+}
+
+function avgPointwiseDistance(a: [number, number][], b: [number, number][]): number {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += dist(a[i], b[i]);
+  return sum / a.length;
+}
+
+function runParallelEdgeAnalysis(edges: EdgeFull[]) {
+  const MAX_EDGES_FOR_QUADRATIC_TEST = 600;
+  const truncated = edges.length > MAX_EDGES_FOR_QUADRATIC_TEST;
+  const workingSet = truncated ? edges.slice(0, MAX_EDGES_FOR_QUADRATIC_TEST) : edges;
+
+  const RESAMPLE_N = 8;
+  const PARALLEL_TOLERANCE_M = 15;
+  const resampled = workingSet.map((e) => resample(e.coords, RESAMPLE_N));
+
+  function hasParallelTwin(i: number): boolean {
+    const a = resampled[i];
+    const aRev = [...a].reverse();
+    for (let j = 0; j < workingSet.length; j++) {
+      if (j === i) continue;
+      const b = resampled[j];
+      const forwardDist = avgPointwiseDistance(a, b);
+      const reverseDist = avgPointwiseDistance(aRev, b);
+      if (forwardDist < PARALLEL_TOLERANCE_M && reverseDist > PARALLEL_TOLERANCE_M) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const byRijrichting: Record<string, { total: number; withTwin: number }> = {};
+  for (let i = 0; i < workingSet.length; i++) {
+    const rr = workingSet[i].rijrichting;
+    byRijrichting[rr] ||= { total: 0, withTwin: 0 };
+    byRijrichting[rr].total++;
+    if (hasParallelTwin(i)) byRijrichting[rr].withTwin++;
+  }
+
+  const summary: Record<string, string> = {};
+  for (const [rr, stats] of Object.entries(byRijrichting)) {
+    summary[rr] = `${stats.withTwin}/${stats.total} (${((stats.withTwin / stats.total) * 100).toFixed(1)}%)`;
+  }
+
+  return {
+    note:
+      "Percentage edges per rijrichting-waarde met een nabije, gelijkgerichte (niet-omgekeerde) tweelingedge binnen 15m. Als rijrichting=1/2 systematisch vaker een tweeling heeft dan rijrichting=0, wijst dat op gescheiden banen per richting i.p.v. een simpele eenrichtingsbeperking op een gedeeld pad.",
+    truncatedForPerformance: truncated,
+    edgesAnalyzed: workingSet.length,
+    parallelTwinPercentageByRijrichting: summary,
+  };
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -659,6 +741,9 @@ export async function GET(req: NextRequest) {
     if (requestedTests.includes("semanticMerge")) {
       const semanticThreshold = parseInt(req.nextUrl.searchParams.get("conflictThreshold") || "50", 10);
       result.semanticMergeAnalysis = runSemanticMergeAnalysis(nodes, edges, semanticThreshold);
+    }
+    if (requestedTests.includes("parallelEdge")) {
+      result.parallelEdgeAnalysis = runParallelEdgeAnalysis(edges);
     }
 
     return NextResponse.json(result);
