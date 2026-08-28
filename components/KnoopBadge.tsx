@@ -21,7 +21,7 @@ export function KnoopBadge({
         background: outline ? "transparent" : "var(--color-knoop-green)",
         border: `3px solid ${selected ? "var(--color-canal-blue)" : "var(--color-knoop-green)"}`,
         color: outline ? "var(--color-knoop-green)" : "var(--color-white)",
-        fontFamily: "var(--font-display)",
+        fontFamily: "var(--font-display), -apple-system, sans-serif",
         fontWeight: 700,
         fontSize: size * 0.36,
         lineHeight: 1,

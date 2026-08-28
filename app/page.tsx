@@ -344,7 +344,7 @@ export default function Home() {
                 >
                   <RoutePreview geometry={loop.route.geometry} height={140} startLabel={startLocation?.displayNumber} />
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
-                    <span style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 700 }}>
+                    <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 28, fontWeight: 700 }}>
                       ~{formatKm(loop.actualDistanceM)} km
                     </span>
                     <span style={{ fontSize: 13, opacity: 0.6 }}>{loop.route.nodes.length} knooppunten</span>
@@ -367,7 +367,7 @@ export default function Home() {
             <RoutePreview geometry={selectedLoop.route.geometry} height={220} startLabel={startLocation?.displayNumber} />
 
             <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "1.25rem 0" }}>
-              <span style={{ fontFamily: "var(--font-display)", fontSize: 40, fontWeight: 700 }}>
+              <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 40, fontWeight: 700 }}>
                 {formatKm(selectedLoop.actualDistanceM)} km
               </span>
               <span style={{ fontSize: 14, opacity: 0.6 }}>({selectedLoop.route.nodes.length} knooppunten)</span>

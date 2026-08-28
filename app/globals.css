@@ -9,8 +9,11 @@
   --color-rust: #b4482a; /* uitsluitend voor foutmeldingen */
   --color-white: #ffffff;
 
-  --font-display: var(--font-display), sans-serif;
-  --font-body: var(--font-body), sans-serif;
+  /* --font-display en --font-body worden door next/font gezet via de
+     className op <html> in layout.tsx -- NIET hier opnieuw definiëren,
+     dat gaf eerder een circulaire referentie (var(--font-display) binnen
+     de definitie van --font-display zelf), waardoor de browser terugviel
+     op het standaard schreef-lettertype. */
 
   --radius-badge: 999px;
   --radius-card: 20px;
@@ -29,7 +32,7 @@ body {
   padding: 0;
   background: var(--color-paper);
   color: var(--color-ink);
-  font-family: var(--font-body);
+  font-family: var(--font-body), -apple-system, sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -42,14 +45,14 @@ body {
 h1,
 h2,
 h3 {
-  font-family: var(--font-display);
+  font-family: var(--font-display), -apple-system, sans-serif;
   font-weight: 700;
   letter-spacing: -0.01em;
   margin: 0;
 }
 
 button {
-  font-family: var(--font-body);
+  font-family: var(--font-body), -apple-system, sans-serif;
   cursor: pointer;
 }
 
