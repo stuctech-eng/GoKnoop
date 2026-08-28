@@ -203,12 +203,19 @@ export async function GET(req: NextRequest) {
       for (let i = 0; i < matchResults.length; i += CACHE_CHUNK_SIZE) {
         chunks.push(matchResults.slice(i, i + CACHE_CHUNK_SIZE));
       }
-      const cacheBatch = db.batch();
-      chunks.forEach((chunk, i) => {
-        const ref = db.collection("edgeMatchCache").doc(`${datasetVersionId}_chunk${i}`);
-        cacheBatch.set(ref, { datasetVersionId, chunkIndex: i, items: chunk });
-      });
-      await cacheBatch.commit();
+      // Cache-documenten in kleine groepjes committen (niet alles in één batch —
+      // dat overschrijdt Firestore's ~10MB request-payload-limiet bij grote datasets).
+      const CHUNKS_PER_COMMIT = 5;
+      for (let i = 0; i < chunks.length; i += CHUNKS_PER_COMMIT) {
+        const commitGroup = chunks.slice(i, i + CHUNKS_PER_COMMIT);
+        const cacheBatch = db.batch();
+        commitGroup.forEach((chunk, j) => {
+          const chunkIndex = i + j;
+          const ref = db.collection("edgeMatchCache").doc(`${datasetVersionId}_chunk${chunkIndex}`);
+          cacheBatch.set(ref, { datasetVersionId, chunkIndex, items: chunk });
+        });
+        await cacheBatch.commit();
+      }
       await cacheMetaRef.set({
         datasetVersionId,
         totalItems: matchResults.length,
