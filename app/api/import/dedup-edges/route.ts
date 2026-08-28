@@ -37,8 +37,15 @@ export async function GET(req: NextRequest) {
     const snapshot = await db.collection("edges").where("datasetVersionId", "==", datasetVersionId).get();
 
     const bySourceObjectId: Record<string, { id: string }[]> = {};
+    let emptySourceObjectIdCount = 0;
     snapshot.docs.forEach((doc) => {
       const sourceObjectId = doc.data().sourceObjectId as string;
+      if (!sourceObjectId || sourceObjectId.trim() === "") {
+        // Nooit als duplicaat behandelen — een lege/ontbrekende sourceObjectId
+        // betekent niet dat meerdere van zulke edges dezelfde bron zijn.
+        emptySourceObjectIdCount++;
+        return;
+      }
       (bySourceObjectId[sourceObjectId] ||= []).push({ id: doc.id });
     });
 
@@ -77,6 +84,7 @@ export async function GET(req: NextRequest) {
       datasetVersionId,
       dryRun,
       totalEdgeDocs: snapshot.size,
+      emptySourceObjectIdCount,
       uniqueSourceObjectIds: Object.keys(bySourceObjectId).length,
       duplicateGroups,
       documentsToDelete: toDelete.length,
