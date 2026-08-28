@@ -309,6 +309,85 @@ export default function ImportAdminPage() {
     setRunning(null);
   }
 
+  async function runWipeMatching() {
+    if (!debugKey || !datasetVersionId) {
+      log("Geef eerst de sleutel en datasetVersionId op.", true);
+      return;
+    }
+    stopRef.current = false;
+    setRunning("cluster");
+    await acquireWakeLock();
+
+    let offset = 0;
+    let attempt = 0;
+
+    while (!stopRef.current) {
+      const url = new URL("/api/import/wipe-matching", window.location.origin);
+      url.searchParams.set("key", debugKey);
+      url.searchParams.set("datasetVersionId", datasetVersionId);
+      url.searchParams.set("step", "edges");
+      url.searchParams.set("offset", String(offset));
+      url.searchParams.set("dryRun", "0");
+
+      try {
+        const res = await fetch(url.toString());
+        const rawText = await res.text();
+        let data: { error?: string; details?: string; newOffset?: number; total?: number; done?: boolean };
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          attempt++;
+          log(`Geen geldige JSON (status ${res.status}): ${rawText.slice(0, 200)} (poging ${attempt})`, true);
+          if (attempt >= 10) {
+            log("Gestopt na 10 mislukte pogingen.", true);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        if (!res.ok) {
+          attempt++;
+          log(`Fout: ${[data.error, data.details].filter(Boolean).join(" — ")} (poging ${attempt})`, true);
+          if (attempt >= 10) {
+            log("Gestopt na 10 mislukte pogingen.", true);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+
+        attempt = 0;
+        log(`reset edges: ${data.newOffset} / ${data.total}`);
+
+        if (data.done) {
+          log("Edges gereset — nu cache opruimen...");
+          const cacheUrl = new URL("/api/import/wipe-matching", window.location.origin);
+          cacheUrl.searchParams.set("key", debugKey);
+          cacheUrl.searchParams.set("datasetVersionId", datasetVersionId);
+          cacheUrl.searchParams.set("step", "cache");
+          cacheUrl.searchParams.set("dryRun", "0");
+          const cacheRes = await fetch(cacheUrl.toString());
+          const cacheData = await cacheRes.json();
+          log(`Klaar — cache opgeruimd (${cacheData.cacheChunksFound} chunks verwijderd).`);
+          break;
+        }
+        offset = data.newOffset ?? offset;
+        await new Promise((r) => setTimeout(r, 200));
+      } catch (err) {
+        attempt++;
+        log(`Onverwachte fout: ${err instanceof Error ? err.message : String(err)} (poging ${attempt})`, true);
+        if (attempt >= 10) {
+          log("Gestopt na 10 mislukte pogingen.", true);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+
+    releaseWakeLock();
+    setRunning(null);
+  }
+
   async function runMatchEdges() {
     if (!debugKey || !datasetVersionId) {
       log("Geef eerst de sleutel en datasetVersionId op.", true);
@@ -504,6 +583,13 @@ export default function ImportAdminPage() {
           style={{ padding: "10px 16px", fontSize: 16 }}
         >
           Start edge-matching
+        </button>
+        <button
+          disabled={running !== null || !datasetVersionId}
+          onClick={() => runWipeMatching()}
+          style={{ padding: "10px 16px", fontSize: 16, background: "#fee" }}
+        >
+          Reset edge-matching
         </button>
         <button
           disabled={running !== null}
