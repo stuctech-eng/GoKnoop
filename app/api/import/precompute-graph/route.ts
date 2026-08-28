@@ -13,7 +13,8 @@ export const dynamic = "force-dynamic";
  * met platte arrays (niet Firestore-document-per-node/edge).
  */
 
-const CHUNK_SIZE = 5000; // items per chunk-document
+const NODE_CHUNK_SIZE = 5000; // nodes zijn klein (geen geometrie), grotere chunks zijn veilig
+const EDGE_CHUNK_SIZE = 200; // edges bevatten volledige lijngeometrie, veel groter per item
 
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -59,11 +60,13 @@ export async function GET(req: NextRequest) {
     });
 
     const nodeChunks: (typeof nodes)[] = [];
-    for (let i = 0; i < nodes.length; i += CHUNK_SIZE) nodeChunks.push(nodes.slice(i, i + CHUNK_SIZE));
+    for (let i = 0; i < nodes.length; i += NODE_CHUNK_SIZE) nodeChunks.push(nodes.slice(i, i + NODE_CHUNK_SIZE));
     const edgeChunks: (typeof edges)[] = [];
-    for (let i = 0; i < edges.length; i += CHUNK_SIZE) edgeChunks.push(edges.slice(i, i + CHUNK_SIZE));
+    for (let i = 0; i < edges.length; i += EDGE_CHUNK_SIZE) edgeChunks.push(edges.slice(i, i + EDGE_CHUNK_SIZE));
 
-    const CHUNKS_PER_COMMIT = 3; // conservatief, gezien de eerdere payload-size-les
+    const CHUNKS_PER_COMMIT = 1; // conservatief -- edges kunnen groot zijn, één chunk-document per commit
+
+    const nodeCommitPromises = [];
     for (let i = 0; i < nodeChunks.length; i += CHUNKS_PER_COMMIT) {
       const batch = db.batch();
       nodeChunks.slice(i, i + CHUNKS_PER_COMMIT).forEach((chunk, j) => {
@@ -75,8 +78,11 @@ export async function GET(req: NextRequest) {
           items: chunk,
         });
       });
-      await batch.commit();
+      nodeCommitPromises.push(batch.commit());
     }
+    await Promise.all(nodeCommitPromises);
+
+    const edgeCommitPromises = [];
     for (let i = 0; i < edgeChunks.length; i += CHUNKS_PER_COMMIT) {
       const batch = db.batch();
       edgeChunks.slice(i, i + CHUNKS_PER_COMMIT).forEach((chunk, j) => {
@@ -88,8 +94,9 @@ export async function GET(req: NextRequest) {
           items: chunk,
         });
       });
-      await batch.commit();
+      edgeCommitPromises.push(batch.commit());
     }
+    await Promise.all(edgeCommitPromises);
 
     await db.collection("precomputedGraph").doc(`${datasetVersionId}_meta`).set({
       datasetVersionId,
