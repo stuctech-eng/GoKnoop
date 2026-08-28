@@ -87,6 +87,17 @@ COLLECTION: edges
     fromLogicalNodeId,       // AFGELEID, nullable — niet elke edge heeft aan beide kanten een match
     toLogicalNodeId,         // AFGELEID, nullable
     matchConfidence: 'matched' | 'unmatched_start' | 'unmatched_end' | 'unmatched_both',
+    endpointMatches: [  // TOEGEVOEGD 26-8-2026 na implementatie — volledige herleidbaarheid per endpoint
+      {
+        endpoint: 'start' | 'end',
+        sourceCoordinate: { x, y },
+        matchedSourceNodeId,       // NIET rechtstreeks logicalNodeId — eerst het bronpunt
+        logicalNodeId,             // afgeleid VIA matchedSourceNodeId.logicalNodeId, nooit rechtstreeks
+        distanceM,
+        matchConfidence: 'exact' | 'close' | 'tolerance' | 'unmatched',  // resp. <=0.5m / <=2m / <=5m / >5m
+        ambiguous,                 // true als er meerdere source_nodes binnen 5m lagen
+      }
+    ],
     -- Toekomstvaste velden (Master Context v2 sectie 3, 8, 22) — nu alleen als veld,
     -- functionaliteit die erop bouwt wordt NIET nu gebouwd (sectie 23):
     mode: 'bicycle',         // toegestane modaliteit; deze import altijd 'bicycle'

@@ -309,6 +309,134 @@ export default function ImportAdminPage() {
     setRunning(null);
   }
 
+  async function runMatchEdges() {
+    if (!debugKey || !datasetVersionId) {
+      log("Geef eerst de sleutel en datasetVersionId op.", true);
+      return;
+    }
+    stopRef.current = false;
+    setRunning("cluster"); // hergebruikt dezelfde 'bezig'-status
+    await acquireWakeLock();
+
+    log("Edge-matching: berekeningsfase gestart...");
+    try {
+      const computeUrl = new URL("/api/import/match-edges", window.location.origin);
+      computeUrl.searchParams.set("key", debugKey);
+      computeUrl.searchParams.set("datasetVersionId", datasetVersionId);
+      computeUrl.searchParams.set("phase", "compute");
+
+      const res = await fetch(computeUrl.toString());
+      const rawText = await res.text();
+      let data: {
+        error?: string;
+        details?: string;
+        report?: {
+          totalEdges: number;
+          totalEndpoints: number;
+          confidenceCounts: Record<string, number>;
+          ambiguousCount: number;
+          avgDistanceM: string | null;
+          maxDistanceM: string | null;
+        };
+        timingMs?: { read: number; match: number; cacheWrite: number; total: number };
+      };
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        log(`Berekeningsfase gaf geen geldige JSON (status ${res.status}): ${rawText.slice(0, 300)}`, true);
+        releaseWakeLock();
+        setRunning(null);
+        return;
+      }
+      if (!res.ok) {
+        log(`Berekeningsfase mislukt: ${[data.error, data.details].filter(Boolean).join(" — ")}`, true);
+        releaseWakeLock();
+        setRunning(null);
+        return;
+      }
+
+      log(
+        `Berekening klaar (read ${data.timingMs?.read}ms, match ${data.timingMs?.match}ms, cache ${data.timingMs?.cacheWrite}ms).`
+      );
+      if (data.report) {
+        log(
+          `Rapport: ${data.report.totalEdges} edges, ${data.report.totalEndpoints} endpoints. Confidence: ${JSON.stringify(data.report.confidenceCounts)}. Ambigu: ${data.report.ambiguousCount}. Gem. afstand: ${data.report.avgDistanceM}m, max: ${data.report.maxDistanceM}m.`
+        );
+      }
+    } catch (err) {
+      log(`Berekeningsfase — onverwachte fout: ${err instanceof Error ? err.message : String(err)}`, true);
+      releaseWakeLock();
+      setRunning(null);
+      return;
+    }
+
+    let writeOffset = 0;
+    let attempt = 0;
+
+    while (!stopRef.current) {
+      const url = new URL("/api/import/match-edges", window.location.origin);
+      url.searchParams.set("key", debugKey);
+      url.searchParams.set("datasetVersionId", datasetVersionId);
+      url.searchParams.set("phase", "write");
+      url.searchParams.set("writeOffset", String(writeOffset));
+
+      try {
+        const res = await fetch(url.toString());
+        const rawText = await res.text();
+        let data: {
+          error?: string;
+          details?: string;
+          newWriteOffset?: number;
+          totalItems?: number;
+          done?: boolean;
+        };
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          attempt++;
+          log(`Server gaf geen geldige JSON terug (status ${res.status}): ${rawText.slice(0, 200)} (poging ${attempt})`, true);
+          if (attempt >= 10) {
+            log("Gestopt na 10 mislukte pogingen. Tik nogmaals op start om te hervatten.", true);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        if (!res.ok) {
+          attempt++;
+          log(`Fout: ${[data.error, data.details].filter(Boolean).join(" — ")} (poging ${attempt})`, true);
+          if (attempt >= 10) {
+            log("Gestopt na 10 mislukte pogingen.", true);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+
+        attempt = 0;
+        log(`schrijven: ${data.newWriteOffset} / ${data.totalItems} edges bijgewerkt`);
+
+        if (data.done) {
+          log("Klaar — alle edges gekoppeld aan logical nodes.");
+          break;
+        }
+        writeOffset = data.newWriteOffset ?? writeOffset;
+        await new Promise((r) => setTimeout(r, 200));
+      } catch (err) {
+        attempt++;
+        log(`Onverwachte fout: ${err instanceof Error ? err.message : String(err)} (poging ${attempt})`, true);
+        if (attempt >= 10) {
+          log("Gestopt na 10 mislukte pogingen.", true);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+
+    releaseWakeLock();
+    setRunning(null);
+  }
+
   return (
     <main style={{ fontFamily: "system-ui", padding: "1.5rem", maxWidth: 600, margin: "0 auto" }}>
       <h1>GoKnoop — Import Admin</h1>
@@ -369,6 +497,13 @@ export default function ImportAdminPage() {
           style={{ padding: "10px 16px", fontSize: 16 }}
         >
           Start node-clustering
+        </button>
+        <button
+          disabled={running !== null || !datasetVersionId}
+          onClick={() => runMatchEdges()}
+          style={{ padding: "10px 16px", fontSize: 16 }}
+        >
+          Start edge-matching
         </button>
         <button
           disabled={running === null}
