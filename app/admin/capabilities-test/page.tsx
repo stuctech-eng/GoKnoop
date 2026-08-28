@@ -65,6 +65,7 @@ export default function CapabilitiesTestPage() {
         foundCount: data.foundCount,
         requestedCount: data.requestedCount,
         estimatedRadiusM: data.estimatedRadiusM ? Math.round(data.estimatedRadiusM as number) : undefined,
+        diagnostics: data.diagnostics,
         loops: summaryItems,
       };
     }
