@@ -1,0 +1,68 @@
+:root {
+  /* Kleuren — geworteld in de echte fysieke knooppuntenborden */
+  --color-knoop-green: #1f6b44;
+  --color-knoop-green-dark: #154d31;
+  --color-paper: #faf8f3;
+  --color-ink: #17211c;
+  --color-canal-blue: #2874a6;
+  --color-sand: #efe7d8;
+  --color-rust: #b4482a; /* uitsluitend voor foutmeldingen */
+  --color-white: #ffffff;
+
+  --font-display: var(--font-display), sans-serif;
+  --font-body: var(--font-body), sans-serif;
+
+  --radius-badge: 999px;
+  --radius-card: 20px;
+  --shadow-card: 0 2px 12px rgba(23, 33, 28, 0.08);
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--color-canal-blue);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
