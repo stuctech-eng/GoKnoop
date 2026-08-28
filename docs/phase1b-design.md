@@ -1,7 +1,7 @@
 # GoKnoop — Phase 1B: Data Model + Importer Design
 
 **Datum:** 25 augustus 2026 (herzien: database Supabase → Firebase/Firestore, project `go-knoop`)
-**Status:** Ontwerp goedgekeurd, pre-flight checklist afgerond — klaar voor implementatie (Phase 1C stap 13)
+**Status:** Ontwerp goedgekeurd, pre-flight checklist afgerond, volledige import (Phase 1C stap 13) uitgevoerd en gevalideerd — klaar voor Phase 2 (Route Engine)
 **Basis:** Phase 1A-auditrapport (`docs/phase1a-wfs-audit.md`), bevestigd met echte featuredata
 
 ---
@@ -336,6 +336,31 @@ unmatched_both (volledig los):  4.868 (17,4%)
 ---
 
 ## 7. GRAPH-CONNECTIVITY VALIDATIE
+
+**RESULTAAT VOLLEDIGE IMPORT (26-8-2026):** 11.003 logicalNodes, 16.345 matched edges gebruikt voor de graph.
+
+```
+Connected components:         669
+Grootste component:          9.291 nodes (84,4%)
+Top 10 componentgroottes:    9291, 209, 97, 63, 45, 24, 23, 20, 16, 15
+Geïsoleerde nodes (0 edges):   389
+Dead-end nodes (1 edge):     1.011
+Goed-verbonden nodes (≥2):   9.603
+```
+
+**Beoordeling:** gezond. Eén dominante hoofdcomponent (84,4%) is precies wat verwacht mag worden gegeven dat 41,7% van de edges (unmatched, sectie 6B) geen bijdrage levert aan connectiviteit — de overige 668 componenten zijn stuk voor stuk klein (max. 209 nodes), geen aanwijzing voor een tweede groot netwerk dat per ongeluk is losgeraakt van de hoofdcomponent.
+
+**Composite-cluster-diagnose:** 125 clusters met ≥5 samengevoegde brondata-punten (van 11.003 totaal), sterk geconcentreerd in Noord-Brabant. Gerichte steekproef van 20 clusters (16 uit Noord-Brabant, 4 uit andere regio's ter vergelijking, variërend van 7 tot 12 brondata-punten) handmatig/systematisch geïnspecteerd op precies het onderscheid tussen:
+- **Goed:** meerdere fysieke representaties van hetzelfde complexe kruispunt (dichte interne edge-connectiviteit tussen de samengevoegde punten)
+- **Fout:** twee echte, aparte knooppunten die door het kettingeffect van single-linkage-clustering ten onrechte zijn samengevoegd (zou zich tonen als twee tight subgroepen met weinig verbindende edges ertussen)
+
+**Resultaat: alle 20 clusters slagen.** `allPointsHaveEdges: true` bij elk cluster (geen wees-punten), en substantiële interne edge-connectiviteit in elk geval (bijv. 17 van 24 aangesloten edges liggen intern bij het grootste cluster, knooppunt "84"). Geen enkel voorbeeld van het "fout"-patroon aangetroffen.
+
+**Bijvangst:** het kettingeffect (single-linkage bij 50m kan een clusterdiameter >50m opleveren) is bevestigd aanwezig — geziene maximale onderlinge afstanden tot 112m in sommige clusters — maar veroorzaakt in de steekproef geen foutieve samenvoegingen. De dichte interne connectiviteit compenseert dit: ook bij een grotere diameter blijft het overtuigend één samenhangend fysiek geheel.
+
+**Conclusie: composite-node-clustering geaccepteerd als betrouwbaar voor de volledige dataset.** Geen verder onderzoek hier nodig vóór Phase 2.
+
+---
 
 Een hoog matched-percentage op edge-niveau (sectie 5) is niet voldoende om te weten of de graph bruikbaar is voor routegeneratie. Een dataset kan bijvoorbeeld 99% matched zijn en toch een cruciale verbinding missen waardoor een heel gebied onbereikbaar wordt vanuit de rest van het netwerk.
 
