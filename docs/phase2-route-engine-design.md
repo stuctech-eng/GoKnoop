@@ -1,7 +1,7 @@
 # GoKnoop — Phase 2: Route Engine Master Design
 
 **Datum:** 26 augustus 2026
-**Status:** ONTWERP — nog geen implementatie. Vastgesteld vóór code wordt geschreven.
+**Status:** ONTWERP GOEDGEKEURD (GO, na GPT-review 26-8-2026) — klaar voor implementatie, test-eerst-volgorde (zie sectie "Volgende stap")
 **Basis:** Phase 1 (voltooid, zie `docs/phase1b-design.md`) + Master Context v2 (langetermijn-productvisie)
 
 ---
@@ -58,6 +58,10 @@ Edges met `unmatched_start`/`unmatched_end`/`unmatched_both` verwijzen niet betr
 
 Op de volledige dataset betekent dit: **16.345 van de 28.060 edges (58,3%)** vormen de routing-graph. Dat is bekend en geaccepteerd vanuit Phase 1 (sectie 6B/7) — geen nieuwe aanname, alleen een expliciete bevestiging dat de Route Engine dezelfde grens hanteert.
 
+**Belangrijk, expliciet vastgelegd na review (26-8-2026): parallelle edges tussen dezelfde twee nodes zijn toegestaan.** Twee `logicalNode`'s kunnen door meerdere edges verbonden zijn (verschillende brongeometrieën, verschillende netwerken, of later verschillende modaliteiten/routekwaliteit). De graph modelleert dit dus NIET als een unieke `A→B`-relatie, maar staat meerdere edge-documenten tussen hetzelfde nodepaar toe. Dijkstra kiest bij het opbouwen van de adjacency automatisch de goedkoopste (kortste `distanceM`) van de beschikbare parallelle edges voor dat nodepaar — dit vereist geen aanpassing aan het algoritme zelf, alleen dat de adjacency-opbouw een node-paar niet overschrijft bij een tweede edge, maar beide edges als aparte kant-opties aanhoudt.
+
+**`distanceM` betekent expliciet: de lengte van de brongeometrie (uit `lengte_m` in Routedatabank), NIET de Euclidische (rechte-lijn) afstand tussen de twee eindpunten.** Bij een edge met een bocht is dat verschil substantieel — Dijkstra moet de daadwerkelijke af te leggen afstand gebruiken, anders ontstaan systematisch te korte route-inschattingen bij bochtige geometrieën.
+
 ---
 
 ## 4. GRAPH-LOADINGSTRATEGIE
@@ -72,6 +76,20 @@ Op de volledige dataset betekent dit: **16.345 van de 28.060 edges (58,3%)** vor
 
 **Aanbeveling voor de eerste implementatie: optie A (simpel, correct), met optie C als bekende vervolgstap zodra performance een probleem blijkt.** Niet vooruitlopen op een optimalisatie die nog niet nodig is bewezen.
 
+**Vastgelegd na review (26-8-2026): de architectuur mag niet afhangen van welke laadstrategie gekozen wordt.** Dit wordt afgedwongen via een expliciete interface-abstractie, niet door Dijkstra rechtstreeks tegen Firestore te laten praten:
+
+```
+GraphProvider
+ ├── load(datasetVersionId)
+ └── getAdjacency()
+
+Eerste implementatie:  Firestore-query  → GraphProvider → Dijkstra
+Latere optimalisatie:  In-memory cache  → GraphProvider → Dijkstra
+Latere optimalisatie:  Precomputed data → GraphProvider → Dijkstra
+```
+
+Dijkstra (en elke toekomstige pathfinding-implementatie, zie sectie 5) roept alleen `getAdjacency()` aan en weet niets van hóé die data geladen is. Dat betekent: optie A nu bouwen, later zonder wijziging aan de pathfinding-code overstappen op optie B of C.
+
 ---
 
 ## 5. ALGORITME
@@ -83,6 +101,25 @@ Waarom niet A*: A* heeft een heuristiek (bijv. Euclidische afstand tot het doel)
 **Alle matched edges zijn tweerichtingsverkeer in de pathfinding**, conform de vastgestelde `directionality=unknown → bidirectional`-routingpolicy (Phase 1 pre-flight punt 6). Dit is een expliciete, herroepbare beslissing op routing-niveau — geen aanname die is teruggeschreven in de brondata-interpretatie.
 
 **Voorbereiding op toekomstige directionaliteit (zonder het nu te bouwen):** de edge-traversal-check in het algoritme wordt als aparte, benoemde functie geschreven (bijv. `isTraversable(edge, fromNodeId)`) die nu altijd `true` teruggeeft, in plaats van de richtingslogica inline in de Dijkstra-loop te verwerken. Zodra de rijrichting-semantiek ooit wordt opgehelderd (Phase 1B sectie 4), hoeft alleen deze ene functie aangepast te worden — geen rewrite van het pathfinding-algoritme zelf.
+
+**Expliciete laagscheiding, vastgelegd na review (26-8-2026):** de graph zelf (zoals opgeslagen, `directionality: 'unknown'`) wordt NOOIT herschreven naar `'bidirectional'`. Dat blijft `unknown`, precies zoals Phase 1 het heeft vastgelegd. De vertaling naar "in de praktijk beide richtingen toegestaan" gebeurt uitsluitend in de `isTraversable()`-routingpolicy-laag, niet door de brondata-interpretatie te overschrijven:
+
+```
+RAW (Firestore)                 directionality = 'unknown'   ← blijft altijd zo
+        ↓
+RoutingPolicy (isTraversable)   unknown → traversable in beide richtingen
+```
+
+Dit is geen cosmetisch verschil: het betekent dat de routingpolicy later kan veranderen (bijv. zodra de rijrichting-semantiek is opgehelderd) zonder de geïmporteerde graph opnieuw te hoeven opbouwen of migreren.
+
+**Architectuur voorbereid op meerdere algoritmes (niet nu bouwen):**
+```
+Route Engine
+ ├── Dijkstra          (MVP)
+ ├── A*                (later, zelfde Route-contract)
+ └── toekomstige algoritmes
+```
+Een latere overstap naar (of aanvulling met) A* verandert het API-contract en het Route-datamodel niet — alleen de interne pathfinding-implementatie.
 
 ---
 
@@ -119,6 +156,15 @@ Route
 
 **Waarom dit ontwerp:** elk "nog niet gebouwd"-veld staat er al met een expliciete lege/null-waarde, in plaats van simpelweg te ontbreken. Dat voorkomt precies het probleem dat Master Context sectie 22/23 benoemt — een toekomstige feature (bijv. elevation-gebaseerde e-bike-berekening) kan aanhaken op een bestaand veld zonder dat het Route-object opnieuw ontworpen hoeft te worden.
 
+**Expliciet vastgelegd na review (26-8-2026): `edges[]` is verplicht, niet af te leiden uit `nodes[]`.** Reden: door parallelle edges (sectie 3) kunnen twee routes dezelfde knooppuntenreeks hebben maar verschillende edge-geometrieën/metadata gebruiken. De route moet dus "edge-aware" zijn — `nodes[]` alleen is onvoldoende om de route eenduidig te reconstrueren.
+
+**Nieuwe validatieregel: de distance-invariant.** Na elke routeberekening moet gelden:
+```
+route.distanceM === Σ (edges[i].distanceM)   [binnen een expliciet gedefinieerde afrondingstolerantie]
+route.geometry   === aaneenschakeling van edges[i].geometry (in de juiste doorlooprichting)
+```
+Dit is een interne consistentietest die bij elke implementatie/wijziging van de Route Engine gecontroleerd moet worden — een afwijking betekent dat de route-reconstructie een fout bevat, ongeacht of Dijkstra zelf correct rekende.
+
 ---
 
 ## 7. API-CONTRACT (schets, geen implementatiedetail)
@@ -139,9 +185,15 @@ Response: Route (zie sectie 6)
 
 Foutgevallen (expliciet, geen stille failures):
   - 404: fromLogicalNodeId of toLogicalNodeId bestaat niet in de actieve dataset
-  - 422: geen route mogelijk (bijv. de twee nodes zitten in verschillende connected
-         components — zie Phase 1 sectie 7, 669 components, niet elk paar nodes is
-         bereikbaar van elkaar)
+  - 422: geen route mogelijk — MET machineleesbare reden, niet alleen een generieke
+         foutmelding:
+         reason: 'disconnected'                      -- nodes bestaan, zitten in
+                                                          verschillende connected components
+         reason: 'no_traversable_edges'               -- node bestaat, heeft geen
+                                                          matched edges (isolated node)
+         reason: 'all_paths_blocked_by_constraints'   -- een route zou bestaan, maar
+                                                          avoidNodeIds/avoidEdgeIds
+                                                          sluiten alle opties uit
   - 200 met route: normale succesvolle berekening
 ```
 
@@ -152,6 +204,12 @@ Foutgevallen (expliciet, geen stille failures):
 ## 8. CONSTRAINTS (MVP-scope)
 
 **Wel in MVP:** expliciete, door de aanroeper meegegeven constraints — `avoidNodeIds`, `avoidEdgeIds`. Simpel te implementeren binnen Dijkstra (uitsluiten uit de adjacency tijdens het opbouwen van de graph voor deze specifieke aanvraag).
+
+**Semantiek expliciet vastgelegd na review (26-8-2026):**
+- **`avoidNodeIds`** — de route mag deze node(s) helemaal niet gebruiken, ook niet als tussenstop. (Gebruik als start- of eindpunt is alleen toegestaan als de API dat expliciet aangeeft — standaard dus ook niet.)
+- **`avoidEdgeIds`** — alleen die specifieke edge(s) mogen niet gebruikt worden. Dit vermijdt NIET automatisch alle parallelle edges tussen hetzelfde nodepaar (zie sectie 3) — als er een alternatieve edge tussen dezelfde twee nodes bestaat, blijft die wél beschikbaar.
+
+Dit onderscheid is belangrijk zodra parallelle edges vaker voorkomen — een gebruiker die één specifieke (bijv. drukke) route-optie wil vermijden, moet niet per ongeluk ook het alternatief tussen dezelfde twee knooppunten blokkeren.
 
 **Niet in MVP, wel voorbereid in het datamodel (sectie 6):** voorkeur-gebaseerde constraints (natuur, water, rustige wegen — Master Context sectie 9 `RoutePreferences`). Het `constraints`-veld op het Route-object is bewust generiek genoeg opgezet om hier later op te kunnen uitbreiden zonder het veld zelf te hoeven herontwerpen.
 
@@ -165,6 +223,30 @@ Foutgevallen (expliciet, geen stille failures):
 
 ---
 
-## VOLGENDE STAP
+## 10. GO/NO-GO (GPT-review, 26-8-2026)
 
-Dit document is het contract. Zodra dit is goedgekeurd, kan de daadwerkelijke implementatie beginnen: eerst de graph-loading + Dijkstra-kernlogica (server-side, geen UI), getest met een handvol bekende A→B-paren uit de bestaande dataset, vóór er een API-route of frontend aan gekoppeld wordt.
+**GO.** Alle onderdelen beoordeeld, vier aanvullingen verwerkt in dit document (parallelle edges, verplichte edge-sequence, distance-invariant, GraphProvider-abstractie). Geen nieuwe onderzoeksfase nodig.
+
+---
+
+## VOLGENDE STAP — TEST-EERST, VÓÓR API/UI
+
+Dit document is het contract. De implementatie begint expliciet **niet** met een API-route of frontend, maar met de kernlogica, getest tegen bekende scenario's:
+
+```
+1. Graph fixture (klein, handmatig samengesteld testgraafje — niet de volledige productiedata)
+        ↓
+2. Dijkstra op de fixture → bekende, met de hand berekende kortste paden
+        ↓
+3. Constraints (avoidNodeIds/avoidEdgeIds) → verwacht gedrag getest
+        ↓
+4. Disconnected nodes → 422 met de juiste reason-code getest
+        ↓
+5. Geometry-reconstructie → distance-invariant getest (sectie 6)
+        ↓
+6. Pas dán: API-route (POST /api/route)
+        ↓
+7. Pas dán: koppeling aan de echte productiedataset (11.003 nodes, 16.345 edges)
+```
+
+Zo staat vast dat de Route Engine zelf correct is vóórdat er een interface omheen wordt gebouwd — dezelfde discipline die Phase 1 ook honderden empirische stappen verder heeft gebracht dan een blind vertrouwen op aannames.
