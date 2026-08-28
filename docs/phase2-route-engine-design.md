@@ -231,6 +231,38 @@ Dit onderscheid is belangrijk zodra parallelle edges vaker voorkomen — een geb
 
 ---
 
+## 9B. PHASE 3-VOORBEREIDING — EMPIRISCH GEVALIDEERD (28-8-2026)
+
+Vóór Phase 3 (Core GoKnoop UX) is gestart, zijn de drie ontbrekende capabilities gebouwd en tegen de échte productiedataset (11.003 nodes, 16.345 matched edges) getest — niet alleen tegen fixtures. Vastgelegd als contract, zodat Phase 3 hierop kan bouwen zonder losse, nergens vastgelegde aannames.
+
+**Location Resolver** (`lib/route-engine/location-resolver.ts`): ✅ gevalideerd. "Utrecht" → correct gegeocodet via Nominatim naar "Utrecht, Nederland", dichtstbijzijnde knooppunt op 444m. Coördinatenconversie (WGS84↔RD New via `proj4`) apart geverifieerd tegen een extern referentiepunt, nauwkeurig tot ~0,3m.
+
+**RoutePlanner** (`lib/route-engine/route-planner.ts`): ✅ gevalideerd, met een belangrijke bevestiging van het Phase 2-ontwerp in de praktijk:
+- **Parallelle edges worden correct als aparte alternatieven behandeld** (ontwerp sectie 3) — een testpaar knooppunten bleek verbonden door twee parallelle edges (308m en 333m), en de planner vond en presenteerde ze automatisch als 2 losse alternatieven, zonder dat daar aparte logica voor nodig was.
+- **`foundCount` is eerlijk, geen kunstmatige opvulling naar het gevraagde aantal:**
+  - 102km-testcase (twee ver uit elkaar gelegen Noord-Brabant-knooppunten): `foundCount: 1` van de 4 gevraagde — er bestond simpelweg geen tweede, voldoende diverse route.
+  - 308/333m-testcase (dichtbij gelegen knooppunten, parallelle edges): `foundCount: 2` van de 4 gevraagde — precies het aantal daadwerkelijk beschikbare, verschillende verbindingen.
+- **Contractbevestiging: een aanvraag levert NOOIT gegarandeerd 4 routes op.** Dit moet Phase 3's UI expliciet honoreren (zie hieronder) — nooit doen alsof er altijd 4 keuzes zijn.
+
+**Rondje-generator** (`lib/route-engine/loop-route-generator.ts`): ✅ gevalideerd, met een herijking op basis van echte meting:
+- Eerste test (target 20km, `circuityFactor=1.3`): beste kandidaat 25,3km (26,5% afwijking) — te grof.
+- **`circuityFactor` herijkt naar 1,6** op basis van de gemeten werkelijke verhouding (25.309m / (2×7.692m) = 1,65).
+- Na herijking + meerdere kandidaten per richting (`CANDIDATES_PER_BUCKET=3`): beste kandidaat 23,1km (**15,7% afwijking**) — bruikbaar.
+- **Belangrijke structurele bevinding, niet zomaar op te lossen met nóg een parametertuning:** de werkelijke omwegfactor is **geen stabiele constante**, maar varieert per richting en lokale netwerkdichtheid (tweede meting gaf 1,85, niet 1,6). Dit is een eigenschap van het fietsknooppuntennetwerk zelf (sommige gebieden zijn dichter vertakt dan andere), geen bug. Verdere precisie-winst vereist waarschijnlijk richtingsafhankelijke kalibratie of een adaptief zoekalgoritme — bewust niet nu gebouwd, MVP-heuristiek volstaat.
+- **Consequentie voor Phase 3 UI: toon de werkelijke afstand, doe niet alsof het exact de gevraagde afstand is** (bijv. "±23 km" of de exacte waarde, niet een afgeronde "20 km"-belofte).
+
+**Samenvattend contract voor Phase 3:**
+```
+✅ Location Resolver, RoutePlanner, rondje-generator: gevalideerd op echte data
+✅ Parallelle edges: correct afzonderlijk aangeboden
+✅ foundCount: altijd eerlijk, nooit kunstmatig opgevuld
+❗ GEEN garantie op 4 routes per aanvraag — UI moet "Ik heb N routes gevonden" tonen, N is niet vast
+❗ Rondje-afstand is een BENADERING — toon de werkelijke afstand, niet de gevraagde waarde als belofte
+📐 circuityFactor (1,6) is een empirische aanname op basis van een klein aantal metingen, geen universele constante — te herzien zodra meer data beschikbaar is
+```
+
+---
+
 ## 9. WAT DIT ONTWERP BEWUST NIET BESLIST
 
 - **Meerdere routealternatieven genereren (k-shortest-paths of vergelijkbaar):** datamodel ondersteunt het (sectie 6, `alternatives[]`), het algoritme (sectie 5) niet. Dit is een expliciete, latere uitbreiding — niet nu bouwen, wel niet blokkeren met een datamodel-wijziging als het zover is.
