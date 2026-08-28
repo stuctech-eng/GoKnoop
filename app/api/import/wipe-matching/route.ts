@@ -27,25 +27,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "datasetVersionId is verplicht." }, { status: 400 });
   }
   const dryRun = req.nextUrl.searchParams.get("dryRun") !== "0";
+  const step = req.nextUrl.searchParams.get("step") || "edges"; // 'edges' | 'cache'
+  const offset = parseInt(req.nextUrl.searchParams.get("offset") || "0", 10);
+  const batchSize = parseInt(req.nextUrl.searchParams.get("batchSize") || "300", 10);
 
   try {
     const db = getDb();
 
-    const [edgesSnap, cacheMetaSnap] = await Promise.all([
-      db.collection("edges").where("datasetVersionId", "==", datasetVersionId).get(),
-      db.collection("edgeMatchCache").doc(datasetVersionId).get(),
-    ]);
+    if (step === "edges") {
+      const snapshot = await db.collection("edges").where("datasetVersionId", "==", datasetVersionId).get();
+      const total = snapshot.size;
+      const slice = snapshot.docs.slice(offset, offset + batchSize);
 
-    const cacheChunkCount = cacheMetaSnap.exists ? (cacheMetaSnap.data()?.chunkCount as number) || 0 : 0;
-
-    if (!dryRun) {
-      const BATCH_LIMIT = 450;
-
-      const edgeIds = edgesSnap.docs.map((d) => d.id);
-      for (let i = 0; i < edgeIds.length; i += BATCH_LIMIT) {
+      if (!dryRun) {
         const batch = db.batch();
-        for (const id of edgeIds.slice(i, i + BATCH_LIMIT)) {
-          batch.update(db.collection("edges").doc(id), {
+        for (const doc of slice) {
+          batch.update(doc.ref, {
             fromLogicalNodeId: null,
             toLogicalNodeId: null,
             matchConfidence: null,
@@ -55,12 +52,34 @@ export async function GET(req: NextRequest) {
         await batch.commit();
       }
 
+      const newOffset = offset + slice.length;
+      const done = newOffset >= total;
+
+      return NextResponse.json({
+        datasetVersionId,
+        dryRun,
+        step: "edges",
+        total,
+        offset,
+        processed: slice.length,
+        newOffset,
+        done,
+        nextStep: done ? "Roep nu step=cache aan om de cache op te ruimen." : null,
+      });
+    }
+
+    // step === 'cache'
+    const cacheMetaSnap = await db.collection("edgeMatchCache").doc(datasetVersionId).get();
+    const cacheChunkCount = cacheMetaSnap.exists ? (cacheMetaSnap.data()?.chunkCount as number) || 0 : 0;
+
+    if (!dryRun) {
       const cacheRefs = [
         db.collection("edgeMatchCache").doc(datasetVersionId),
         ...Array.from({ length: cacheChunkCount }, (_, i) =>
           db.collection("edgeMatchCache").doc(`${datasetVersionId}_chunk${i}`)
         ),
       ];
+      const BATCH_LIMIT = 450;
       for (let i = 0; i < cacheRefs.length; i += BATCH_LIMIT) {
         const batch = db.batch();
         for (const ref of cacheRefs.slice(i, i + BATCH_LIMIT)) {
@@ -73,9 +92,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       datasetVersionId,
       dryRun,
-      edgesToReset: edgesSnap.size,
+      step: "cache",
       cacheChunksFound: cacheChunkCount,
-      done: !dryRun,
+      done: true,
     });
   } catch (err) {
     return NextResponse.json(
