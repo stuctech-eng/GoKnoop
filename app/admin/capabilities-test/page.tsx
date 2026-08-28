@@ -31,8 +31,13 @@ export default function CapabilitiesTestPage() {
   function buildSummaryObject(path: string, data: Record<string, unknown>): Record<string, unknown> {
     if (path === "/api/location/resolve") {
       const candidates =
-        (data.candidates as { logicalNodeId: string; displayNumber?: string; displayRegio?: string; distanceM: number }[]) ||
-        [];
+        (data.candidates as {
+          logicalNodeId: string;
+          displayNumber?: string;
+          displayRegio?: string;
+          distanceM: number;
+          edgeCount?: number;
+        }[]) || [];
       return {
         geocodedAs: data.geocodedAs,
         candidateCount: candidates.length,
@@ -41,6 +46,7 @@ export default function CapabilitiesTestPage() {
           displayNumber: c.displayNumber,
           displayRegio: c.displayRegio,
           distanceM: Math.round(c.distanceM),
+          edgeCount: c.edgeCount,
         })),
       };
     }

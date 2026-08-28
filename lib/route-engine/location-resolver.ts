@@ -18,6 +18,7 @@ export type LocationCandidate = {
   displayNumber?: string;
   displayRegio?: string;
   distanceM: number;
+  edgeCount: number;
   x: number;
   y: number;
 };
@@ -26,7 +27,17 @@ function dist(a: { x: number; y: number }, b: { x: number; y: number }): number 
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 }
 
-/** Kern: dichtstbijzijnde logicalNodes bij een RD-coördinaat. */
+/**
+ * Kern: dichtstbijzijnde logicalNodes bij een RD-coördinaat.
+ *
+ * BUGFIX 28-8-2026: sloot voorheen niet uit dat een volledig geïsoleerde node
+ * (0 matched edges -- zie Phase 1B sectie 7, 389 van zulke nodes landelijk)
+ * als kandidaat werd teruggegeven. Zo'n node is nooit een bruikbaar start- of
+ * eindpunt (elke route ernaartoe/vanaf mislukt gegarandeerd) -- concreet
+ * waargenomen bij een Amsterdam-test: alle 24 loop-kandidaten faalden op de
+ * heenweg, omdat het gekozen startpunt zelf 0 edges had. Geïsoleerde nodes
+ * worden nu uitgesloten; de eerstvolgende, wél routeerbare node wordt gebruikt.
+ */
 export function resolveNearestNodes(
   provider: GraphProvider,
   point: { x: number; y: number },
@@ -36,11 +47,14 @@ export function resolveNearestNodes(
   for (const id of provider.getAllNodeIds()) {
     const n = provider.getNode(id);
     if (!n) continue;
+    const edgeCount = provider.getEdgesFrom(id).length;
+    if (edgeCount === 0) continue; // geïsoleerde node -- nooit een bruikbaar startpunt
     candidates.push({
       logicalNodeId: id,
       displayNumber: n.displayNumber,
       displayRegio: n.displayRegio,
       distanceM: dist(point, n),
+      edgeCount,
       x: n.x,
       y: n.y,
     });
