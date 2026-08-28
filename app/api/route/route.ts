@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
-import { FirestoreGraphProvider } from "@/lib/route-engine/firestore-graph-provider";
+import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { computeRoute } from "@/lib/route-engine/route-engine";
 
 export const maxDuration = 60;
@@ -12,6 +12,8 @@ export const dynamic = "force-dynamic";
  * Body: { fromLogicalNodeId, toLogicalNodeId, constraints?: { avoidNodeIds?, avoidEdgeIds? } }
  *
  * Contract: docs/phase2-route-engine-design.md sectie 7.
+ * Graph-loadingstrategie: CachedGraphProvider (optie B), benchmark-onderbouwd
+ * gekozen (sectie 4) -- warme aanvraag ~29ms, koude aanvraag ~6,5s.
  * - 404: fromLogicalNodeId/toLogicalNodeId bestaat niet in de actieve dataset
  * - 422: geen route mogelijk, met machineleesbare reason
  * - 200: Route-object
@@ -48,7 +50,7 @@ export async function POST(req: NextRequest) {
     }
     const datasetVersionId = activeDatasetSnap.data()!.datasetVersionId as string;
 
-    const provider = new FirestoreGraphProvider(datasetVersionId);
+    const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
 
     if (!provider.getNode(fromLogicalNodeId)) {

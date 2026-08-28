@@ -90,6 +90,22 @@ Latere optimalisatie:  Precomputed data → GraphProvider → Dijkstra
 
 Dijkstra (en elke toekomstige pathfinding-implementatie, zie sectie 5) roept alleen `getAdjacency()` aan en weet niets van hóé die data geladen is. Dat betekent: optie A nu bouwen, later zonder wijziging aan de pathfinding-code overstappen op optie B of C.
 
+**BENCHMARK-RESULTAAT EN DEFINITIEVE KEUZE (26-8-2026):** na implementatie van alle drie de opties is een eerlijke meting uitgevoerd op de volledige productiedataset (11.003 nodes, 16.345 edges), dezelfde route (`ysPQwdlis6xmkwthaZYL → 4LfEocIOnTjfHJTWNHlj`, 102,4km) in elke modus.
+
+| | A (Firestore direct) | B koud | **B warm** | C (precomputed) |
+|---|---|---|---|---|
+| loadTimeMs | 7.292 | 6.539 | **0** | 6.089 |
+| Dijkstra | 14ms | 10ms | 9ms | 13ms |
+| **totalTimeMs** | **~7.300** | ~6.580 | **~29** | ~6.130 |
+
+**Optie C (precomputed) loste het probleem niet wezenlijk op** — 82 gechunkte edge-documenten parallel inlezen (`Promise.all`) bleef netwerk-round-trip-overhead houden, amper sneller dan optie A, en voegt een aparte precompute-pipeline toe (82 chunk-documenten, tot 373MB geheugenpiek tijdens het inladen) voor weinig winst. Dit bevestigt het risico dat vooraf werd benoemd: "het probleem verplaatsen, niet oplossen."
+
+**Optie B (in-memory cache) wint overtuigend.** Een warme aanvraag: **29ms totaal — een factor 250 sneller** dan de huidige situatie. Bevestigd met een reproduceerbare `cacheHit: true` en `loadTimeMs: 0`. Een eerste anomalie (345ms Dijkstra-tijd bij één warme meting) bleek garbage-collection-ruis door voorafgaande zware tests in dezelfde instance, niet een echt probleem — bevestigd door een herhaalde, schone meting (9ms).
+
+**DEFINITIEVE ARCHITECTUURKEUZE: optie B (`CachedGraphProvider`, module-niveau in-memory cache).** Optie A blijft de fallback/eerste-aanvraag-gedrag (een cold start laadt nog steeds ~6,5s, dat verandert niet), optie C wordt niet in productie gebruikt (de precompute-pipeline en `PrecomputedGraphProvider` blijven in de code staan als bewezen-niet-gekozen alternatief, niet als dode code zonder reden).
+
+**Blijvend aandachtspunt, niet opgelost door deze keuze:** een cold start (nieuwe serverless-instance, na inactiviteit of een nieuwe deploy) kost nog steeds ~6,5 seconden voor de eerste aanvraag op die instance. Dat is acceptabel als incidentele eerste-gebruiker-vertraging; wordt pas een probleem als cold starts vaak genoeg voorkomen om structureel merkbaar te zijn — dan pas is verdere optimalisatie (bijv. een "warm-up"-aanroep na elke dataset-activatie) de moeite waard.
+
 ---
 
 ## 5. ALGORITME
