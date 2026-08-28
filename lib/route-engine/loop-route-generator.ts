@@ -42,10 +42,21 @@ export type LoopGenerationResult = {
   estimatedRadiusM: number;
 };
 
-const DEFAULT_CIRCUITY_FACTOR = 1.3;
+const DEFAULT_CIRCUITY_FACTOR = 1.6; // herijkt 28-8-2026 op basis van eerste productiemeting (was 1.3, zie hieronder)
 const DEFAULT_ANGLE_BUCKETS = 8;
 const DEFAULT_RADIUS_TOLERANCE = 0.4; // kandidaten binnen 60%-140% van de geschatte straal
 const DEFAULT_OVERLAP_THRESHOLD = 0.6;
+const CANDIDATES_PER_BUCKET = 3; // meerdere kandidaten per richting, niet alleen de dichtstbijzijnde radius-match
+
+/**
+ * HERIJKING 28-8-2026: eerste test tegen de echte 11.003-node-dataset
+ * (target 20km, straal-schatting 7.692m bij circuityFactor=1.3) leverde een
+ * beste kandidaat van 25.309m op -- een werkelijke verhouding van
+ * 25309 / (2 * 7692) = 1,65, niet 1,3. Circuityfactor herijkt naar 1,6.
+ * Dit blijft een aanname op basis van ÉÉN meting, geen robuust statistisch
+ * gemiddelde -- verdient verdere kalibratie zodra er meer testresultaten of
+ * echte gebruiksdata beschikbaar zijn.
+ */
 
 function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
@@ -60,7 +71,8 @@ function findCandidateWaypoints(
   startNodeId: string,
   targetRadiusM: number,
   angleBuckets: number,
-  radiusTolerance: number
+  radiusTolerance: number,
+  candidatesPerBucket: number
 ): string[] {
   const start = provider.getNode(startNodeId);
   if (!start) return [];
@@ -68,7 +80,10 @@ function findCandidateWaypoints(
   const minRadius = targetRadiusM * (1 - radiusTolerance);
   const maxRadius = targetRadiusM * (1 + radiusTolerance);
 
-  const bestPerBucket: Map<number, { nodeId: string; deviation: number }> = new Map();
+  // Per hoek-bucket de N beste kandidaten bijhouden (dichtst bij targetRadiusM),
+  // niet slechts 1 -- meer opties per richting vergroot de kans op een goede
+  // daadwerkelijke padafstand-match (rechte-lijnafstand is maar een schatting).
+  const byBucket: Map<number, { nodeId: string; deviation: number }[]> = new Map();
 
   for (const nodeId of provider.getAllNodeIds()) {
     if (nodeId === startNodeId) continue;
@@ -80,13 +95,20 @@ function findCandidateWaypoints(
     const angle = angleOf(start, n);
     const bucket = Math.floor(((angle + Math.PI) / (2 * Math.PI)) * angleBuckets) % angleBuckets;
     const deviation = Math.abs(d - targetRadiusM);
-    const existing = bestPerBucket.get(bucket);
-    if (!existing || deviation < existing.deviation) {
-      bestPerBucket.set(bucket, { nodeId, deviation });
-    }
+
+    const list = byBucket.get(bucket) || [];
+    list.push({ nodeId, deviation });
+    byBucket.set(bucket, list);
   }
 
-  return Array.from(bestPerBucket.values()).map((v) => v.nodeId);
+  const result: string[] = [];
+  for (const list of byBucket.values()) {
+    list.sort((a, b) => a.deviation - b.deviation);
+    for (const item of list.slice(0, candidatesPerBucket)) {
+      result.push(item.nodeId);
+    }
+  }
+  return result;
 }
 
 /** Voegt een heenweg en terugweg samen tot één doorlopende lus-Route. */
@@ -141,6 +163,7 @@ export function generateLoopRoutes(
     angleBuckets?: number;
     radiusTolerance?: number;
     overlapThreshold?: number;
+    candidatesPerBucket?: number;
   } = {}
 ): LoopGenerationResult {
   const count = options.count ?? 4;
@@ -148,6 +171,7 @@ export function generateLoopRoutes(
   const angleBuckets = options.angleBuckets ?? DEFAULT_ANGLE_BUCKETS;
   const radiusTolerance = options.radiusTolerance ?? DEFAULT_RADIUS_TOLERANCE;
   const overlapThreshold = options.overlapThreshold ?? DEFAULT_OVERLAP_THRESHOLD;
+  const candidatesPerBucket = options.candidatesPerBucket ?? CANDIDATES_PER_BUCKET;
 
   const estimatedRadiusM = targetDistanceM / 2 / circuityFactor;
   const waypointCandidates = findCandidateWaypoints(
@@ -155,7 +179,8 @@ export function generateLoopRoutes(
     startNodeId,
     estimatedRadiusM,
     angleBuckets,
-    radiusTolerance
+    radiusTolerance,
+    candidatesPerBucket
   );
 
   const candidates: LoopCandidate[] = [];
