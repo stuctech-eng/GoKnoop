@@ -31,6 +31,19 @@ function formatKm(meters: number): string {
   return (meters / 1000).toLocaleString("nl-NL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 }
 
+/**
+ * Kwalificeert een route op afstandsafwijking -- puur ter presentatie.
+ * De Route Engine zelf filtert of verbergt NOOIT routes op basis hiervan
+ * (zie docs/phase2-route-engine-design.md sectie 9C, UX-inzicht 28-8-2026);
+ * dit label helpt de gebruiker alleen om zelf te beoordelen welke optie het
+ * best past, zonder dat de engine die keuze stiekem al voor 'm maakt.
+ */
+function qualifyDeviation(deviationPercent: number): { label: string; icon: string } {
+  if (deviationPercent <= 5) return { label: "Zeer passend", icon: "⭐" };
+  if (deviationPercent <= 15) return { label: "Passend", icon: "✓" };
+  return { label: "Alternatief", icon: "↘" };
+}
+
 export default function Home() {
   const [step, setStep] = useState<Step>("location");
   const [placeName, setPlaceName] = useState("");
@@ -348,6 +361,9 @@ export default function Home() {
                       ~{formatKm(loop.actualDistanceM)} km
                     </span>
                     <span style={{ fontSize: 13, opacity: 0.6 }}>{loop.route.nodes.length} knooppunten</span>
+                  </div>
+                  <div style={{ fontSize: 13, marginTop: 4, opacity: 0.75 }}>
+                    {qualifyDeviation(loop.deviationPercent).icon} {qualifyDeviation(loop.deviationPercent).label}
                   </div>
                 </button>
               ))}

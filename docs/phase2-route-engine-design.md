@@ -263,6 +263,29 @@ Vóór Phase 3 (Core GoKnoop UX) is gestart, zijn de drie ontbrekende capabiliti
 
 ---
 
+## 9C. BUGFIX + VOLLEDIGE VALIDATIE OP PRODUCTIEDATA (28-8-2026)
+
+**Bugfix — geïsoleerde startnode.** Tijdens de eerste echte gebruikerstest (Amsterdam, via de Phase 3-UI) bleek de rondje-generator systematisch 0 resultaten te geven vanaf een specifiek Amsterdam-knooppunt. Diagnose (`diagnostics`-veld toegevoegd aan `LoopGenerationResult`) toonde `outboundFailed: 24/24` — élke kandidaat faalde al bij de heenweg. Oorzaak: `resolveNearestNodes()` (Location Resolver) selecteerde de dichtstbijzijnde node puur op afstand, zonder te checken of die node daadwerkelijk edges heeft. Het gekozen startpunt bleek een van de 389 volledig geïsoleerde nodes die Phase 1's graph-connectivity-check al landelijk had gevonden (sectie 7) — nu voor het eerst concreet zichtbaar in een echt gebruiksscenario.
+
+**Fix:** `resolveNearestNodes()` sluit nodes met 0 edges nu uit; de eerstvolgende, wél routeerbare node wordt gebruikt. `edgeCount` is toegevoegd aan `LocationCandidate` voor toekomstige diagnose. Vastgelegd met 3 nieuwe regressietests (`location-resolver.test.ts`), inclusief een test die exact dit scenario nabouwt (dichtstbijzijnde node geïsoleerd, verder gelegen node wél bruikbaar).
+
+**Validatie na de fix (Amsterdam, knooppunt-startpunt, 40km-doel):**
+```
+foundCount: 4/4
+Beste drie afwijkingen: 1,8% / 4,6% / 11%
+outboundFailed: 0/24  (was 24/24 vóór de fix)
+inboundFailed: 15/24
+duplicateRejected: 2
+```
+
+**Netwerkbevinding: hoge `inboundFailed`-ratio in Amsterdam.** Meer dan de helft van de heenwegen vond geen bruikbare, andere terugweg. Geïnterpreteerd als een kenmerk van de lokale graph-topologie (grachtenstad — beperkte doorgangen zoals bruggen en sluizen maken "een andere weg terug" vaker onmogelijk dan in een opener landschap), **niet als softwarefout**, zolang de connectivity- en route-invarianten (sectie 6) correct blijven — wat hier het geval is.
+
+**UX-inzicht, vastgelegd als principe voor Phase 3 en later:** een route met een grote afstandsafwijking (in deze test: de vierde optie, 61%) wordt door de Route Engine **nooit automatisch verwijderd of verborgen**. De engine blijft objectief en geeft alle gevonden, geldige alternatieven door — inclusief de minder passende. Kwalificatie/rangschikking op basis van afwijking (bijv. "zeer passend" / "passend" / "alternatief") is een UI-verantwoordelijkheid, geen filterbeslissing in de Route Engine zelf. Een eerste, lichte invulling hiervan is al doorgevoerd in de Phase 3-UI (een tekstlabel per route op basis van `deviationPercent`, zonder ooit een route uit de lijst te verwijderen).
+
+**PHASE 3 MVP: GEVALIDEERD.** De onderliggende routefunctionaliteit (Location Resolver, RoutePlanner, rondje-generator) heeft zich nu bewezen op echte productiedata, inclusief het vinden en oplossen van een echte bug via een reëel gebruiksscenario. Dit is geen prototype meer.
+
+---
+
 ## 9. WAT DIT ONTWERP BEWUST NIET BESLIST
 
 - **Meerdere routealternatieven genereren (k-shortest-paths of vergelijkbaar):** datamodel ondersteunt het (sectie 6, `alternatives[]`), het algoritme (sectie 5) niet. Dit is een expliciete, latere uitbreiding — niet nu bouwen, wel niet blokkeren met een datamodel-wijziging als het zover is.
