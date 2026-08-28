@@ -506,6 +506,13 @@ export default function ImportAdminPage() {
           Start edge-matching
         </button>
         <button
+          disabled={running !== null}
+          onClick={() => setProgress({ nodes: 0, edges: 0 })}
+          style={{ padding: "10px 16px", fontSize: 16 }}
+        >
+          Reset voortgang
+        </button>
+        <button
           disabled={running === null}
           onClick={() => {
             stopRef.current = true;
