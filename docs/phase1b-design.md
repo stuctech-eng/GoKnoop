@@ -311,6 +311,30 @@ De uiteindelijke merge-beslissing = combinatie van alle vier, nooit één signaa
 
 ---
 
+## 6B. EDGE-MATCHING RESULTAAT — VOLLEDIGE IMPORT (26-8-2026)
+
+Na de volledige import (13.152 sourceNodes → 11.003 logicalNodes → 28.060 edges) is de endpoint-matching (sectie 5, 5m tolerantie) uitgevoerd op de complete dataset, niet meer op een steekproef.
+
+**Resultaat (56.120 endpoints, 28.060 edges):**
+```
+Confidence-verdeling (endpoints): exact 35.215, close 2.412, tolerance 1.910, unmatched 16.583
+Gemiddelde matchafstand: 0,224m — Max: 4,959m
+Ambigu (meerdere kandidaten binnen 5m): 341 (0,6%)
+
+Edge-niveau:
+matched (beide kanten):        16.345 (58,3%)
+unmatched_start of _end:        6.847 (24,4%) — deels bruikbaar, één kant ontbreekt
+unmatched_both (volledig los):  4.868 (17,4%)
+```
+
+**Diagnose van de 4.868 volledig geïsoleerde edges (steekproef 300):** mediaan afstand tot de werkelijk dichtstbijzijnde node is **514 meter** (94% ligt >100m weg, tot 2,3km). Slechts 0,7% zit binnen 20m. **Conclusie: dit is het regio-dekkingsgat-effect uit Phase 1C (sectie 1, "~21% unmatched"-bevinding), nu op landelijke schaal — geen bug, geen matching-fout.** Edges in de `_vrij`-laag sluiten aan op knooppunten die zelf niet in de `_vrij`-nodelaag zitten (andere, niet-vrijgegeven regio). Regio-verdeling van de steekproef (Utrecht 41%, Drenthe 34%, rest verspreid) weerspiegelt vooral welke regio's toevallig als testgebied zijn gebruikt, geen aanwijzing voor een apart probleem.
+
+**Gevolg:** deze edges blijven gewoon bestaan met `matchConfidence` correct ingevuld (conform pre-flight checklist punt 5 — geen stille drops). Ze tellen mee in de komende graph-connectivity-analyse, maar dragen niets bij aan de bereikbaarheid.
+
+**Nog openstaand, niet blokkerend:** een klein gat van 7 edges tussen het door de WFS gerapporteerde totaal (28.067) en het aantal unieke `sourceObjectId`'s na deduplicatie (28.060) is nog niet verklaard. Vermoedelijke oorzaak: enkele bronrecords zonder geldige lijngeometrie, die de parser stilzwijgend overslaat. Te onderzoeken, maar te klein om de voortgang te blokkeren.
+
+---
+
 ## 7. GRAPH-CONNECTIVITY VALIDATIE
 
 Een hoog matched-percentage op edge-niveau (sectie 5) is niet voldoende om te weten of de graph bruikbaar is voor routegeneratie. Een dataset kan bijvoorbeeld 99% matched zijn en toch een cruciale verbinding missen waardoor een heel gebied onbereikbaar wordt vanuit de rest van het netwerk.
