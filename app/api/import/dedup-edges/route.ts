@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 /**
  * Eenmalige opschoonroute: verwijdert dubbele edge-documenten die zijn

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 /**
  * Zelfde opschoonlogica als dedup-edges, nu voor sourceNodes. Nodig omdat de
