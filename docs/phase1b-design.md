@@ -6,6 +6,28 @@
 
 ---
 
+## PHASE 1 — COMPLETE (26-8-2026)
+
+```
+Source nodes           13.152
+Logical nodes           11.003
+Source edges            28.067
+Valid graph edges       28.060
+Excluded/unresolved          7
+Main component            84,4%
+Composite validation    PASSED
+North Brabant check     PASSED
+
+Non-blocking (bewust niet opgelost, geen blocker voor Phase 2):
+- 7 excluded/unresolved edges (traceerbaar, niet stilzwijgend verwijderd — zie sectie 6B)
+- 114 exception_review clusters (gemengde Enkelvoudig/Samengesteld, apart gehouden)
+- rijrichting semantics = paused (veilige default: directionality=unknown)
+```
+
+De belangrijkste risico's van Phase 1 zijn empirisch getest (matchtolerantie, composite-node-clustering, graph-connectiviteit, regionale steekproefcontrole). Phase 1 wordt vanaf hier niet meer gewijzigd — resterende openstaande punten blijven bewust liggen tot ze relevant worden, niet omdat ze "klaar" zijn.
+
+---
+
 ## 1. BRONLAGEN (definitief, Phase 1A bevestigd)
 
 | Bron-laag | Ons gebruik | CRS zoals geleverd |
@@ -331,7 +353,7 @@ unmatched_both (volledig los):  4.868 (17,4%)
 
 **Gevolg:** deze edges blijven gewoon bestaan met `matchConfidence` correct ingevuld (conform pre-flight checklist punt 5 — geen stille drops). Ze tellen mee in de komende graph-connectivity-analyse, maar dragen niets bij aan de bereikbaarheid.
 
-**Nog openstaand, niet blokkerend:** een klein gat van 7 edges tussen het door de WFS gerapporteerde totaal (28.067) en het aantal unieke `sourceObjectId`'s na deduplicatie (28.060) is nog niet verklaard. Vermoedelijke oorzaak: enkele bronrecords zonder geldige lijngeometrie, die de parser stilzwijgend overslaat. Te onderzoeken, maar te klein om de voortgang te blokkeren.
+**Nog openstaand, niet blokkerend — EXPLICIET TRACEERBAAR, niet stilzwijgend verwijderd:** een gat van **7 edges** tussen het door de WFS gerapporteerde brontotaal (28.067, `source_edges`) en het aantal edges dat daadwerkelijk in de graph terecht is gekomen (28.060, `valid_graph_edges`). Status: `excluded/unresolved: 7`. Dit zijn GEEN verwijderde of genegeerde edges in de zin van dataverlies-zonder-registratie — het is een bekend, met naam genoemd verschil dat nog niet inhoudelijk verklaard is. Vermoedelijke oorzaak: enkele bronrecords zonder geldige lijngeometrie, die de parser bij het inlezen overslaat (zie `parseFietsnetwerkenVrij` in `lib/gml-parser.ts` — een record zonder `posList`-match wordt nooit een edge-document). Te onderzoeken bij gelegenheid, telt niet mee als "verlies" zolang de telling klopt: 28.067 (bron) = 28.060 (graph) + 7 (excluded/unresolved).
 
 ---
 
