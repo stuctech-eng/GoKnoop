@@ -40,6 +40,13 @@ export type LoopGenerationResult = {
   foundCount: number;
   targetDistanceM: number;
   estimatedRadiusM: number;
+  diagnostics: {
+    candidatesFound: number;
+    outboundFailed: number;
+    inboundFailed: number;
+    duplicateRejected: number;
+    succeeded: number;
+  };
 };
 
 const DEFAULT_CIRCUITY_FACTOR = 1.6; // herijkt 28-8-2026 op basis van eerste productiemeting (was 1.3, zie hieronder)
@@ -184,17 +191,25 @@ export function generateLoopRoutes(
   );
 
   const candidates: LoopCandidate[] = [];
+  let outboundFailed = 0;
+  let inboundFailed = 0;
 
   for (const waypointId of waypointCandidates) {
     const outboundResult = computeRoute(provider, datasetVersionId, startNodeId, waypointId);
-    if ("reason" in outboundResult) continue;
+    if ("reason" in outboundResult) {
+      outboundFailed++;
+      continue;
+    }
 
     // Terugweg MOET de heenweg-edges vermijden -- anders is het geen rondje,
     // maar een rechte lijn heen-en-terug (verdubbelt gewoon dezelfde route).
     const inboundResult = computeRoute(provider, datasetVersionId, waypointId, startNodeId, {
       avoidEdgeIds: outboundResult.edges,
     });
-    if ("reason" in inboundResult) continue;
+    if ("reason" in inboundResult) {
+      inboundFailed++;
+      continue;
+    }
 
     const loop = combineIntoLoop(datasetVersionId, outboundResult, inboundResult);
     const deviationM = Math.abs(loop.distanceM - targetDistanceM);
@@ -211,12 +226,17 @@ export function generateLoopRoutes(
   candidates.sort((a, b) => a.deviationM - b.deviationM);
 
   const accepted: LoopCandidate[] = [];
+  let duplicateRejected = 0;
   for (const candidate of candidates) {
     if (accepted.length >= count) break;
     const isDuplicate = accepted.some(
       (a) => edgeOverlapRatio(a.route.edges, candidate.route.edges) > overlapThreshold
     );
-    if (!isDuplicate) accepted.push(candidate);
+    if (isDuplicate) {
+      duplicateRejected++;
+      continue;
+    }
+    accepted.push(candidate);
   }
 
   return {
@@ -225,5 +245,12 @@ export function generateLoopRoutes(
     foundCount: accepted.length,
     targetDistanceM,
     estimatedRadiusM,
+    diagnostics: {
+      candidatesFound: waypointCandidates.length,
+      outboundFailed,
+      inboundFailed,
+      duplicateRejected,
+      succeeded: candidates.length,
+    },
   };
 }
