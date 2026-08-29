@@ -892,14 +892,17 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
     volledig, geen enkele update gedurende 5+ minuten, gevolgd door een opgehoopte
     inhaalslag van state-transities bij hervatting) — zie de uitgewerkte analyse en
     consequentie in sectie 16. Dit is een architecturale grens, geen kalibratievraagstuk.
-11B. ✅ (infrastructuur klaar; ECHTE validatie nog te doen door de gebruiker zelf)
-    Screen Wake Lock (sectie 16, MVP-beslissing) — `ScreenWakeLockController`
-    (9 tests, tsc schoon), aangevraagd bij sessiestart, vrijgegeven bij Stop/
-    PERMISSION_DENIED/unmount, automatische her-aanvraag via `visibilitychange`.
-    Geïntegreerd in de debugharness (paneel toont "wake lock actief"). **Expliciet géén
-    garantie dat dit scherm-uit/pagina-opschorting volledig voorkomt** — zie het
-    validatieprotocol in sectie 16 (implementatiestap 11B), nog uit te voeren op een
-    echt toestel vóór dit als "Web-MVP navigatie = scherm-aan navigatie" geldt.
+11B. ✅ GEVALIDEERD OP ECHT TOESTEL (29-8-2026) — Screen Wake Lock (sectie 16,
+    MVP-beslissing). `ScreenWakeLockController` (9 tests, tsc schoon), geïntegreerd in
+    de debugharness. **Validatieprotocol volledig doorlopen op een iPhone (Safari):**
+    Wake Lock actief direct bij start; scherm bleef ~13 minuten onafgebroken uit
+    zichzelf actief (door de gebruiker bevestigd, geen handmatige aanraking nodig); GPS-
+    samples bleven continu binnenkomen, geen enkele `GPS_LOST` opgetreden; state-machine
+    toonde een nette, regelmatige `POSSIBLE_DEVIATION ↔ OFF_ROUTE`-cadans (geen
+    opeenstapeling); Wake Lock correct vrijgegeven bij Stop (`false`, met logregel).
+    **Conclusie: "Web-MVP navigatie = scherm-aan navigatie" is een houdbare, geteste
+    aanname**, niet langer alleen een theoretische verwachting. Achtergrond-navigatie
+    (scherm uit) blijft een bevestigde, bewuste MVP-beperking (sectie 16), geen bug.
 12. Navigation-UI (buiten scope van dit document)
 ```
 
