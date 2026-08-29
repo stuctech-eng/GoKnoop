@@ -41,7 +41,14 @@ import "maplibre-gl/dist/maplibre-gl.css";
 const DEMO_STYLE_URL = "https://demotiles.maplibre.org/style.json";
 // Utrecht-omgeving, dezelfde regio als de stap 11-iPhone-tests -- geen diepere betekenis, alleen een zinvol startpunt.
 const INITIAL_CENTER: [number, number] = [5.1214, 52.0907]; // MapLibre: [lon, lat], LET OP omgekeerd t.o.v. de eigen Point-conventie (x=RD-oost, y=RD-noord)
-const INITIAL_ZOOM = 13;
+// BEWUST LAAG: de publieke demo-stijl is een wereldkaart-op-lage-resolutie (landen als
+// vlakken), geen straatniveau-dataset. Op een hoog zoomniveau (bijv. 13) is er geen data
+// meer -- je ziet dan alleen de vlakkleur van het land waar je middenin zit, wat als een
+// "lege" kaart oogt terwijl het renderen zelf prima werkt. Zoom 4 toont daadwerkelijk
+// landgrenzen, genoeg om de integratie zelf te bewijzen (stap 12.2's enige doel). Een
+// straatniveau-geschikte stijl voor Nederland is een APARTE, nog te nemen beslissing bij
+// stap 12.3 (route-visualisatie) -- hier niet stilzwijgend vooruitgelopen.
+const INITIAL_ZOOM = 4;
 
 type LoadStatus = "loading" | "loaded" | "error";
 
