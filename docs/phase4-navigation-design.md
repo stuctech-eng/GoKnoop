@@ -807,7 +807,23 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
     pingpong-preventie en U-bocht-vrijheid, geen enkele waarde aangewezen als correct.
     Dit zijn geldig-gebleken ranges uit één simulatiesessie, geen definitief besluit —
     verdere kalibratie tegen meer/andere scenario's blijft nodig vóór productie
-11. Echte GPS op iPhone (BrowserGeolocationSource, sectie 4)
+11. ✅ (adapter + debugharness klaar; ECHTE meting nog te doen door de gebruiker zelf)
+    Echte GPS op iPhone (sectie 4) — `BrowserGeolocationSource` (11 tests, tsc schoon,
+    Geolocation API geïnjecteerd zodat testbaar zonder DOM) implementeert exact dezelfde
+    `GpsSource`-interface als de simulator (stap 1) — `navigator.geolocation` komt nergens
+    anders in het pakket voor. Daarnaast `app/debug/navigation/page.tsx`: een in-app
+    debugharness (Master System sectie 15 — geen Web Inspector/devtools nodig) die de
+    volledige keten (GpsFixEvaluator → matcher → progress → DeviationDetector →
+    NavigationSessionController) tegen echte GPS-data draait, met een live paneel
+    (state, gps-health, matched position, progress, temporaryAvoidEdgeIds) en instelbare
+    kalibratie-invoervelden (uitgangspunten uit stap 10, niet vastgezet). Geen
+    netwerkverkeer — reroute wordt hier alleen mechanisch getoond, nog niet live aan
+    `POST /api/route` gekoppeld (vereist resolveNearestNodes()/een live GraphProvider,
+    bewust uitgesteld om deze harness een zuiver meetinstrument te houden).
+    **Kan hier niet op een echt device getest worden** — de 228 tests bewijzen dat de
+    adapter en de bekabeling correct zijn opgebouwd, niet dat een echte iPhone-fietsrit
+    het verwachte gedrag oplevert. Die meting is de eerstvolgende stap, door de gebruiker
+    zelf, vóórdat kalibratiewaarden ergens definitief worden vastgezet.
 12. Navigation-UI (buiten scope van dit document)
 ```
 
