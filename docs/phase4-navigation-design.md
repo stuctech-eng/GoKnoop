@@ -759,8 +759,13 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
     tot in REROUTED)
 3.  ✅ GPS-metadata / navigation clock (sectie 13B, DEFINITIEF herzien naar een
     onafhankelijke monotone NavigationClock — zie sectie 13B) — 36 tests, tsc schoon
-4.  Candidate-based route-position matcher (sectie 5, afstand + heading + continuïteit + snelheid)
-5.  Progress calculation (sectie 8)
+4.  ✅ Candidate-based route-position matcher (sectie 5, afstand + heading + continuïteit +
+    snelheid) — 29 tests, tsc schoon; kern-testcase parallelle trajecten bevestigt dat
+    pure afstandsmatching faalt en multi-signal scoring dat corrigeert. Geometrie-wiskunde
+    verplaatst naar matching/geometry.ts, hergebruikt door de stap-1 track-builder
+5.  ✅ Progress calculation (sectie 8) — 25 tests, tsc schoon; matched geometrie-segment
+    → Route.edges[]-index → cumulatieve afstand, edge.distanceM leidend (niet de rauwe
+    geometrieafstand)
 6.  Deviation detection (sectie 9)
 7.  Reroute-context (sectie 10/11, incl. temporaryAvoidEdgeIds en RECENT_ROUTE_MEMORY —
     nog los van de exacte kalibratiewaarde)
