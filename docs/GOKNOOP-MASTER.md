@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1 ✅ AKKOORD, 12.2 ✅ GEVALIDEERD, 12.3 (route-visualisatie) B-G ✅ gebouwd, iPhone-validatie (12.3H) nog te doen
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1 ✅ AKKOORD, 12.2 ✅ GEVALIDEERD, 12.3 ✅ GO (A-H compleet, echte iPhone-validatie geslaagd) — klaar voor 12.4
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -302,8 +302,8 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
            worker.mjs")` aanroepen.
       Referentie-implementatie: `app/debug/map/page.tsx`.
 
-12.3  ⬜ IN UITVOERING (12.3A-G ✅, 12.3H nog te doen) -- opgedeeld (na review 29-8-2026),
-      STRIKT in deze volgorde, elke deelstap moet kloppen vóór de volgende begint:
+12.3  ✅ GO (A-H compleet, 29-8-2026) -- opgedeeld (na review 29-8-2026), STRIKT in deze
+      volgorde uitgevoerd, elke deelstap klopte vóór de volgende begon:
 
       12.3A  ✅ DEFINITIEF -- kaartstijl: OpenFreeMap Liberty
              (`https://tiles.openfreemap.org/styles/liberty`), niet Positron. Liberty geeft
@@ -331,9 +331,11 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
              6 gevraagde scenario's (2-edge route, multi-edge volgorde, parallelle edges,
              distance-invariant onaangetast, lege/ongeldige geometrie, bounds voor auto-fit).
              244/244 tests totaal, `tsc` schoon.
-      12.3H  ⬜ NOG TE DOEN -- echte iPhone-validatie van de routevisualisatie zelf
-             (leesbaarheid, zoomniveaus, performance, noordoriëntatie, "begrijp je de route
-             binnen één seconde?").
+      12.3H  ✅ ECHTE IPHONE-VALIDATIE GESLAAGD (29-8-2026): Liberty rustig en leesbaar,
+             route springt duidelijk naar voren tegen het gedempte kleurpalet; volgorde
+             12→34→56→78 in één oogopslag begrijpelijk; geen rotatie bij twee-vinger-
+             draaien; pannen (één vinger) en zoomen (twee vingers) werken beide vlot;
+             geen haperingen; knooppuntnummers leesbaar op elk getest zoomniveau.
 
       Architectuurregel bevestigd, niet geschonden: `lib/navigation/` en `lib/route-engine/`
       bevatten geen enkele MapLibre-/GeoJSON-import. Alleen `lib/map/route-geometry-adapter.ts`
