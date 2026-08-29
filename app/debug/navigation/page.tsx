@@ -174,6 +174,17 @@ export default function NavigationDebugHarness() {
         }
       }
 
+      // checkGpsHealth() kan op zichzelf al een transitie veroorzaken (bijv. OFF_ROUTE ->
+      // GPS_LOST na een lange stilte) VOORDAT deze sample verwerkt wordt. Expliciet los
+      // loggen, anders toont het paneel alleen de NETTO verandering per sample en blijft
+      // zo'n tussenstap onzichtbaar.
+      const beforeHealthCheck = stateMachine.getState();
+      controller.checkGpsHealth();
+      const afterHealthCheck = stateMachine.getState();
+      if (beforeHealthCheck !== afterHealthCheck) {
+        appendLog(`state: ${beforeHealthCheck} -> ${afterHealthCheck} (GPS-gezondheidscheck)`);
+      }
+
       setRawSample(sample);
       const outcome = controller.processGpsSample(sample);
       setGpsHealth({ isSignalLost: detector.isGpsSignalLost() });
