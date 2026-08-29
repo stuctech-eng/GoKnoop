@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1 ✅ AKKOORD, 12.2 (MapLibre-basis) ✅ gebouwd, echte iPhone-test nog te doen door de gebruiker
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1 ✅ AKKOORD, 12.2 ✅ GEVALIDEERD, 12.3 (route-visualisatie) B-G ✅ gebouwd, iPhone-validatie (12.3H) nog te doen
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -283,12 +283,61 @@ Stap 12 is geslaagd wanneer:
 Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geïsoleerd stuk bewijzen, dan uitbreiden — niet in één keer een compleet scherm bouwen. Geen productiecode vóórdat de informatiehiërarchie (12.1) akkoord is.
 
 ```
-12.1  UX/wireframe -- het scherm definitief maken (informatieniveaus, Start Guidance,
-      kleurgebruik/toon). Geen productiecode voordat dit akkoord is.
-12.2  MapLibre-basis -- correct integreren in Next.js/PWA, eenvoudige kaartstijl om
-      de integratie zelf te bewijzen (nog geen route/positie erop)
-12.3  Route-visualisatie -- route-geometrie tekenen (uit het bestaande Route-object,
-      geen nieuwe geometrieberekening)
+12.1  ✅ AKKOORD -- UX/wireframe, drie-fasen A/B/C (sectie 5.4)
+12.2  ✅ GEVALIDEERD OP ECHTE IPHONE (29-8-2026) -- MapLibre GL JS draait betrouwbaar in
+      Next.js/PWA. Publieke demo-stijl gebruikt puur als technische test (geen productiestijl).
+      Noordgericht bevestigd: sleep-/pinch-rotatie uitgeschakeld, pannen/zoomen werkt.
+
+      TWEE ECHTE VALKUILEN GEVONDEN EN OPGELOST (bewaren voor een volgende sessie, geen
+      architectuurfouten, wel MapLibre v6 + Next.js/Turbopack-specifieke eigenaardigheden):
+        1. `maplibre-gl` v6 is EEN PURE ESM-PACKAGE ZONDER `default`-export.
+           `import maplibregl from "maplibre-gl"` faalt stil (`undefined`). Gebruik
+           `import * as maplibregl from "maplibre-gl"` (of named imports zoals `{ Map }`).
+        2. Turbopack (Next.js' standaardbundelaar) breekt de automatische worker-URL-
+           resolutie van MapLibre v6 (tile-verwerking gebeurt in een Web Worker). Gevolg:
+           de kaart *mount* (canvas/achtergrondkleur/besturing werken), maar er wordt nooit
+           een tegel opgevraagd -- blijft hangen op "loading". Fix: `maplibre-gl-worker.mjs`
+           EN zijn vereiste sibling `maplibre-gl-shared.mjs` in `public/` plaatsen, en vóór
+           de eerste `new Map()`-aanroep één keer `maplibregl.setWorkerUrl("/maplibre-gl-
+           worker.mjs")` aanroepen.
+      Referentie-implementatie: `app/debug/map/page.tsx`.
+
+12.3  ⬜ IN UITVOERING (12.3A-G ✅, 12.3H nog te doen) -- opgedeeld (na review 29-8-2026),
+      STRIKT in deze volgorde, elke deelstap moet kloppen vóór de volgende begint:
+
+      12.3A  ✅ DEFINITIEF -- kaartstijl: OpenFreeMap Liberty
+             (`https://tiles.openfreemap.org/styles/liberty`), niet Positron. Liberty geeft
+             meer geografische context, past beter bij een fietsroute-app; Positron blijft
+             een mogelijk toekomstig alternatief. Beide zijn naast elkaar getest op een echte
+             iPhone (`app/debug/map-styles/page.tsx`) vóór deze keuze.
+      12.3B  ✅ Route-object -> kaartgeometrie: `lib/map/route-geometry-adapter.ts`
+             (`buildRouteGeoJson`). EENRICHTINGS-adapter -- hergebruikt `RouteProgressModel`
+             (stap 5) voor de samengevoegde geometrie/edge-grenzen, GEEN nieuw parallel
+             route-datamodel. Levert platte, lokaal getypeerde GeoJSON-achtige objecten
+             (geen `@types/geojson`-afhankelijkheid nodig in de adapter zelf). Parallelle
+             edges tussen dezelfde nodes worden niet gededupliceerd (expliciet getest).
+      12.3C  ✅ Route getekend: donkerteal (`#085041`, dezelfde kleur als de 12.1-wireframe),
+             `line-width: 5`, ronde lijnstijl.
+      12.3D  ✅ Knooppunten: witte cirkel met donkerteal rand + het ECHTE knooppuntnummer
+             als label (geen fictieve waarden) -- klein, niet concurrerend met de routelijn.
+      12.3E  ✅ Auto-fit (`map.fitBounds(bounds, { padding: 60 })`) + bestaand 12.2-kaartgedrag
+             (pannen/zoomen aan, rotatie uit, noord boven, resize/cleanup) ongewijzigd
+             hergebruikt.
+      12.3F  ✅ Debugpagina: `app/debug/map-route/page.tsx` -- vaste test-`Route` (3 edges,
+             met een knik, om meerdere segmenten te tonen), Liberty, route + knooppunten +
+             auto-fit. Geen live GPS, geen positie-marker, geen navigatiepijl, geen
+             deviation/rerouting (bewust uitgesteld tot 12.4+).
+      12.3G  ✅ Tests: `lib/map/route-geometry-adapter.test.ts`, 7 tests dekken exact de
+             6 gevraagde scenario's (2-edge route, multi-edge volgorde, parallelle edges,
+             distance-invariant onaangetast, lege/ongeldige geometrie, bounds voor auto-fit).
+             244/244 tests totaal, `tsc` schoon.
+      12.3H  ⬜ NOG TE DOEN -- echte iPhone-validatie van de routevisualisatie zelf
+             (leesbaarheid, zoomniveaus, performance, noordoriëntatie, "begrijp je de route
+             binnen één seconde?").
+
+      Architectuurregel bevestigd, niet geschonden: `lib/navigation/` en `lib/route-engine/`
+      bevatten geen enkele MapLibre-/GeoJSON-import. Alleen `lib/map/route-geometry-adapter.ts`
+      en de debugpagina's kennen MapLibre.
 12.4  Live positie -- GPS-positie uit de bestaande NavigationSession tonen.
       Geen tweede GPS-systeem, geen eigen matching in de kaartlaag.
 12.5  Richtings- en knooppuntlaag -- volgend knooppunt + afstand + grote
