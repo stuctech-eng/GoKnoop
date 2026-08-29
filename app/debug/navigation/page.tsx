@@ -144,6 +144,9 @@ export default function NavigationDebugHarness() {
             } catch {
               // al in PERMISSION_DENIED of een eindstadium -- geen actie nodig
             }
+            // De sessie is feitelijk nooit "actief" geworden -- de knop moet dus geen
+            // "Stop" meer tonen, maar de retry-tekst (zie de render-logica onderaan).
+            setRunning(false);
             setError("Locatietoestemming geweigerd.");
           } else {
             setError(`GPS-fout: ${err.message}`);
