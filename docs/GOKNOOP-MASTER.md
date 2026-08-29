@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.3 ✅ GO, 12.4 (live positie) gebouwd + getest, echte iPhone-validatie nog te doen
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.4 ✅ GO (echte iPhone-validatie geslaagd) — klaar voor 12.5 (richtings-/knooppuntlaag)
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -340,9 +340,8 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
       Architectuurregel bevestigd, niet geschonden: `lib/navigation/` en `lib/route-engine/`
       bevatten geen enkele MapLibre-/GeoJSON-import. Alleen `lib/map/route-geometry-adapter.ts`
       en de debugpagina's kennen MapLibre.
-12.4  ⬜ IN UITVOERING (gebouwd + getest, echte iPhone-validatie nog te doen) -- Live
-      positie -- GPS-positie uit de bestaande NavigationSession tonen.
-      Geen tweede GPS-systeem, geen eigen matching in de kaartlaag.
+12.4  ✅ GO (gebouwd, getest, echte iPhone-validatie geslaagd 29-8-2026) -- Live positie
+      uit de bestaande NavigationSession getoond op de kaart.
 
       KERNARCHITECTUUR, bewaakt en getest: `GPS → matching → navigation state →
       kaartmarker`, NOOIT `GPS → kaartmarker`. De marker wordt uitsluitend bijgewerkt
@@ -362,6 +361,19 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
       bewust anders dan de witte-vulling/teal-rand-knooppunten en de teal routelijn, nog
       GEEN richtingpijl, die hoort bij stap 12.5). `NavigationSessionController` blijft
       volledige eigenaar van de navigatiestatus; de kaartlaag leest er alleen van.
+
+      ECHTE IPHONE-VALIDATIE (29-8-2026): marker verscheen zichtbaar en correct op de
+      route (geprojecteerd via de matcher op het dichtstbijzijnde punt, aangezien de
+      gebruiker fysiek ~45km van de testroute stond), `nav state` klopte met de log,
+      meerdere snelle GPS-updates bij opstarten allemaal correct verwerkt.
+
+      BEWUST BEHOUDEN BEPERKING, geen bug: de testroute (stap 12.3's handmatige fixture,
+      drie rechte lijnstukken) volgt geen echte straten/fietspaden -- dat is een kenmerk
+      van de fixture (toegestaan voor "een pure visuele fixture/test", ontwerpregel
+      sectie 4), geen vervanging van een echte, door de Route Engine berekende `Route`.
+      Straatvolgende routegeometrie komt met een echte `Route` (via `POST /api/route`),
+      uiterlijk bij stap 12.7 (integratie in de bestaande Phase 3-flow) -- niet eerder
+      stilzwijgend aangenomen als al opgelost.
 
       249/249 tests totaal, `tsc` schoon. `lib/navigation/`/`lib/route-engine/` bevatten
       nog steeds geen MapLibre-import.
