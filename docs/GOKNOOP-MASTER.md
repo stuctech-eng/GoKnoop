@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 ✅ GEBOUWD + tests + fase A bevestigd op iPhone; B/C en de rest van de eindvalidatie bewaard voor één echte lokale testrit ná integratie in de Phase 3-flow
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 ✅ GEBOUWD; dataketen-fix (Route Engine → GraphEdge[]) ✅ gebouwd + getest; Start-knop-koppeling nog te doen
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -476,6 +476,37 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
 ```
 
 Ná 12.1-12.7 zelfstandig bewezen: integratie in de bestaande Phase 3-flow (na routekeuze, een "Start navigatie"-knop die hierheen leidt) en validatie met echte iPhone-GPS (`BrowserGeolocationSource`, al gebouwd en gevalideerd in stap 11).
+
+**Dataketen-fix vóór de Start-knop (29-8-2026), afgerond:** bij het inspecteren van de echte `app/page.tsx` bleek `selectedLoop.route` (de state ná routekeuze) alleen `edges: string[]` (ID's) te bevatten, geen volledige `GraphEdge[]`-objecten. De navigatie-engine (`buildRouteProgressModel`, en alles wat daarop bouwt) heeft juist die volledige objecten nodig (`edge.distanceM`, `edge.geometry` per edge) -- reconstructie vanuit de platte, samengevoegde `Route.geometry` zou een tweede, fragiel datamodel zijn (ontwerpregel: "GraphEdge blijft leidend", geen nieuw parallel model).
+
+**Oplossing, additief, geen breaking change:**
+- `lib/route-engine/resolve-route-edges.ts` (`resolveRouteEdges`) -- vertaalt `Route.edges[]`
+  terug naar volledige `GraphEdge[]`, uitsluitend via de bestaande
+  `GraphProvider.getEdgesFrom()` (geen nieuwe providermethode). Steunt op de garantie dat
+  `Route.nodes[i]`/`Route.edges[i]` 1-op-1 corresponderen (Phase 2-ontwerp sectie 6), filtert
+  ondubbelzinnig op edge-`id` (correct ook bij parallelle edges tussen dezelfde nodes).
+  Gooit een duidelijke fout bij een niet-resolveerbare edge, geen stil gat.
+- `LoopCandidate` (`lib/route-engine/loop-route-generator.ts`) uitgebreid met een NIEUW,
+  verplicht veld `resolvedEdges: GraphEdge[]` -- alle bestaande velden
+  (`route`/`nodes`/`edges`/`geometry`/`distanceM`) ONGEWIJZIGD. Alleen berekend voor de
+  daadwerkelijk geaccepteerde/teruggegeven kandidaten (niet voor afgewezen duplicaten --
+  geen verspilde `GraphProvider`-lookups).
+- `app/api/route/loop/route.ts` zelf hoefde NIET aangepast te worden -- die geeft `result`
+  ongewijzigd door aan `NextResponse.json()`, dus `resolvedEdges` stroomt automatisch mee.
+  Bestaande routeselectie (Phase 3, `app/page.tsx`) blijft ongewijzigd werken.
+- `Route.datasetVersionId` was al aanwezig op het bestaande `Route`-type (Phase 2) --
+  geen wijziging nodig om dit beschikbaar te houden voor de `NavigationSession`.
+
+**Geverifieerd, niet alleen aangenomen:** een integratietest draait de ECHTE
+`generateLoopRoutes()` tegen een 3x3-rastergraaf-fixture, voert `loop.resolvedEdges`
+rechtstreeks in `buildRouteProgressModel()` (Navigation Engine, stap 5), en bevestigt dat
+`model.totalDistanceM` exact overeenkomt met `loop.route.distanceM` -- de distance-invariant
+blijft intact over de grens Route Engine ↔ Navigation Engine heen. 273/273 tests totaal
+(6 nieuw), `tsc` schoon.
+
+**Nog te doen:** de "Start"-knop in `app/page.tsx` (die nu alleen `navigationStarted=true`
+zet en een placeholder-tekst toont) daadwerkelijk koppelen aan de nieuwe navigatie-UI,
+gevoed door `selectedLoop.resolvedEdges` in plaats van de testfixture uit `/debug/map-live`.
 
 **Eindvalidatie-checklist (na 12.7, één gebundelde echte iPhone-sessie, geen losse straattests per deelstap meer):**
 

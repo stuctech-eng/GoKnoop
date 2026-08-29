@@ -1,6 +1,7 @@
-import { GraphProvider, Route } from "./types";
+import { GraphProvider, GraphEdge, Route } from "./types";
 import { computeRoute } from "./route-engine";
 import { edgeOverlapRatio } from "./route-diversity";
+import { resolveRouteEdges } from "./resolve-route-edges";
 
 /**
  * Rondje-generator (Master Plan sectie 74/90: "Hoe ver? -> 20/30/40/50km ->
@@ -32,7 +33,20 @@ export type LoopCandidate = {
   actualDistanceM: number;
   deviationM: number;
   deviationPercent: number;
+  /**
+   * Volledige GraphEdge-objecten voor route.edges[], in dezelfde volgorde --
+   * ADDITIEF toegevoegd (GOKNOOP-MASTER.md sectie 7, Phase 4-UI-integratie),
+   * bestaande velden (route/nodes/edges/geometry/distanceM) ongewijzigd. De
+   * Navigation Engine (buildRouteProgressModel, stap 5) kan dit rechtstreeks
+   * consumeren zonder edges opnieuw te reconstrueren uit de platte geometrie
+   * -- "Route Engine → GraphEdge[] → Navigation Engine" blijft één bron van
+   * waarheid, geen tweede/parallel edge-datamodel.
+   */
+  resolvedEdges: GraphEdge[];
 };
+
+/** Interne, tussentijdse vorm vóór dedup -- resolvedEdges pas berekend voor de daadwerkelijk geaccepteerde kandidaten (geen verspilde GraphProvider-lookups voor afgewezen/duplicate kandidaten). */
+type LoopCandidateDraft = Omit<LoopCandidate, "resolvedEdges">;
 
 export type LoopGenerationResult = {
   loops: LoopCandidate[];
@@ -190,7 +204,7 @@ export function generateLoopRoutes(
     candidatesPerBucket
   );
 
-  const candidates: LoopCandidate[] = [];
+  const candidates: LoopCandidateDraft[] = [];
   let outboundFailed = 0;
   let inboundFailed = 0;
 
@@ -236,7 +250,10 @@ export function generateLoopRoutes(
       duplicateRejected++;
       continue;
     }
-    accepted.push(candidate);
+    accepted.push({
+      ...candidate,
+      resolvedEdges: resolveRouteEdges(provider, candidate.route),
+    });
   }
 
   return {
