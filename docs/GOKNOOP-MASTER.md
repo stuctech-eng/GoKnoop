@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1 ✅ AKKOORD, 12.2 ✅ GEVALIDEERD, 12.3 ✅ GO (A-H compleet, echte iPhone-validatie geslaagd) — klaar voor 12.4
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.3 ✅ GO, 12.4 (live positie) gebouwd + getest, echte iPhone-validatie nog te doen
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -340,8 +340,31 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
       Architectuurregel bevestigd, niet geschonden: `lib/navigation/` en `lib/route-engine/`
       bevatten geen enkele MapLibre-/GeoJSON-import. Alleen `lib/map/route-geometry-adapter.ts`
       en de debugpagina's kennen MapLibre.
-12.4  Live positie -- GPS-positie uit de bestaande NavigationSession tonen.
+12.4  ⬜ IN UITVOERING (gebouwd + getest, echte iPhone-validatie nog te doen) -- Live
+      positie -- GPS-positie uit de bestaande NavigationSession tonen.
       Geen tweede GPS-systeem, geen eigen matching in de kaartlaag.
+
+      KERNARCHITECTUUR, bewaakt en getest: `GPS → matching → navigation state →
+      kaartmarker`, NOOIT `GPS → kaartmarker`. De marker wordt uitsluitend bijgewerkt
+      vanuit een geaccepteerde `DeviationOutcome` (`reported_on_route`/
+      `reported_deviation`) van `DeviationDetector` -- die zelf alleen zo'n uitkomst
+      geeft ná een succesvolle `NavigationStateMachine`-transitie. Er is geen enkel pad
+      waarin een ruwe `GpsSample` rechtstreeks de marker beweegt.
+
+      `lib/map/position-marker-adapter.ts` (`buildPositionMarkerGeoJson`) -- zelfde
+      eenrichtings-adapterprincipe als `route-geometry-adapter.ts` (stap 12.3B): accepteert
+      uitsluitend een `MatchedPosition` (het resultaat van matching, nooit een ruwe sample),
+      puur, geen state. 5 tests, incl. een expliciete borging dat de functiesignature geen
+      los lat/lon-pad toestaat.
+
+      `app/debug/map-live/page.tsx`: route uit stap 12.3 hergebruikt (identieke testroute,
+      geen nieuwe geometrie), live positiemarker (solide teal vulling + witte rand --
+      bewust anders dan de witte-vulling/teal-rand-knooppunten en de teal routelijn, nog
+      GEEN richtingpijl, die hoort bij stap 12.5). `NavigationSessionController` blijft
+      volledige eigenaar van de navigatiestatus; de kaartlaag leest er alleen van.
+
+      249/249 tests totaal, `tsc` schoon. `lib/navigation/`/`lib/route-engine/` bevatten
+      nog steeds geen MapLibre-import.
 12.5  Richtings- en knooppuntlaag -- volgend knooppunt + afstand + grote
       richtingindicator (niveau 1)
 12.6  Progress/state-UI -- progress, ON_ROUTE, afwijking, GPS_LOST, rerouting,
