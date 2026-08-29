@@ -135,4 +135,15 @@ export class DeviationDetector {
   getLastMatch(): MatchedPosition | null {
     return this.lastMatch;
   }
+
+  /**
+   * Of het GPS-signaal momenteel als "kwijt" geldt (ontwerp sectie 12),
+   * puur navigatietijd-gebaseerd (stap 3). Voor gebruik door de
+   * implementatiestap-9-orchestratie (`NavigationSessionController`) --
+   * hergebruikt dezelfde interne `GpsFixEvaluator`-instantie, geen tweede,
+   * los bijgehouden gezondheidsstatus die uit de pas zou kunnen lopen.
+   */
+  isGpsSignalLost(): boolean {
+    return this.fixEvaluator.isSignalLost(this.options.gpsTimeoutMs);
+  }
 }
