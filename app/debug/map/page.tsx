@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 const DEMO_STYLE_URL = "https://demotiles.maplibre.org/style.json";
