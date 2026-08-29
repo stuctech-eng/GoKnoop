@@ -106,20 +106,6 @@ export default function NavigationDebugHarness() {
       return;
     }
 
-    let source: BrowserGeolocationSource;
-    try {
-      source = new BrowserGeolocationSource({
-        enableHighAccuracy: true,
-        onError: (err) => {
-          appendLog(`GPS-fout: [${err.code}] ${err.message}`);
-          setError(`GPS-fout: ${err.message}`);
-        },
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return;
-    }
-
     const clock = new SystemNavigationClock();
     const stateMachine = new NavigationStateMachine({
       deviationConfirmDurationMs,
@@ -140,11 +126,51 @@ export default function NavigationDebugHarness() {
     const progressTracker = new ProgressTracker(3);
     const rerouteTracker = new RerouteContextTracker();
 
-    stateMachine.start();
-    setState(stateMachine.getState());
-    appendLog("Sessie gestart, wacht op eerste GPS-fix...");
+    let source: BrowserGeolocationSource;
+    try {
+      source = new BrowserGeolocationSource({
+        enableHighAccuracy: true,
+        onError: (err) => {
+          appendLog(`GPS-fout: [${err.code}] ${err.message}`);
+          // Geolocation-standaard: code 1 = PERMISSION_DENIED. Dit is een APARTE state
+          // (ontwerp sectie 14), NOOIT hetzelfde pad als GPS_LOST -- code 2 (POSITION_UNAVAILABLE)
+          // en code 3 (TIMEOUT) zijn wél tijdelijke signaalproblemen en veranderen de state hier
+          // NIET; die lopen via de bestaande GPS_LOST-timeoutlogica (checkGpsHealth), niet hier.
+          if (err.code === 1) {
+            try {
+              controller.denyPermission();
+              setState(stateMachine.getState());
+              appendLog("state: -> PERMISSION_DENIED (toestemming geweigerd)");
+            } catch {
+              // al in PERMISSION_DENIED of een eindstadium -- geen actie nodig
+            }
+            setError("Locatietoestemming geweigerd.");
+          } else {
+            setError(`GPS-fout: ${err.message}`);
+          }
+        },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    let sessionStarted = false; // NavigationStateMachine.start() hoort bij de EERSTE fix, niet bij de knop (ontwerp sectie 14)
 
     const unsubscribe = source.subscribe((sample) => {
+      if (!sessionStarted) {
+        // Als denyPermission() ondertussen al is aangeroepen (state = PERMISSION_DENIED),
+        // start() zou daar een InvalidNavigationTransitionError geven -- dat kan hier
+        // legitiem gebeuren als een late, gebufferde sample nog binnenkomt na een weigering.
+        try {
+          stateMachine.start();
+          sessionStarted = true;
+          appendLog("state: NOT_STARTED -> ON_ROUTE (eerste GPS-fix ontvangen)");
+        } catch {
+          return; // sessie is inmiddels PERMISSION_DENIED/CANCELLED -- deze late sample negeren
+        }
+      }
+
       setRawSample(sample);
       const outcome = controller.processGpsSample(sample);
       setGpsHealth({ isSignalLost: detector.isGpsSignalLost() });
@@ -179,6 +205,8 @@ export default function NavigationDebugHarness() {
     unsubscribeRef.current = unsubscribe;
     healthIntervalRef.current = healthInterval;
     setRunning(true);
+    appendLog("Wacht op eerste GPS-fix of toestemmingsdialoog...");
+    setState(stateMachine.getState()); // NOT_STARTED, totdat de eerste fix of een weigering binnenkomt
   }
 
   function stop() {
@@ -243,11 +271,19 @@ export default function NavigationDebugHarness() {
 
       {error && <p style={{ color: "#b00020", fontSize: 13 }}>{error}</p>}
 
+      {state === "PERMISSION_DENIED" && (
+        <div style={{ background: "#fff3cd", padding: 12, borderRadius: 8, marginTop: 8 }}>
+          <p style={{ fontSize: 13, margin: 0 }}>
+            Locatietoestemming geweigerd. Sta locatietoegang toe voor deze site in de Safari-instellingen en probeer opnieuw.
+          </p>
+        </div>
+      )}
+
       <button
         onClick={running ? stop : start}
         style={{ width: "100%", padding: 14, fontSize: 16, marginTop: 12, background: running ? "#b00020" : "#1a7a3c", color: "white", border: "none", borderRadius: 8 }}
       >
-        {running ? "Stop" : "Start"}
+        {running ? "Stop" : state === "PERMISSION_DENIED" ? "Opnieuw proberen" : "Start"}
       </button>
 
       <div style={panelStyle}>
