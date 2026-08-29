@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "firebase-admin": "14.2.0",
+    "maplibre-gl": "^6.6.0",
     "next": "14.2.35",
     "proj4": "^2.15.0",
     "react": "18.3.1",

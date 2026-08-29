@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1 (UX/wireframe, drie-fasen A/B/C) ✅ AKKOORD 29-8-2026, klaar voor 12.2 (MapLibre-basis)
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1 ✅ AKKOORD, 12.2 (MapLibre-basis) ✅ gebouwd, echte iPhone-test nog te doen door de gebruiker
 ```
 
 **Live app:** https://go-knoop.vercel.app
