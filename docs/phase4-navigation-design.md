@@ -430,44 +430,72 @@ Dit is het kernprobleem dat de state machine (sectie 14) oplost. Zonder hysteres
 
 **Toegevoegd na review (29-8-2026) als expliciet, apart onderdeel van het contract** — niet zomaar impliciet aangenomen dat "de laatste sample" altijd voldoende is.
 
-`GpsSample` (sectie 2) bevat al `timestamp`, `accuracyM`, `lat`/`lon`, `speedMps`, `headingDeg`. Het punt hier is dat `NavigationSession` drie conceptueel verschillende tijd-/positie-begrippen uit elkaar moet houden, niet één ervan laten doen alsof het de andere twee vervangt:
+**HERZIEN EN DEFINITIEF VASTGELEGD (29-8-2026, na implementatiestap 3):** de oorspronkelijke formulering hieronder omschreef *navigation time* nog als "gebaseerd op device-tijd van de sample". Bij de implementatie (`lib/navigation/clock/`) is gebleken dat dit de verkeerde architectuur is: een GPS-device-timestamp is meetgegeven, geen systeemklok — hij kan (clock-drift, tijdsynchronisatie, gecachete/oude fixes) niet-monotoon zijn of grote sprongen maken. State-machine-timers mogen daar niet van afhangen. **Besluit: niet de implementatie aanpassen aan het document, het document aanpassen aan de betere, geïmplementeerde architectuur.** De drie tijdbegrippen zijn hieronder herschreven naar de definitieve versie.
+
+`GpsSample` (sectie 2) bevat `timestamp`, `accuracyM`, `lat`/`lon`, `speedMps`, `headingDeg`. `NavigationSession` houdt drie conceptueel verschillende tijd-/positiebegrippen strikt uit elkaar:
 
 ```
-GPS update       -- een ruwe, binnenkomende sample. Kan van lage kwaliteit zijn (sectie 12),
-                     kan ruis bevatten, wordt NIET automatisch de nieuwe waarheid.
+GPS timestamp     -- GpsSample.timestamp: bronmetadata, ruw meetgegeven van het device.
+                     Gebruikt voor diagnostiek (o.a. het detecteren van niet-monotone of
+                     abnormaal springende device-tijd, zie GpsFixEvaluator) en voor
+                     track-tijd bij het opbouwen/afspelen van een GPS-track (bijv. de
+                     SimulatedGpsSource-tests, implementatiestap 1). NOOIT gebruikt om te
+                     bepalen of GPS "lost" is, en NOOIT de bron van navigation time.
 
-navigation time   -- de tijd zoals de NavigationSession-logica die hanteert voor
-                     tijdgebaseerde beslissingen (bevestigingsvenster sectie 11, cooldown
-                     sectie 11, GPS_TIMEOUT_S sectie 12). Gebaseerd op device-tijd van de
-                     sample (`GpsSample.timestamp`), NIET op ontvangsttijd van de browser/
-                     app zelf -- die kunnen uiteenlopen bij batching/vertraging.
+navigation time    -- een ONAFHANKELIJKE, monotone klok (NavigationClock, implementatie-
+                     stap 3), losstaand van elke GPS-sample-timestamp. Uitsluitend
+                     hiervoor gebruikt: timers, timeouts, GPS_LOST-detectie, afwijkings-
+                     bevestiging (sectie 11) en reroute-cooldown (sectie 11). Een GPS-
+                     timestamp beïnvloedt NOOIT de beslissing of een GPS-signaal "lost" is
+                     -- dat is uitsluitend een functie van verstreken navigation time sinds
+                     de laatste geldige fix.
 
-last valid fix    -- de laatste GPS-sample die daadwerkelijk gebruikt is voor map matching
-                     (dus: voldoende nauwkeurig, sectie 12). Kan ouder zijn dan de laatste
-                     ontvangen GPS update als recente samples zijn afgekeurd op accuracy.
+last valid fix     -- de laatste GPS-sample die daadwerkelijk geaccepteerd is (voldoende
+                     nauwkeurig én geldig, sectie 12) voor gebruik in map matching.
+                     lastValidFixAt wordt opgeslagen ALS NAVIGATION TIME (het moment
+                     waarop de fix, gemeten op de onafhankelijke klok, geaccepteerd werd)
+                     -- niet als GPS timestamp. Kan ouder zijn dan de laatst ontvangen GPS
+                     update als recente samples zijn afgekeurd op accuracy of geldigheid.
 ```
 
 **Waarom dit onderscheid ertoe doet — het is direct de tijdbasis voor bijna elk ander mechanisme in dit document:**
 
 | Mechanisme | Gebruikt welk tijdbegrip |
 |---|---|
-| `GPS_LOST`-detectie (sectie 12) | Verstreken tijd sinds *last valid fix*, niet sinds de laatste (mogelijk afgekeurde) GPS update |
-| Afwijkingsbevestiging (sectie 11) | Verstreken *navigation time* sinds `deviation.sinceTimestamp`, gebaseerd op device-tijdstempels van de samples, niet op wanneer de app ze verwerkte |
-| Reroute-cooldown (sectie 11) | *Navigation time* sinds `reroute.lastRerouteAt` |
-| Snelheid/heading-fallback (sectie 13) | Tijdsverschil tussen twee opeenvolgende *geldige* samples (voor de vector-berekening), dus eveneens *last valid fix*-tijdstippen |
+| `GPS_LOST`-detectie (sectie 12) | Verstreken *navigation time* sinds `lastValidFixAt` (navigation time) — GPS timestamp speelt hier geen rol, ook niet als diagnostisch signaal |
+| Afwijkingsbevestiging (sectie 11) | Verstreken *navigation time* sinds het eerste afwijkingssignaal, gemeten op de onafhankelijke klok |
+| Reroute-cooldown (sectie 11) | *Navigation time* sinds `reroute.lastRerouteAt` (navigation time) |
+| Snelheid/heading-fallback (sectie 13) | Tijdsverschil tussen twee opeenvolgende *geldige* samples, gemeten in navigation time |
 | Toekomstige ETA (`durationEstimate`, blijft `null` in MVP) | Zou op dezelfde basis moeten bouwen — reden om dit nu al goed vast te leggen |
-| Batterij/performance-throttling (sectie 16) | *GPS update*-tijd (elke binnenkomende sample, ook afgekeurde, telt mee voor de vraag "hoe vaak komt er data binnen") |
-| Diagnose van slechte GPS-ontvangst (`gpsHealth`, sectie 2) | Combinatie: *GPS update*-frequentie vs. *last valid fix*-frequentie — een groot verschil tussen beide is zelf een signaal (veel updates, weinig bruikbare) |
+| Batterij/performance-throttling (sectie 16) | *Navigation time* van elke binnenkomende sample (`lastUpdateAt`), ook afgekeurde — "hoe vaak komt er data binnen" is een navigatietijd-vraag, geen GPS-tijd-vraag |
+| Diagnose van slechte GPS-ontvangst (`gpsHealth`, sectie 2) | Combinatie van `lastUpdateAt`/`lastValidFixAt` (beide navigation time) — een groot verschil tussen beide is zelf een signaal (veel updates, weinig bruikbare). GPS-timestamp-anomalieën (niet-monotoon, grote sprongen) worden apart gerapporteerd als diagnostisch metagegeven, niet gebruikt om deze telling te sturen |
+| Track-opbouw voor gesimuleerde tests (implementatiestap 1) | *GPS timestamp* — hier is het juist de bedoeling dat de track een realistische, oplopende device-tijd draagt; dit is de enige plek waar GPS timestamp leidend is, en bewust losstaand van `NavigationClock` |
 
 **Consequentie voor het datamodel:** `NavigationSession.gpsHealth` (sectie 2) wordt met dit onderscheid preciezer:
 
 ```typescript
 gpsHealth: {
-  lastUpdateAt: number | null;       // laatste ontvangen GPS update, ongeacht kwaliteit
-  lastValidFixAt: number | null;     // laatste sample die daadwerkelijk gebruikt is voor matching
+  lastUpdateAt: number | null;       // navigation time van de laatst verwerkte sample, ongeacht kwaliteit
+  lastValidFixAt: number | null;     // navigation time van de laatste geaccepteerde fix
   consecutiveLowAccuracyCount: number;
-  signalLostSince: number | null;    // afgeleid: null zolang lastValidFixAt binnen GPS_TIMEOUT_S ligt
+  signalLostSince: number | null;    // afgeleid: null zolang (navigationClock.now() - lastValidFixAt) < GPS_TIMEOUT_S
 };
+```
+
+**Geïmplementeerd (implementatiestap 3, `lib/navigation/clock/`):**
+```
+NavigationClock          -- interface: now() -> monotone navigatietijd in ms
+SystemNavigationClock    -- productie-implementatie (performance.now()/Date.now()), voor
+                             latere koppeling aan echte GPS (stap 11)
+ManualNavigationClock    -- testklok, teruglopen structureel niet toegestaan (advance()/
+                             set() met een eerdere waarde gooit een fout)
+
+GpsFixEvaluator          -- verwerkt ruwe GpsSample's, valideert, houdt lastUpdateAt/
+                             lastValidFixAt/consecutiveLowAccuracyCount bij (allemaal in
+                             navigation time), diagnosticeert GPS-timestamp-anomalieën
+                             (nonMonotonic, deltaMs) als metadata zonder daar de acceptatie
+                             op te baseren, en biedt isSignalLost(gpsTimeoutMs) puur op
+                             navigation time.
 ```
 
 (Vervangt het eerdere, minder specifieke `lastSampleAt`-veld uit de sectie 2-schets.)
@@ -722,13 +750,15 @@ Ter aanvulling op sectie 1 (buiten scope), specifiek de dingen die tíjdens het 
 
 ## 23. IMPLEMENTATIEVOLGORDE (definitief, na tweede reviewronde 29-8-2026)
 
-Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica bewezen is — zelfde discipline als Phase 2's "Volgende stap"-sectie:
+Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica bewezen is — zelfde discipline als Phase 2's "Volgende stap"-sectie. Voortgang bijgehouden per 29-8-2026:
 
 ```
-1.  GPS-simulator (SimulatedGpsSource, sectie 4/20)
-2.  NavigationSession state machine (sectie 14, incl. PERMISSION_DENIED)
-3.  GPS-metadata / navigation clock (sectie 13B — vóór matching, want matching en
-    deviation-detectie bouwen hierop voort)
+1.  ✅ GPS-simulator (SimulatedGpsSource, sectie 4/20) — 25 tests, tsc schoon
+2.  ✅ NavigationSession state machine (sectie 14, incl. PERMISSION_DENIED) — 39 tests,
+    tsc schoon (vond en fixte een echte state-leak: possibleDeviationSince bleef stale
+    tot in REROUTED)
+3.  ✅ GPS-metadata / navigation clock (sectie 13B, DEFINITIEF herzien naar een
+    onafhankelijke monotone NavigationClock — zie sectie 13B) — 36 tests, tsc schoon
 4.  Candidate-based route-position matcher (sectie 5, afstand + heading + continuïteit + snelheid)
 5.  Progress calculation (sectie 8)
 6.  Deviation detection (sectie 9)
