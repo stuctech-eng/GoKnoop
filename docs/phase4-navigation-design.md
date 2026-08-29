@@ -794,9 +794,19 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
     afgeleid uit GPS-signaalverlies), `checkArrival()`/`pause()`/`resume()`/`cancel()`
     delegeren direct. Kern-test: ON_ROUTE→GPS_LOST→hersteld→ON_ROUTE expliciet
     onderscheiden van NOT_STARTED→PERMISSION_DENIED, niet als varianten van elkaar behandeld
-10. Integratietests — volledige gesimuleerde scenario's, inclusief de kruisings-/pingpong-test
-    (sectie 20 stap 6B) en de permission-simulatie (stap 7B) — kalibratie van alle open
-    constanten (incl. RECENT_ROUTE_MEMORY) gebeurt hier
+10. ✅ Integratietests (sectie 20, volledige keten) — 15 tests, tsc schoon. Alle 10
+    scenario's gedekt: normale route, GPS-ruis, echte afwijking, reroute,
+    pingpong-kruising (bevestigd op aanvraagniveau: temporaryAvoidEdgeIds voorkomt dat
+    de Route Engine terugstuurt over de net-verlaten edge), legitieme U-bocht
+    (RECENT_ROUTE_MEMORY vervalt aantoonbaar bij bevestigd ON_ROUTE), permission denial
+    (incl. intrekken tijdens een actieve sessie, nooit via GPS_LOST), GPS_LOST→herstel,
+    arrival, dataset-version mismatch. **Kalibratie-verkenning, nadrukkelijk GEEN
+    productiewaarden:** deviationThresholdM ≥10m blijkt stabiel tegen ±5m ruis in dit
+    testscenario; deviationConfirmDurationMs en rerouteCooldownMs gedragen zich consistent
+    over 2000-15000ms; RECENT_ROUTE_MEMORY is een expliciete afweging tussen
+    pingpong-preventie en U-bocht-vrijheid, geen enkele waarde aangewezen als correct.
+    Dit zijn geldig-gebleken ranges uit één simulatiesessie, geen definitief besluit —
+    verdere kalibratie tegen meer/andere scenario's blijft nodig vóór productie
 11. Echte GPS op iPhone (BrowserGeolocationSource, sectie 4)
 12. Navigation-UI (buiten scope van dit document)
 ```
