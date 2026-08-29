@@ -60,6 +60,23 @@ const TEST_NODE_IDS = ["12", "34", "56", "78"];
 const CONFIRM_MS = 5000;
 const COOLDOWN_MS = 10000;
 
+// Statusweergave per NavigationState (stap 12.6) -- puur weergave, geen nieuwe
+// navigatielogica. Beknopte, niet-alarmistische labels (ontwerpregel: afwijking
+// duidelijk maar niet alarmistisch tonen).
+const STATE_STYLE: Record<NavigationState, { label: string; color: string; background: string }> = {
+  NOT_STARTED: { label: "Niet gestart", color: "#555", background: "#eee" },
+  ON_ROUTE: { label: "Op route", color: "#FFFFFF", background: "#1a7a3c" },
+  POSSIBLE_DEVIATION: { label: "Mogelijk afgeweken", color: "#5a4200", background: "#ffe08a" },
+  OFF_ROUTE: { label: "Van route af", color: "#FFFFFF", background: "#b00020" },
+  REROUTING: { label: "Nieuwe route zoeken...", color: "#FFFFFF", background: "#3a5fcd" },
+  REROUTED: { label: "Nieuwe route gevonden", color: "#FFFFFF", background: "#3a5fcd" },
+  GPS_LOST: { label: "GPS-signaal kwijt", color: "#FFFFFF", background: "#666" },
+  PAUSED: { label: "Gepauzeerd", color: "#555", background: "#eee" },
+  ARRIVED: { label: "Aangekomen", color: "#FFFFFF", background: "#085041" },
+  CANCELLED: { label: "Gestopt", color: "#555", background: "#eee" },
+  PERMISSION_DENIED: { label: "Locatietoestemming geweigerd", color: "#FFFFFF", background: "#8a5a00" },
+};
+
 export default function MapLiveDebugPage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -69,6 +86,7 @@ export default function MapLiveDebugPage() {
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
   const [nextNode, setNextNode] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
+  const [progressInfo, setProgressInfo] = useState<{ ratio: number; distanceAlongM: number; totalM: number } | null>(null);
   const [navState, setNavState] = useState<NavigationState>("NOT_STARTED");
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -237,6 +255,7 @@ export default function MapLiveDebugPage() {
         const progress = calculateProgress(model, outcome.matchedPosition);
         const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, TEST_NODE_IDS);
         setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: info.bearingToNextNodeDeg });
+        setProgressInfo({ ratio: progress.progressRatio, distanceAlongM: progress.distanceAlongRouteM, totalM: model.totalDistanceM });
 
         appendLog(`positie bijgewerkt (${outcome.action}), perpendicularDistanceM=${markerFeature.properties.perpendicularDistanceM.toFixed(1)}`);
       } else {
@@ -316,6 +335,21 @@ export default function MapLiveDebugPage() {
           zIndex: 10,
         }}
       >
+        <div style={{ marginBottom: 6 }}>
+          <span
+            style={{
+              display: "inline-block",
+              background: STATE_STYLE[navState].background,
+              color: STATE_STYLE[navState].color,
+              borderRadius: 6,
+              padding: "3px 8px",
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            {STATE_STYLE[navState].label}
+          </span>
+        </div>
         <div><strong>map:</strong> {mapStatus}</div>
         <div><strong>nav state:</strong> {navState}</div>
         {error && <div style={{ color: "#b00020" }}>{error}</div>}
@@ -339,6 +373,37 @@ export default function MapLiveDebugPage() {
       >
         {running ? "Stop" : "Start"}
       </button>
+
+      {progressInfo && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 164,
+            left: 12,
+            right: 12,
+            background: "rgba(255,255,255,0.92)",
+            borderRadius: 12,
+            padding: "10px 14px",
+            zIndex: 10,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
+            <span>
+              {(progressInfo.distanceAlongM / 1000).toFixed(1)} km / {(progressInfo.totalM / 1000).toFixed(1)} km
+            </span>
+            <strong>{Math.round(progressInfo.ratio * 100)}%</strong>
+          </div>
+          <div style={{ height: 6, background: "#e0e0e0", borderRadius: 4, overflow: "hidden" }}>
+            <div
+              style={{
+                height: "100%",
+                width: `${Math.min(100, Math.max(0, progressInfo.ratio * 100))}%`,
+                background: "#085041",
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       <div
         style={{

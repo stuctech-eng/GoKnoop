@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.4 ✅ GO, 12.5 (richting/knooppunt) gebouwd + getest, echte iPhone-validatie nog te doen
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.5 ✅ TECHNISCH GO, 12.6 (progress/state-UI) gebouwd — klaar voor 12.7 (Start Guidance + polish)
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -377,9 +377,8 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
 
       249/249 tests totaal, `tsc` schoon. `lib/navigation/`/`lib/route-engine/` bevatten
       nog steeds geen MapLibre-import.
-12.5  ⬜ IN UITVOERING (gebouwd + getest, echte iPhone-validatie nog te doen) --
-      Richtings- en knooppuntlaag -- volgend knooppunt + afstand + grote
-      richtingindicator (niveau 1).
+12.5  ✅ TECHNISCH GO (29-8-2026) -- Richtings- en knooppuntlaag -- volgend knooppunt +
+      afstand + grote richtingindicator (niveau 1).
 
       ENGINE-LAAG (klein, geïsoleerd gat gedicht, geen nieuwe navigatielogica): het
       oorspronkelijke Phase 4-ontwerp (sectie 6/7) beschreef "huidig/volgend knooppunt"
@@ -404,10 +403,61 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
       257/257 tests totaal (8 nieuw: `getNodeSegmentIndex`/`calculateNextNodeInfo`),
       `tsc` schoon. `lib/navigation/`/`lib/route-engine/` bevatten nog steeds geen
       MapLibre-import.
-12.6  Progress/state-UI -- progress, ON_ROUTE, afwijking, GPS_LOST, rerouting,
-      arrival zichtbaar maken zonder de interface te overladen
+
+      BEKEND TESTFIXTURE-RANDGEVAL (geen productgedrag, geen bug -- 29-8-2026): bij een
+      echte-iPhone-check op ~45km van de testroute toonde de richtingkaart "0 m" met een
+      rechtdoor-wijzende pijl. Verklaring: de matcher projecteert een zeer verre positie
+      op het dichtstbijzijnde punt van de HELE route -- in dat specifieke geval bleek dat
+      exact knooppunt 78 (het laatste routepunt) te zijn, dus `distanceToNextNodeM` = 0 en
+      een bearing tussen twee identieke punten valt terug op 0°. Dit is correct gedrag
+      gegeven de invoer, geen fout in `calculateNextNodeInfo`/de richtingpijl.
+
+      BEWUSTE KEUZE (na review, 29-8-2026): de realistische links/rechts/rechtdoor-
+      validatie van de richtingpijl (een positie dichtbij de route, niet toevallig exact
+      op een knooppunt) wordt NIET nu los getest. In plaats daarvan: gebundeld in ÉÉN
+      uitgebreide iPhone-eindvalidatie zodra de volledige keten (t/m stap 12.7) staat --
+      zie de eindvalidatie-checklist onderaan sectie 7. Dit voorkomt herhaaldelijk
+      losstaand straattesten van halfafgebouwde functionaliteit; de 257 geautomatiseerde
+      tests + de simulator blijven de onderliggende logica intussen dekken.
+12.6  ✅ GEBOUWD (29-8-2026, echte iPhone-validatie gebundeld bij de eindvalidatie na
+      12.7 -- zie de checklist hierboven) -- Progress/state-UI -- progress, ON_ROUTE,
+      afwijking, GPS_LOST, rerouting, arrival zichtbaar maken zonder de interface te
+      overladen.
+
+      GEEN nieuwe engine-logica -- uitsluitend weergave van wat al bestond
+      (`calculateProgress`, stap 5; `NavigationState`, stap 2). Toegevoegd aan
+      `app/debug/map-live/page.tsx`:
+        - Statusbadge (niveau boven de kaart): korte, NIET-alarmistische labels per
+          `NavigationState` (bijv. "Mogelijk afgeweken" i.p.v. een waarschuwingstoon voor
+          `POSSIBLE_DEVIATION`; "Van route af" pas bij `OFF_ROUTE`) -- ontwerpregel
+          sectie 13: afwijking duidelijk maar niet alarmistisch.
+        - Progress-balk (niveau 3, uit de 12.1-wireframe): km/km + percentage, rechtstreeks
+          gevoed door `calculateProgress`'s `distanceAlongRouteM`/`totalDistanceM`/
+          `progressRatio` -- geen tweede, eigen berekening in de UI-laag.
+
+      257/257 tests ongewijzigd (geen nieuwe engine-code, dus geen nieuwe tests nodig),
+      `tsc` schoon.
 12.7  Start Guidance + polish -- volledige integratie van Start Guidance, daarna
       visuele polish, animaties, spacing, iconografie, responsive gedrag
 ```
 
 Ná 12.1-12.7 zelfstandig bewezen: integratie in de bestaande Phase 3-flow (na routekeuze, een "Start navigatie"-knop die hierheen leidt) en validatie met echte iPhone-GPS (`BrowserGeolocationSource`, al gebouwd en gevalideerd in stap 11).
+
+**Eindvalidatie-checklist (na 12.7, één gebundelde echte iPhone-sessie, geen losse straattests per deelstap meer):**
+
+```
+GPS → matching → progress → deviation → reroute → kaart → richting → knooppunt
+    → Start Guidance → navigatie
+```
+
+Te controleren in die ene sessie:
+- Realistische links/rechts/rechtdoor-richtingpijl (bewaard vanuit stap 12.5, zie de
+  aantekening daar) -- met een positie dichtbij een echte route, niet toevallig exact
+  op een knooppunt
+- Start Guidance verschijnt bij vertrek, schakelt correct over naar normale navigatie
+- Progress/state-UI (stap 12.6) blijft consistent met de kaart en de richtingkaart
+- Een echte afwijking + reroute wordt zowel in de state als visueel op de kaart correct
+  verwerkt
+- Alle eerdere, al losstaand geldige bevindingen (stap 11/11B: Wake Lock, GPS_LOST-gedrag,
+  stap 12.2/12.3/12.4: MapLibre-integratie, kaartstijl, live positie) blijven onder deze
+  gecombineerde belasting overeind
