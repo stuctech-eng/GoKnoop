@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 ✅ GEBOUWD + tests, klaar voor de gebundelde iPhone-eindvalidatie (zie checklist in sectie 7)
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 ✅ GEBOUWD + tests + fase A bevestigd op iPhone; B/C en de rest van de eindvalidatie bewaard voor één echte lokale testrit ná integratie in de Phase 3-flow
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -484,14 +484,19 @@ GPS → matching → progress → deviation → reroute → kaart → richting �
     → Start Guidance → navigatie
 ```
 
-Te controleren in die ene sessie:
-- Realistische links/rechts/rechtdoor-richtingpijl (bewaard vanuit stap 12.5, zie de
-  aantekening daar) -- met een positie dichtbij een echte route, niet toevallig exact
-  op een knooppunt
-- Start Guidance verschijnt bij vertrek, schakelt correct over naar normale navigatie
-- Progress/state-UI (stap 12.6) blijft consistent met de kaart en de richtingkaart
-- Een echte afwijking + reroute wordt zowel in de state als visueel op de kaart correct
-  verwerkt
-- Alle eerdere, al losstaand geldige bevindingen (stap 11/11B: Wake Lock, GPS_LOST-gedrag,
-  stap 12.2/12.3/12.4: MapLibre-integratie, kaartstijl, live positie) blijven onder deze
-  gecombineerde belasting overeind
+Status per onderdeel (bijgewerkt 29-8-2026):
+- ✅ **Fase A ("naar startpunt")** — bevestigd op echte iPhone (`/debug/map-live`,
+  46.029m tot testknooppunt 12 correct getoond, `nav state: NOT_STARTED`, geen matching
+  vóór de aankomstdrempel). Geen kunstmatige lokale testroute nodig geweest.
+- ⏳ **Fase B (Start Guidance)** — bewaard voor de echte lokale testrit (vereist een
+  positie binnen de aankomstdrempel van een echt startknooppunt; niet zinvol te forceren
+  met de Utrecht-testfixture vanaf een andere locatie).
+- ⏳ **Fase C (navigatie) + de A→B→C-overgang als geheel** — idem, bewaard voor dezelfde rit.
+- ⏳ **Realistische links/rechts/rechtdoor-richtingpijl** (bewaard vanuit stap 12.5).
+- ⏳ **Reroute, GPS_LOST-herstel, Wake Lock** onder echte, gecombineerde belasting.
+
+**Besluit (na review, 29-8-2026):** geen kunstmatige testroute meer bouwen om B/C/de rest
+apart te forceren. De 267 geautomatiseerde tests + de bevestigde fase-A-iPhone-test geven
+voldoende vertrouwen om door te bouwen naar de volgende integratiestap (Phase 3-flow-
+koppeling). Bovenstaande openstaande punten worden in ÉÉN echte lokale testrit gevalideerd
+zodra die integratie staat -- niet eerder, en niet met een kunstmatige locatie geforceerd.
