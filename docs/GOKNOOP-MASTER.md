@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12, nog niet gestart — dit document legt de scope vast
+Phase 4   — Navigation UI                ⬜ stap 12, nog niet gestart — kaartlibrary vastgelegd (MapLibre GL JS, sectie 5.0), wireframe in review (12.1)
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -149,6 +149,21 @@ Een `NavigationSession` blijft gepind aan de `datasetVersionId` van de oorspronk
 
 **Status van dit hele hoofdstuk: CONCRETISERING.** Dit is geen nieuwe architectuurbeslissing naast het Master Plan — het is de visuele/interactieve uitwerking van wat al in Phase 3/4's scope stond, nu voor het eerst gedetailleerd. Waar iets een bestaand besluit is versus nieuw benoemd, staat expliciet gemarkeerd.
 
+### 5.0 Kaartlibrary-beslissing (🆕 NIEUW, definitief — 29-8-2026)
+
+**MapLibre GL JS**, niet Leaflet, niet Google Maps.
+
+Niet omdat Leaflet technisch ongeschikt zou zijn — het is een prima lichte MVP-optie — maar omdat GoKnoop's gewenste eindervaring (moderne kaartweergave, vloeiende zoom, eigen styling van wegen/fietsroutes/knooppunten, een kaartlaag die onafhankelijk van de navigatie-engine kan evolueren, geen Google-afhankelijkheid) beter past bij MapLibre's vector-tile-architectuur.
+
+**Harde architectuurregel, niet onderhandelbaar:** de navigatie-engine (`lib/navigation/`) mag NOOIT afhankelijk worden van MapLibre-types.
+
+```
+GPS → GpsFixEvaluator → Candidate Matcher → Progress → Deviation Detection
+   → NavigationStateMachine → NavigationSession → Route → MapLibre Adapter / UI
+```
+
+MapLibre is uitsluitend presentatielaag. Als MapLibre ooit vervangen moet worden, verandert alleen de kaart-/UI-laag — de Route Engine, `NavigationSession`, GPS-logica, matching, progress-berekening en rerouting blijven onaangeroerd. Concreet: een aparte kaartadapterlaag (`lib/map/MapLibreAdapter` of gelijkwaardig, exacte structuur af te stemmen bij implementatie), UI-componenten (`components/navigation/NavigationScreen`, `DirectionGuidance`, `NavigationMap`, `NavigationProgress` of gelijkwaardig) consumeren de bestaande `lib/navigation/`-types, nooit andersom.
+
 ### 5.1 De volledige flow (Phase 3 blijft, wordt niet vervangen)
 
 ```
@@ -232,38 +247,46 @@ De UI **consumeert** deze keten (via dezelfde soort bekabeling als de debugharne
 
 ---
 
-## 6. TEST- EN ACCEPTANCECRITERIA VOOR STAP 12
+## 6. ACCEPTANCE CRITERIA VOOR STAP 12 (definitief — 29-8-2026)
 
-1. Elk van de drie informatieniveaus (richting/kaart/voortgang) is gelijktijdig zichtbaar zonder scrollen, op een standaard iPhone-schermformaat.
-2. De richtingaanwijzer (niveau 1) update binnen één GPS-sample-cyclus na een matched-position-wijziging — geen merkbare vertraging t.o.v. wat de debugharness al toont.
-3. Start Guidance is actief bij sessiestart en schakelt aantoonbaar over naar de normale richtingaanwijzer zodra er een betrouwbare bewegingsrichting is (test met een gesimuleerde track die stilstand simuleert gevolgd door beweging, hergebruik `track-builder.ts`/`SimulatedGpsSource` uit stap 1).
-4. De kaart toont noord altijd boven, ook tijdens beweging in een andere richting (visuele regressietest/handmatige check).
-5. Voor minimaal de states `ON_ROUTE`, `POSSIBLE_DEVIATION`, `OFF_ROUTE`, `GPS_LOST`, `PERMISSION_DENIED`, `ARRIVED` bestaat een onderscheidbare visuele weergave (screenshot- of storybook-achtige verificatie per state, met gesimuleerde data — geen echte GPS nodig voor deze check).
-6. Progress-weergave (niveau 3) komt exact overeen met wat `calculateProgress`/`ProgressTracker` teruggeven — geen aparte, dubbele berekening in de UI-laag.
-7. Wake Lock-status is voor de gebruiker niet noodzakelijk zichtbaar (dat was een debugharness-behoefte, geen productie-UX-eis) — wél moet de UI zelf Wake Lock aanvragen/vrijgeven op dezelfde momenten als de harness al doet (sectie 3.4).
-8. Alle nieuwe code: `tsc` schoon + waar zinvol testbaar (React-componenten met React Testing Library, of gelijkwaardig — te bepalen bij implementatie, geen bestaande conventie hiervoor in de repo).
+Stap 12 is geslaagd wanneer:
+
+1. De gebruiker onmiddellijk ziet waar hij heen moet.
+2. Het volgende knooppunt prominent zichtbaar is.
+3. De volledige route zichtbaar is.
+4. De eigen positie duidelijk zichtbaar is.
+5. De kaart standaard noordgericht is.
+6. Progress overeenkomt met de bestaande `ProgressTracker`/`calculateProgress` — geen tweede, afwijkende berekening in de UI.
+7. Start Guidance werkt vóórdat betrouwbare bewegingsrichting beschikbaar is (geen "verkeerde richting"-melding terwijl de gebruiker nog stilstaat).
+8. Afwijking duidelijk maar niet alarmistisch wordt weergegeven.
+9. Rerouting zichtbaar wordt verwerkt.
+10. `GPS_LOST` en permission-status begrijpelijk worden weergegeven.
+11. De UI geen eigen, concurrerende navigatielogica introduceert.
+12. MapLibre volledig geïsoleerd blijft van de navigatie-engine (sectie 5.0).
+13. De interface op iPhone/PWA goed bruikbaar is.
+14. De gebruiker zonder uitleg begrijpt wat hij moet doen.
 
 ---
 
-## 7. EXACTE IMPLEMENTATIEVOLGORDE VOOR STAP 12
+## 7. IMPLEMENTATIEVOLGORDE VOOR STAP 12 (definitief — 29-8-2026)
 
-Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geïsoleerd stuk bewijzen, dan uitbreiden — niet in één keer een compleet scherm bouwen.
+Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geïsoleerd stuk bewijzen, dan uitbreiden — niet in één keer een compleet scherm bouwen. Geen productiecode vóórdat de informatiehiërarchie (12.1) akkoord is.
 
 ```
-12.1  Statische layout/wireframe van de drie niveaus (geen live data, geen GPS) --
-      visuele/interactie-review vóórdat er logica aan gekoppeld wordt
-12.2  Koppeling niveau 3 (voortgang) aan gesimuleerde data (SimulatedGpsSource,
-      hergebruik van stap 1/10's testinfrastructuur) -- eenvoudigste niveau eerst
-12.3  Koppeling niveau 1 (richting) aan gesimuleerde data, incl. Start Guidance-logica
-12.4  Koppeling niveau 2 (kaart) -- vereist een kaartlibrary-keuze (nog niet gemaakt in
-      dit document, te beslissen bij start van stap 12: welke library, hoe de
-      noordgerichte weergave en route-geometrie erop getekend wordt)
-12.5  Alle drie niveaus samen, nog steeds gesimuleerde data, volledige state-doorloop
-      (ON_ROUTE -> POSSIBLE_DEVIATION -> OFF_ROUTE -> REROUTING -> REROUTED -> ARRIVED)
-12.6  Koppeling aan echte iPhone-GPS (BrowserGeolocationSource, al gebouwd) --
-      eerste echte-toestel-validatie van de UI zelf, los van de al-gevalideerde engine
-12.7  Integratie in de bestaande Phase 3-flow (na routekeuze, "Start navigatie"-knop
-      leidt hierheen) -- pas als 12.1-12.6 zelfstandig bewezen zijn
+12.1  UX/wireframe -- het scherm definitief maken (informatieniveaus, Start Guidance,
+      kleurgebruik/toon). Geen productiecode voordat dit akkoord is.
+12.2  MapLibre-basis -- correct integreren in Next.js/PWA, eenvoudige kaartstijl om
+      de integratie zelf te bewijzen (nog geen route/positie erop)
+12.3  Route-visualisatie -- route-geometrie tekenen (uit het bestaande Route-object,
+      geen nieuwe geometrieberekening)
+12.4  Live positie -- GPS-positie uit de bestaande NavigationSession tonen.
+      Geen tweede GPS-systeem, geen eigen matching in de kaartlaag.
+12.5  Richtings- en knooppuntlaag -- volgend knooppunt + afstand + grote
+      richtingindicator (niveau 1)
+12.6  Progress/state-UI -- progress, ON_ROUTE, afwijking, GPS_LOST, rerouting,
+      arrival zichtbaar maken zonder de interface te overladen
+12.7  Start Guidance + polish -- volledige integratie van Start Guidance, daarna
+      visuele polish, animaties, spacing, iconografie, responsive gedrag
 ```
 
-**Vóór 12.1 begint:** vaststellen welke kaartlibrary gebruikt wordt (stap 12.4 heeft dit nodig) — dit document legt dat nog niet vast, dat is de eerste openstaande beslissing bij het starten van deze fase.
+Ná 12.1-12.7 zelfstandig bewezen: integratie in de bestaande Phase 3-flow (na routekeuze, een "Start navigatie"-knop die hierheen leidt) en validatie met echte iPhone-GPS (`BrowserGeolocationSource`, al gebouwd en gevalideerd in stap 11).
