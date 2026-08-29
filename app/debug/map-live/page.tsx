@@ -32,7 +32,7 @@ import { NavigationStateMachine } from "@/lib/navigation/session/navigation-stat
 import { DeviationDetector } from "@/lib/navigation/deviation/deviation-detector";
 import { NavigationSessionController } from "@/lib/navigation/lifecycle/navigation-session-controller";
 import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-geolocation-source";
-import { buildRouteProgressModel } from "@/lib/navigation/progress/route-progress-model";
+import { buildRouteProgressModel, calculateProgress, calculateNextNodeInfo } from "@/lib/navigation/progress/route-progress-model";
 import { buildRouteGeoJson } from "@/lib/map/route-geometry-adapter";
 import { buildPositionMarkerGeoJson } from "@/lib/map/position-marker-adapter";
 import type { GraphEdge } from "@/lib/route-engine/types";
@@ -68,6 +68,7 @@ export default function MapLiveDebugPage() {
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
+  const [nextNode, setNextNode] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
   const [navState, setNavState] = useState<NavigationState>("NOT_STARTED");
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -230,6 +231,13 @@ export default function MapLiveDebugPage() {
         const markerFeature = buildPositionMarkerGeoJson(outcome.matchedPosition);
         const src = mapRef.current?.getSource("goknoop-position") as maplibregl.GeoJSONSource | undefined;
         src?.setData({ type: "FeatureCollection", features: [markerFeature] });
+
+        // Niveau 1 (richting, stap 12.5): dezelfde matchedPosition hergebruikt, geen
+        // nieuwe matching/positiebepaling -- alleen afgeleide weergave-informatie.
+        const progress = calculateProgress(model, outcome.matchedPosition);
+        const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, TEST_NODE_IDS);
+        setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: info.bearingToNextNodeDeg });
+
         appendLog(`positie bijgewerkt (${outcome.action}), perpendicularDistanceM=${markerFeature.properties.perpendicularDistanceM.toFixed(1)}`);
       } else {
         appendLog(`sample afgewezen: ${outcome.action}${"reason" in outcome ? ` (${outcome.reason})` : ""}`);
@@ -263,6 +271,37 @@ export default function MapLiveDebugPage() {
     <div style={{ position: "relative", width: "100%", height: "100dvh" }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
+      {nextNode && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 10,
+            background: "#085041",
+            borderRadius: 16,
+            padding: "12px 24px",
+            textAlign: "center",
+            boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 32,
+              lineHeight: 1,
+              color: "#FFFFFF",
+              transform: `rotate(${nextNode.bearingDeg}deg)`,
+              transition: "transform 0.3s ease",
+            }}
+          >
+            ↑
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
+          <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
+        </div>
+      )}
+
       <div
         style={{
           position: "absolute",
@@ -273,7 +312,7 @@ export default function MapLiveDebugPage() {
           padding: "8px 12px",
           fontFamily: "monospace",
           fontSize: 12,
-          maxWidth: 260,
+          maxWidth: 200,
           zIndex: 10,
         }}
       >

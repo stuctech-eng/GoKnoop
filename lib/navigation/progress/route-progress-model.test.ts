@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRouteProgressModel, calculateProgress } from "./route-progress-model";
+import { buildRouteProgressModel, calculateProgress, getNodeSegmentIndex, calculateNextNodeInfo } from "./route-progress-model";
 import type { GraphEdge } from "../../route-engine/types";
 import type { MatchedPosition } from "../types";
 
@@ -151,6 +151,72 @@ describe("calculateProgress — edge.distanceM is leidend, niet de rauwe geometr
     // Verwacht: volledige e1 (200m echt) + 50% van e2 (5m echt) = 205m.
     expect(result.distanceAlongRouteM).toBeCloseTo(205, 6);
     expect(model.totalDistanceM).toBe(210);
+  });
+});
+
+describe("getNodeSegmentIndex — gedeelde knooppunt-naar-segment-index-helper", () => {
+  const edges: GraphEdge[] = [
+    edge({ id: "e1", distanceM: 100, geometry: [{ x: 0, y: 0 }, { x: 0, y: 50 }, { x: 0, y: 100 }] }), // 2 segmenten
+    edge({ id: "e2", distanceM: 50, geometry: [{ x: 0, y: 100 }, { x: 0, y: 150 }] }), // 1 segment
+  ];
+  const model = buildRouteProgressModel(edges);
+
+  it("geeft 0 voor het eerste knooppunt", () => {
+    expect(getNodeSegmentIndex(model, 0)).toBe(0);
+  });
+  it("geeft de laatste geometrie-index voor het laatste knooppunt", () => {
+    expect(getNodeSegmentIndex(model, 2)).toBe(model.geometry.length - 1);
+  });
+  it("geeft de juiste tussenliggende grensindex voor een middelste knooppunt", () => {
+    expect(getNodeSegmentIndex(model, 1)).toBe(model.edgeSegmentRanges[1].startSegmentIndex);
+  });
+});
+
+describe("calculateNextNodeInfo — huidig/volgend knooppunt, afstand, richting (stap 12.5)", () => {
+  const edges: GraphEdge[] = [
+    edge({ id: "e1", distanceM: 200, geometry: [{ x: 0, y: 0 }, { x: 0, y: 100 }] }), // echt 200m, rauw 100m
+    edge({ id: "e2", distanceM: 100, geometry: [{ x: 0, y: 100 }, { x: 100, y: 100 }] }), // oostwaarts
+  ];
+  const model = buildRouteProgressModel(edges);
+  const nodeIds = ["n1", "n2", "n3"];
+
+  it("levert het juiste huidige/volgende knooppunt op basis van currentEdgeIndex", () => {
+    const progress = calculateProgress(model, matched({ segmentIndex: 0, segmentT: 0.5, cumulativeDistanceM: 50 }));
+    const info = calculateNextNodeInfo(model, progress, matched({ segmentIndex: 0, cumulativeDistanceM: 50 }), nodeIds);
+    expect(info.currentNodeId).toBe("n1");
+    expect(info.nextNodeId).toBe("n2");
+  });
+
+  it("distanceToNextNodeM gebruikt de ECHTE edge.distanceM, niet de rauwe geometrieafstand", () => {
+    // Halverwege de rauwe geometrie (50 van de 100) van edge e1 (echt 200m) --
+    // dus 50% van 200m = 100m afgelegd, nog 100m te gaan tot n2.
+    const progress = calculateProgress(model, matched({ segmentIndex: 0, segmentT: 0.5, cumulativeDistanceM: 50 }));
+    const info = calculateNextNodeInfo(model, progress, matched({ segmentIndex: 0, cumulativeDistanceM: 50 }), nodeIds);
+    expect(info.distanceToNextNodeM).toBeCloseTo(100, 6); // NIET 50 (de rauwe resterende afstand)
+  });
+
+  it("distanceToNextNodeM is nooit negatief (geclampt)", () => {
+    const progress = calculateProgress(model, matched({ segmentIndex: 0, segmentT: 1, cumulativeDistanceM: 100 }));
+    const info = calculateNextNodeInfo(model, progress, matched({ segmentIndex: 0, cumulativeDistanceM: 100 }), nodeIds);
+    expect(info.distanceToNextNodeM).toBeGreaterThanOrEqual(0);
+  });
+
+  it("bearingToNextNodeDeg wijst correct oostwaarts (90°) wanneer het volgende knooppunt recht ten oosten ligt", () => {
+    const progress = calculateProgress(model, matched({ segmentIndex: 1, segmentT: 0, cumulativeDistanceM: 100 }));
+    const info = calculateNextNodeInfo(
+      model,
+      progress,
+      matched({ segmentIndex: 1, point: { x: 0, y: 100 }, cumulativeDistanceM: 100 }),
+      nodeIds
+    );
+    expect(info.bearingToNextNodeDeg).toBeCloseTo(90, 6);
+  });
+
+  it("gooit een expliciete fout als nodeIds niet overeenkomt met edges.length + 1", () => {
+    const progress = calculateProgress(model, matched({ segmentIndex: 0, cumulativeDistanceM: 0 }));
+    expect(() => calculateNextNodeInfo(model, progress, matched({ segmentIndex: 0, cumulativeDistanceM: 0 }), ["te-weinig"])).toThrow(
+      /nodeIds\.length/
+    );
   });
 });
 

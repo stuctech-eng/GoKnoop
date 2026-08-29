@@ -1,6 +1,6 @@
 import { GraphEdge, Point } from "../../route-engine/types";
 import { MatchedPosition } from "../types";
-import { segmentLengths, cumulativeDistances } from "../matching/geometry";
+import { segmentLengths, cumulativeDistances, bearingDegrees } from "../matching/geometry";
 
 /**
  * Progress calculation (ontwerp sectie 8) -- implementatiestap 5.
@@ -164,4 +164,66 @@ export function calculateProgress(model: RouteProgressModel, matchedPosition: Ma
     currentEdgeIndex: edgeIndex,
     currentEdgeId: edge.id,
   };
+}
+
+/**
+ * Segment-index in `model.geometry` waar knooppunt `nodeIndex` (0-based,
+ * 0..edges.length, dus dezelfde indexering als `Route.nodes[]`) zich
+ * bevindt. Gedeelde helper -- hergebruikt door zowel deze module
+ * (`calculateNextNodeInfo`, stap 12.5) als `lib/map/route-geometry-
+ * adapter.ts` (stap 12.3B), zodat er niet twee plekken zijn die apart
+ * "welk punt hoort bij welk knooppunt" berekenen (TypeScript-regel: geen
+ * dubbele utilities).
+ */
+export function getNodeSegmentIndex(model: RouteProgressModel, nodeIndex: number): number {
+  if (nodeIndex === 0) return 0;
+  if (nodeIndex === model.edges.length) return model.geometry.length - 1;
+  return model.edgeSegmentRanges[nodeIndex].startSegmentIndex;
+}
+
+export type NextNodeInfo = {
+  currentNodeId: string;
+  nextNodeId: string;
+  /** ECHTE afstand (edge.distanceM-gebaseerd) tot het volgende knooppunt, nooit negatief. */
+  distanceToNextNodeM: number;
+  /** 0-360°, 0 = noord -- absolute richting van de huidige positie naar het volgende
+   *  knooppunt. GEEN correctie voor bewegingsrichting/heading (dat is stap 12.7,
+   *  Start Guidance -> normale navigatie-overgang) -- hier bewust nog niet vooruitgelopen. */
+  bearingToNextNodeDeg: number;
+};
+
+/**
+ * Huidig/volgend knooppunt + afstand + richting (ontwerp sectie 6/7,
+ * geïmplementeerd bij implementatiestap 12.5 -- dit gat stond sinds stap 5
+ * open, hier ingevuld als kleine, geïsoleerde uitbreiding van de bestaande
+ * progress-laag, geen nieuwe navigatielogica).
+ *
+ * Gebruikt uitsluitend al-bestaande brongegevens: `progress.currentEdgeIndex`
+ * (stap 5), `model.edgeCumulativeEndM` (ECHTE afstanden, stap 5),
+ * `matchedPosition.point` + `bearingDegrees` (stap 4). Geen nieuwe afstands-
+ * of positieberekening.
+ */
+export function calculateNextNodeInfo(
+  model: RouteProgressModel,
+  progress: ProgressSnapshot,
+  matchedPosition: MatchedPosition,
+  nodeIds: readonly string[]
+): NextNodeInfo {
+  if (nodeIds.length !== model.edges.length + 1) {
+    throw new Error(
+      `calculateNextNodeInfo: nodeIds.length (${nodeIds.length}) moet gelijk zijn aan edges.length + 1 (${model.edges.length + 1}).`
+    );
+  }
+
+  const currentNodeId = nodeIds[progress.currentEdgeIndex];
+  const nextNodeId = nodeIds[progress.currentEdgeIndex + 1];
+
+  const edgeEndRealM = model.edgeCumulativeEndM[progress.currentEdgeIndex];
+  const distanceToNextNodeM = Math.max(0, edgeEndRealM - progress.distanceAlongRouteM);
+
+  const nextNodeSegmentIndex = getNodeSegmentIndex(model, progress.currentEdgeIndex + 1);
+  const nextNodePoint = model.geometry[nextNodeSegmentIndex];
+  const bearingToNextNodeDeg = bearingDegrees(matchedPosition.point, nextNodePoint);
+
+  return { currentNodeId, nextNodeId, distanceToNextNodeM, bearingToNextNodeDeg };
 }

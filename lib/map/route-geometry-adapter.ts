@@ -1,5 +1,6 @@
 import { rdToWgs84 } from "../route-engine/coordinate-transform";
 import type { RouteProgressModel } from "../navigation/progress/route-progress-model";
+import { getNodeSegmentIndex } from "../navigation/progress/route-progress-model";
 
 /**
  * Route → kaartgeometrie-adapter (GOKNOOP-MASTER.md sectie 7, stap 12.3B).
@@ -85,9 +86,7 @@ export function buildRouteGeoJson(model: RouteProgressModel, nodeIds: readonly s
   }
 
   const nodeFeatures: RouteNodeFeature[] = nodeIds.map((nodeId, i) => {
-    // Knooppunt i zit op de grens tussen edge i-1 en edge i (of aan het begin/eind).
-    const segmentIndex =
-      i === 0 ? 0 : i === nodeIds.length - 1 ? model.geometry.length - 1 : model.edgeSegmentRanges[i].startSegmentIndex;
+    const segmentIndex = getNodeSegmentIndex(model, i);
     const point = model.geometry[segmentIndex];
     const wgs84 = rdToWgs84(point.x, point.y);
     return {

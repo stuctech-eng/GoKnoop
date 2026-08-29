@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.4 ✅ GO (echte iPhone-validatie geslaagd) — klaar voor 12.5 (richtings-/knooppuntlaag)
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.4 ✅ GO, 12.5 (richting/knooppunt) gebouwd + getest, echte iPhone-validatie nog te doen
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -377,8 +377,33 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
 
       249/249 tests totaal, `tsc` schoon. `lib/navigation/`/`lib/route-engine/` bevatten
       nog steeds geen MapLibre-import.
-12.5  Richtings- en knooppuntlaag -- volgend knooppunt + afstand + grote
-      richtingindicator (niveau 1)
+12.5  ⬜ IN UITVOERING (gebouwd + getest, echte iPhone-validatie nog te doen) --
+      Richtings- en knooppuntlaag -- volgend knooppunt + afstand + grote
+      richtingindicator (niveau 1).
+
+      ENGINE-LAAG (klein, geïsoleerd gat gedicht, geen nieuwe navigatielogica): het
+      oorspronkelijke Phase 4-ontwerp (sectie 6/7) beschreef "huidig/volgend knooppunt"
+      en "afstand tot volgend knooppunt" al als onderdeel van het contract, maar dit was
+      bij stap 5 nooit als eigen functie geïmplementeerd. Nu toegevoegd aan
+      `lib/navigation/progress/route-progress-model.ts`:
+        - `getNodeSegmentIndex(model, nodeIndex)` -- gedeelde helper, ook `route-geometry-
+          adapter.ts` (stap 12.3B) hergebruikt deze nu (refactor, geen dubbele logica meer).
+        - `calculateNextNodeInfo(model, progress, matchedPosition, nodeIds)` -- huidig/
+          volgend knooppunt-ID, `distanceToNextNodeM` (ECHTE edge.distanceM-gebaseerde
+          afstand, niet de rauwe geometrieafstand), `bearingToNextNodeDeg` (hergebruikt
+          `bearingDegrees` uit stap 4, geen nieuwe geometrieberekening).
+      `bearingToNextNodeDeg` is een ABSOLUTE richting (0°=noord) -- nog GEEN correctie voor
+      bewegingsrichting/heading (de "overgang van kompas naar bewegingsrichting" hoort
+      bij stap 12.7, Start Guidance, bewust hier niet vooruitgelopen).
+
+      UI-LAAG: `app/debug/map-live/page.tsx` uitgebreid met de niveau-1-kaart uit de
+      12.1-wireframe (donkerteal kaart, pijl geroteerd op `bearingToNextNodeDeg`,
+      knooppuntnummer, afstand in meters) -- gevoed door dezelfde `matchedPosition` die
+      ook de kaartmarker al bijwerkt (stap 12.4), geen tweede databron.
+
+      257/257 tests totaal (8 nieuw: `getNodeSegmentIndex`/`calculateNextNodeInfo`),
+      `tsc` schoon. `lib/navigation/`/`lib/route-engine/` bevatten nog steeds geen
+      MapLibre-import.
 12.6  Progress/state-UI -- progress, ON_ROUTE, afwijking, GPS_LOST, rerouting,
       arrival zichtbaar maken zonder de interface te overladen
 12.7  Start Guidance + polish -- volledige integratie van Start Guidance, daarna
