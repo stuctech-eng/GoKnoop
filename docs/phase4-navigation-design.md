@@ -787,7 +787,13 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
     onderliggende API-kloof (geen `datasetVersionId`-parameter) blijft bestaan totdat de
     endpoint zelf wordt aangepast — buiten de scope van dit navigatiepakket, te agenderen
     voor een volgende architectuurreview.
-9.  GPS_LOST / PERMISSION_DENIED / PAUSED / ARRIVED-afhandeling (sectie 12/14/19)
+9.  ✅ GPS_LOST / PERMISSION_DENIED / PAUSED / ARRIVED-afhandeling (sectie 12/14/19) —
+    14 tests, tsc schoon. `NavigationSessionController` orchestreert dit bovenop de
+    DeviationDetector (stap 6): `checkGpsHealth()` meldt GPS_LOST puur op navigatietijd,
+    `denyPermission()`/`grantPermission()` blijven een volledig gescheiden pad (nooit
+    afgeleid uit GPS-signaalverlies), `checkArrival()`/`pause()`/`resume()`/`cancel()`
+    delegeren direct. Kern-test: ON_ROUTE→GPS_LOST→hersteld→ON_ROUTE expliciet
+    onderscheiden van NOT_STARTED→PERMISSION_DENIED, niet als varianten van elkaar behandeld
 10. Integratietests — volledige gesimuleerde scenario's, inclusief de kruisings-/pingpong-test
     (sectie 20 stap 6B) en de permission-simulatie (stap 7B) — kalibratie van alle open
     constanten (incl. RECENT_ROUTE_MEMORY) gebeurt hier
