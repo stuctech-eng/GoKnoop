@@ -596,6 +596,10 @@ export type NavigationOfflineContract = {
 
 **Wake lock:** een navigatiesessie op een telefoonscherm dat uitgaat, kan `watchPosition` laten pauzeren (browser/OS-afhankelijk gedrag, niet door GoKnoop zelf te garanderen). Dit is een bekende PWA/iOS-beperking (zie sectie 13 van HANDOFF/Master System: "iOS: pushnotificaties vereisen beginscherminstallatie" — vergelijkbare categorie beperking). **Niet nu op te lossen, wel expliciet te benoemen als bekende grens van dit MVP**, geen stilzwijgende aanname dat navigatie op de achtergrond feilloos doorloopt.
 
+**BEVESTIGD MET ECHTE METING (implementatiestap 11, 29-8-2026):** deze theoretische grens is nu concreet aangetoond op een iPhone, via de debugharness (`app/debug/navigation/page.tsx`). Bij een lopende sessie met het scherm actief werkte de volledige keten betrouwbaar over meerdere testwandelingen (zie hieronder). Zodra het scherm vergrendelde, bleek Safari niet alleen `watchPosition`-updates te pauzeren, maar ook de JavaScript-timer van de pagina zelf te bevriezen: tijdens een test van 5 minuten 34 seconden met het scherm uit kwam er **geen enkele** log-regel binnen, ook niet de periodieke GPS-gezondheidscheck (elke 2s). Bij het weer aanzetten van het scherm verwerkte de pagina in één klap een opgehoopte reeks state-transities (`GPS_LOST → POSSIBLE_DEVIATION → ON_ROUTE → POSSIBLE_DEVIATION → OFF_ROUTE` binnen 9 seconden) in plaats van één nette overgang.
+
+**Consequentie:** scherm-uit tijdens navigatie is met de huidige architectuur (browser-`watchPosition`, geen wake lock, geen achtergrond-geolocation) niet bruikbaar — geen tijdige `GPS_LOST`-detectie, onvoorspelbare inhaalslag bij hervatting. Dit is geen kalibratievraagstuk (geen combinatie van `gpsTimeoutMs`/drempels lost dit op zolang de pagina zelf bevroren is) maar vraagt een aparte architecturale maatregel — bijv. een Screen Wake Lock API-aanroep tijdens een actieve sessie, of (verdergaand) een native wrapper met achtergrond-locatietoegang. Buiten scope van Phase 4 MVP; te agenderen als eigen vervolgstap, niet stilzwijgend opgelost.
+
 ---
 
 ## 17. PRIVACY: LOCATIEGEGEVENS ZO VEEL MOGELIJK LOKAAL
@@ -824,6 +828,31 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
     adapter en de bekabeling correct zijn opgebouwd, niet dat een echte iPhone-fietsrit
     het verwachte gedrag oplevert. Die meting is de eerstvolgende stap, door de gebruiker
     zelf, vóórdat kalibratiewaarden ergens definitief worden vastgezet.
+
+    **ECHTE METING UITGEVOERD (29-8-2026, iPhone/Safari, meerdere wandelingen):**
+
+    | Scenario | Resultaat |
+    |---|---|
+    | Permission deny/grant | ✅ correct (na een bugfix in de harness zelf, zie hieronder) |
+    | ON_ROUTE bij stilstand/lopen op het pad | ✅ |
+    | Bevestigingsvenster (deviationConfirmDurationMs) | ✅ consistent ~5,0-5,2s gemeten, 3x onafhankelijk |
+    | Progress monotoon tot 100% bij aankomst | ✅ |
+    | OFF_ROUTE bij een echte, aanhoudende afwijking | ✅ consistent, meerdere keren gereproduceerd |
+    | temporaryAvoidEdgeIds gevuld bij OFF_ROUTE | ✅ |
+    | GPS_LOST bij stilstand, scherm AAN | niet opgetreden (iOS hield GPS actief) |
+    | GPS_LOST bij stilstand, scherm UIT | ✅ opgetreden, maar zie bevinding hieronder (sectie 16) |
+
+    **Twee bugs gevonden en gefixt tijdens het testen, beide in de harness, niet in de
+    kernlogica (stap 1-10 bleven ongewijzigd correct):**
+    1. `NavigationStateMachine.start()` werd bij de Start-knop aangeroepen i.p.v. bij de
+       eerste GPS-fix — gecorrigeerd.
+    2. Geolocation-foutcode 1 (toestemming geweigerd) werd alleen gelogd, nooit vertaald
+       naar `denyPermission()` — gecorrigeerd, inclusief een correcte "Opnieuw proberen"-knop.
+
+    **Belangrijkste bevinding: scherm-uit breekt de sessie** (Safari bevriest de pagina
+    volledig, geen enkele update gedurende 5+ minuten, gevolgd door een opgehoopte
+    inhaalslag van state-transities bij hervatting) — zie de uitgewerkte analyse en
+    consequentie in sectie 16. Dit is een architecturale grens, geen kalibratievraagstuk.
 12. Navigation-UI (buiten scope van dit document)
 ```
 
