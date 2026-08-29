@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12, nog niet gestart — kaartlibrary vastgelegd (MapLibre GL JS, sectie 5.0), wireframe in review (12.1)
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1 (UX/wireframe, drie-fasen A/B/C) ✅ AKKOORD 29-8-2026, klaar voor 12.2 (MapLibre-basis)
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -200,13 +200,23 @@ Toont gelijktijdig: eigen positie, volledige gekozen route, huidige positie op d
 ```
 Rechtstreeks gevoed door `ProgressTracker`/`calculateProgress` (stap 5) — geen nieuwe berekening, alleen weergave.
 
-### 5.4 Start Guidance (🆕 NIEUW, als benoemd UX-concept)
+### 5.4 Start Guidance (🆕 NIEUW, als benoemd UX-concept) — nu onderdeel van een drieledige fasering (CONCRETISERING, 12.1-review 29-8-2026)
 
-Bij vertrek is de richting vaak onzeker (geen bewegingsrichting om op te varen, GPS-heading nog onbetrouwbaar bij lage snelheid — zie `lib/navigation/matching/candidate-matcher.ts`, headingcost-logica). Daarom een **aparte, nadrukkelijkere begeleiding bij het eerste knooppunt**, die overgaat naar de normale richtingaanwijzer zodra:
-- de gebruiker daadwerkelijk in beweging is (via `speedMps`/opeenvolgende matched-posities, dezelfde signalen die de matcher al gebruikt — geen nieuwe databron), én
-- er een betrouwbare bewegingsrichting is vastgesteld.
+Vóór de eigenlijke navigatie (niveau 1-3, sectie 5.3) doorloopt de gebruiker drie visueel verwante, maar functioneel verschillende fasen — zelfde lay-out-structuur (richtingblok/kaart/statusregel), verschillend doel en toon:
 
-Dit is een concrete toepassing van **"overgang van kompas naar bewegingsrichting"**: vóór beweging een kompas-achtige indicatie (waar is knooppunt 42 t.o.v. waar ik nu sta), ná beweging een gewone voorwaartse richtingaanwijzer.
+**A. Naar startpunt** — "Waar moet ik heen om te beginnen?" Actief zodra de gebruiker nog niet bij het eerste knooppunt van de gekozen route is (bijv. na de parkeerplaats-stap, sectie 5.1). Toont het startknooppuntnummer + afstand ernaartoe, met een fiets-icoon (niet de richtingpijl — dat zou verwarrend suggereren dat de navigatie al bezig is) en de tekst "Rijd naar het startpunt". Geen progressiepercentage getoond (er is nog geen route-voortgang, alleen een aanrij-afstand).
+
+**B. Start Guidance** — "Welke kant moet ik op?" Actief zodra de gebruiker het startknooppunt bereikt heeft, vóórdat er voldoende bewegingsinformatie is om een betrouwbare voortgaande richting te bepalen (dezelfde technische aanleiding als eerder beschreven: `headingDeg` nog niet betrouwbaar bij lage snelheid). Kompas-icoon, tekst "Je staat bij het startpunt" / "Rijd deze richting op", met het eerste te volgen knooppunt + afstand.
+
+**C. Navigatie** — de normale, doorlopende navigatie (niveau 1-3 zoals hierboven). Overgang van B naar C gebeurt automatisch zodra er een betrouwbare bewegingsrichting is (sectie 5.5) — geen aparte gebruikersactie nodig.
+
+```
+A. Naar startpunt  →  B. Start Guidance  →  C. Navigatie
+   (aanrijden)          (vertrekpunt,           (onderweg,
+                          nog stilstaand)         volgend knooppunt)
+```
+
+Dit onderscheid is functioneel belangrijk, niet alleen cosmetisch: het voorkomt dat een gebruiker die nog naar het startpunt onderweg is per ongeluk denkt dat de routenavigatie al begonnen is (en dus een "afwijking" zou kunnen zien terwijl hij simpelweg nog niet bij de route is).
 
 ### 5.5 GPS-koers pas betrouwbaar gebruiken bij beweging (BESTAAND BESLUIT, architectuur al zo gebouwd)
 
@@ -214,10 +224,10 @@ Sluit direct aan op wat de candidate matcher al doet: `headingDeg` is nullable e
 
 ### 5.6 Wat hier WEL gebouwd wordt (stap 12, deze fase)
 
+- Drieledige voorfasering: A. Naar startpunt, B. Start Guidance, C. Navigatie (sectie 5.4) — visueel verwant, functioneel onderscheiden
 - Richtingscherm (niveau 1)
 - Noordgerichte kaart met route + positie + komende knooppunten (niveau 2)
 - Voortgangsweergave (niveau 3)
-- Start Guidance-overgang
 - Koppeling van al deze schermen aan de bestaande `NavigationSessionController` (géén nieuwe navigatielogica — alleen consumptie van wat er al is)
 - Bevestigde toestand-weergave voor alle 11 states (in elk geval `ON_ROUTE`/`POSSIBLE_DEVIATION`/`OFF_ROUTE`/`REROUTING`/`REROUTED`/`GPS_LOST`/`PERMISSION_DENIED`/`ARRIVED` moeten zichtbaar anders aanvoelen — niet alle 11 hoeven een unieke visuele state, maar geen enkele mag onzichtbaar/verwarrend blijven)
 
