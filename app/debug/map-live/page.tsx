@@ -33,6 +33,10 @@ import { DeviationDetector } from "@/lib/navigation/deviation/deviation-detector
 import { NavigationSessionController } from "@/lib/navigation/lifecycle/navigation-session-controller";
 import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-geolocation-source";
 import { buildRouteProgressModel, calculateProgress, calculateNextNodeInfo } from "@/lib/navigation/progress/route-progress-model";
+import { distanceBetween } from "@/lib/navigation/matching/geometry";
+import { determinePreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
+import type { PreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
+import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
 import { buildRouteGeoJson } from "@/lib/map/route-geometry-adapter";
 import { buildPositionMarkerGeoJson } from "@/lib/map/position-marker-adapter";
 import type { GraphEdge } from "@/lib/route-engine/types";
@@ -59,6 +63,10 @@ const TEST_NODE_IDS = ["12", "34", "56", "78"];
 
 const CONFIRM_MS = 5000;
 const COOLDOWN_MS = 10000;
+// Drieledige voorfasering (sectie 5.4, stap 12.7) -- uitgangspunten, net als de
+// overige kalibratiewaarden nog niet definitief vastgezet (sectie 3.7).
+const ARRIVAL_AT_START_THRESHOLD_M = 25;
+const MOVEMENT_SPEED_THRESHOLD_MPS = 0.5;
 
 // Statusweergave per NavigationState (stap 12.6) -- puur weergave, geen nieuwe
 // navigatielogica. Beknopte, niet-alarmistische labels (ontwerpregel: afwijking
@@ -87,6 +95,8 @@ export default function MapLiveDebugPage() {
   const [running, setRunning] = useState(false);
   const [nextNode, setNextNode] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
   const [progressInfo, setProgressInfo] = useState<{ ratio: number; distanceAlongM: number; totalM: number } | null>(null);
+  const [phase, setPhase] = useState<PreNavigationPhase>("TO_START");
+  const [startInfo, setStartInfo] = useState<{ nodeId: string; distanceM: number } | null>(null);
   const [navState, setNavState] = useState<NavigationState>("NOT_STARTED");
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -230,10 +240,31 @@ export default function MapLiveDebugPage() {
     }
 
     const unsubscribe = source.subscribe((sample) => {
+      // Fase A/B/C bepalen (stap 12.7) -- vóór sessiestart: alleen de afstand tot het
+      // startknooppunt is relevant, geen matching (er is nog geen actieve navigatie).
+      const rdPosition = wgs84ToRd(sample.lat, sample.lon);
+      const distanceToStartM = distanceBetween(rdPosition, model.geometry[0]);
+      const currentPhase = determinePreNavigationPhase({
+        sessionStarted,
+        distanceToStartM,
+        arrivalAtStartThresholdM: ARRIVAL_AT_START_THRESHOLD_M,
+        navigationState: stateMachine.getState(),
+        speedMps: sample.speedMps,
+        movementSpeedThresholdMps: MOVEMENT_SPEED_THRESHOLD_MPS,
+      });
+      setPhase(currentPhase);
+
+      if (currentPhase === "TO_START") {
+        setStartInfo({ nodeId: TEST_NODE_IDS[0], distanceM: distanceToStartM });
+        appendLog(`onderweg naar startpunt, nog ${Math.round(distanceToStartM)}m`);
+        return; // nog geen matching/navigatie -- sessie is bewust nog niet gestart
+      }
+
       if (!sessionStarted) {
         try {
           stateMachine.start();
           sessionStarted = true;
+          appendLog("startpunt bereikt, sessie gestart");
         } catch {
           return;
         }
@@ -276,6 +307,10 @@ export default function MapLiveDebugPage() {
     sourceRef.current = null;
     unsubscribeRef.current = null;
     setRunning(false);
+    setPhase("TO_START");
+    setStartInfo(null);
+    setNextNode(null);
+    setProgressInfo(null);
     appendLog("Sessie gestopt.");
   }
 
@@ -290,7 +325,7 @@ export default function MapLiveDebugPage() {
     <div style={{ position: "relative", width: "100%", height: "100dvh" }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
-      {nextNode && (
+      {(phase === "TO_START" ? startInfo : nextNode) && (
         <div
           style={{
             position: "absolute",
@@ -302,22 +337,51 @@ export default function MapLiveDebugPage() {
             borderRadius: 16,
             padding: "12px 24px",
             textAlign: "center",
+            minWidth: 180,
             boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+            transition: "opacity 0.25s ease",
           }}
         >
-          <div
-            style={{
-              fontSize: 32,
-              lineHeight: 1,
-              color: "#FFFFFF",
-              transform: `rotate(${nextNode.bearingDeg}deg)`,
-              transition: "transform 0.3s ease",
-            }}
-          >
-            ↑
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
-          <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
+          {phase === "TO_START" && startInfo && (
+            <>
+              <div style={{ fontSize: 32, lineHeight: 1, color: "#FFFFFF" }}>🚲</div>
+              <div style={{ fontSize: 12, color: "#9FE1CB", marginTop: 4 }}>Rijd naar het startpunt</div>
+              <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {startInfo.nodeId}</div>
+              <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(startInfo.distanceM)} m</div>
+            </>
+          )}
+
+          {phase === "START_GUIDANCE" && (
+            <>
+              <div style={{ fontSize: 12, color: "#9FE1CB", marginBottom: 2 }}>Je staat bij het startpunt</div>
+              <div style={{ fontSize: 32, lineHeight: 1, color: "#FFFFFF" }}>🧭</div>
+              <div style={{ fontSize: 18, fontWeight: 600, color: "#FFFFFF", marginTop: 4 }}>Rijd deze richting op</div>
+              {nextNode && (
+                <>
+                  <div style={{ fontSize: 15, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
+                  <div style={{ fontSize: 13, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
+                </>
+              )}
+            </>
+          )}
+
+          {phase === "NAVIGATING" && nextNode && (
+            <>
+              <div
+                style={{
+                  fontSize: 32,
+                  lineHeight: 1,
+                  color: "#FFFFFF",
+                  transform: `rotate(${nextNode.bearingDeg}deg)`,
+                  transition: "transform 0.3s ease",
+                }}
+              >
+                ↑
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
+              <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
+            </>
+          )}
         </div>
       )}
 
@@ -351,6 +415,7 @@ export default function MapLiveDebugPage() {
           </span>
         </div>
         <div><strong>map:</strong> {mapStatus}</div>
+        <div><strong>fase:</strong> {phase}</div>
         <div><strong>nav state:</strong> {navState}</div>
         {error && <div style={{ color: "#b00020" }}>{error}</div>}
       </div>

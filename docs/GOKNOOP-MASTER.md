@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.5 ✅ TECHNISCH GO, 12.6 (progress/state-UI) gebouwd — klaar voor 12.7 (Start Guidance + polish)
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 ✅ GEBOUWD + tests, klaar voor de gebundelde iPhone-eindvalidatie (zie checklist in sectie 7)
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -437,8 +437,42 @@ Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geï
 
       257/257 tests ongewijzigd (geen nieuwe engine-code, dus geen nieuwe tests nodig),
       `tsc` schoon.
-12.7  Start Guidance + polish -- volledige integratie van Start Guidance, daarna
-      visuele polish, animaties, spacing, iconografie, responsive gedrag
+12.7  ✅ GEBOUWD (29-8-2026, echte iPhone-validatie gebundeld bij de eindvalidatie --
+      zie de checklist hierboven) -- Start Guidance + polish -- volledige integratie
+      van de drieledige fasering (sectie 5.4), daarna visuele polish.
+
+      NIEUWE, KLEINE ENGINE-COMPONENT (bewust apart getest, geen if/else-logica in de
+      UI-laag): `lib/navigation/session/pre-navigation-phase.ts`
+      (`determinePreNavigationPhase`) -- pure functie, 10 tests. Bepaalt welke van de
+      drie fasen getoond moet worden:
+        - A. TO_START: sessie nog niet gestart, gebruiker buiten de aankomstdrempel
+          (`ARRIVAL_AT_START_THRESHOLD_M`, uitgangspunt 25m) van het startknooppunt.
+        - B. START_GUIDANCE: binnen de aankomstdrempel maar sessie nog niet gestart, ÓF
+          sessie gestart maar nog geen betrouwbare bewegingsrichting (`speedMps` null of
+          onder `MOVEMENT_SPEED_THRESHOLD_MPS`, uitgangspunt 0,5 m/s) -- ontwerpregel
+          sectie 5.5: GPS-heading pas betrouwbaar bij beweging.
+        - C. NAVIGATING: sessie gestart, bevestigd `ON_ROUTE`, én voldoende snelheid.
+      Beide drempelwaarden zijn UITGANGSPUNTEN, net als de overige kalibratiewaarden
+      (sectie 3.7) nog niet definitief vastgezet.
+
+      INTEGRATIE in `app/debug/map-live/page.tsx`: `NavigationStateMachine.start()`
+      wordt nu pas aangeroepen zodra fase A voorbij is (niet meer bij de eerste GPS-fix
+      onvoorwaardelijk, zoals in stap 11's harness) -- tijdens fase A wordt alleen de
+      afstand tot het startknooppunt getoond (via `distanceBetween`/`wgs84ToRd`, stap 4,
+      geen nieuwe geometrieberekening), geen matching, geen actieve navigatiesessie. De
+      niveau-1-kaart (stap 12.5) toont nu drie visuele varianten: 🚲 "Rijd naar het
+      startpunt" (A), 🧭 "Rijd deze richting op" met "Je staat bij het startpunt"-caption
+      (B), en de bestaande pijl (C, ongewijzigd uit stap 12.5).
+
+      POLISH: zachte overgang (`transition: opacity`) op de richtingkaart, consistente
+      afronding/padding, fase zichtbaar in het debugpaneel voor testdoeleinden.
+
+      267/267 tests totaal (10 nieuw), `tsc` schoon. `lib/navigation/`/`lib/route-engine/`
+      bevatten nog steeds geen MapLibre-import.
+
+      Hiermee is de volledige UI-ketting (12.1-12.7) gebouwd en met de simulator/
+      geautomatiseerde tests gedekt. De laatste stap is de ÉÉN gebundelde iPhone-
+      eindvalidatie (zie checklist hierboven), niet nog een losse deelstap-test.
 ```
 
 Ná 12.1-12.7 zelfstandig bewezen: integratie in de bestaande Phase 3-flow (na routekeuze, een "Start navigatie"-knop die hierheen leidt) en validatie met echte iPhone-GPS (`BrowserGeolocationSource`, al gebouwd en gevalideerd in stap 11).
