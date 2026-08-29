@@ -1,6 +1,7 @@
 import { Point } from "../../route-engine/types";
 import { rdToWgs84 } from "../../route-engine/coordinate-transform";
 import { GpsSample } from "../types";
+import { segmentLengths, pointAtDistance } from "../matching/geometry";
 
 /**
  * Testhulpmiddelen om GpsSample-reeksen te construeren voor de test-eerst-
@@ -9,32 +10,16 @@ import { GpsSample } from "../types";
  * SimulatedGpsSource weinig waarde voor de latere scenario's (route volgen,
  * ruis, aanhoudende afwijking).
  *
+ * Polyline-wiskunde (afstand, interpolatie) komt uit lib/navigation/matching/
+ * geometry.ts -- hergebruikt, niet gedupliceerd (na de refactor bij
+ * implementatiestap 4, TypeScript-regel "dubbele utilities vermijden").
+ *
  * Bewust GEEN matching/deviation-logica hier -- dat hoort bij latere
  * implementatiestappen (sectie 23, stap 4/6). Dit bestand bouwt alleen
  * GpsSample-reeksen, het interpreteert ze niet.
  */
 
 const METERS_PER_DEGREE_LAT = 111_320; // benadering, voldoende voor testruis/-offsets van enkele meters
-
-function distance(a: Point, b: Point): number {
-  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-}
-
-/** Interpoleert het punt op de polyline op `distanceAlongM` vanaf het begin. */
-function pointAtDistance(geometry: readonly Point[], segmentLengths: readonly number[], distanceAlongM: number): Point {
-  let remaining = distanceAlongM;
-  for (let i = 0; i < segmentLengths.length; i++) {
-    const segLen = segmentLengths[i];
-    if (remaining <= segLen || i === segmentLengths.length - 1) {
-      const t = segLen === 0 ? 0 : Math.min(1, remaining / segLen);
-      const a = geometry[i];
-      const b = geometry[i + 1];
-      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-    }
-    remaining -= segLen;
-  }
-  return geometry[geometry.length - 1];
-}
 
 export type BuildTrackOptions = {
   /** M/s, constante snelheid over het hele traject (MVP: geen versnelling/vertraging). */
@@ -58,13 +43,8 @@ export type BuildTrackOptions = {
 export function buildTrackAlongGeometry(geometry: readonly Point[], options: BuildTrackOptions): GpsSample[] {
   if (geometry.length < 2) return [];
 
-  const segmentLengths: number[] = [];
-  let totalLengthM = 0;
-  for (let i = 0; i < geometry.length - 1; i++) {
-    const len = distance(geometry[i], geometry[i + 1]);
-    segmentLengths.push(len);
-    totalLengthM += len;
-  }
+  const lengths = segmentLengths(geometry);
+  const totalLengthM = lengths.reduce((sum, len) => sum + len, 0);
   if (totalLengthM === 0) return [];
 
   const totalDurationS = totalLengthM / options.speedMps;
@@ -74,7 +54,7 @@ export function buildTrackAlongGeometry(geometry: readonly Point[], options: Bui
   for (let i = 0; i < sampleCount; i++) {
     const elapsedS = i * options.sampleIntervalS;
     const distanceAlongM = Math.min(elapsedS * options.speedMps, totalLengthM);
-    const point = pointAtDistance(geometry, segmentLengths, distanceAlongM);
+    const point = pointAtDistance(geometry, lengths, distanceAlongM);
     const wgs84 = rdToWgs84(point.x, point.y);
     samples.push({
       lat: wgs84.lat,

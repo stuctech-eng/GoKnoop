@@ -9,6 +9,8 @@
  * op een latere, nog te bouwen stap).
  */
 
+import { Point } from "../route-engine/types";
+
 /**
  * De 11 navigatiestatussen uit het Phase 4-ontwerp (sectie 14), inclusief
  * PERMISSION_DENIED als expliciete state (na review, niet samengevoegd met
@@ -30,6 +32,24 @@ export type NavigationState =
   | "ARRIVED"
   | "CANCELLED"
   | "PERMISSION_DENIED";
+
+/**
+ * Resultaat van map matching (ontwerp sectie 5) -- implementatiestap 4.
+ *
+ * `segmentIndex` verwijst hier naar een polyline-segment binnen de
+ * geometrie die aan de matcher is meegegeven (index i = segment tussen
+ * geometry[i] en geometry[i+1]) -- NIET (nog) naar `Route.edges[]` uit de
+ * Route Engine (Phase 2). Die koppeling (een edge kan uit meerdere
+ * geometrie-segmenten bestaan) is een latere integratiestap (sectie 23,
+ * stap 8, Route Engine-koppeling), bewust nog niet vooruit gebouwd.
+ */
+export type MatchedPosition = {
+  segmentIndex: number;
+  segmentT: number; // 0..1, positie binnen dat segment
+  point: Point; // RD New, zelfde CRS als de route-geometrie
+  perpendicularDistanceM: number;
+  cumulativeDistanceM: number; // afstand vanaf het begin van de geometrie tot dit punt
+};
 
 /** Eén GPS-meting, zoals de Geolocation API die levert (of de simulator nabootst). */
 export type GpsSample = {
