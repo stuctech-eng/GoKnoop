@@ -1,7 +1,7 @@
 # GoKnoop — Phase 4: Navigation Master Design
 
 **Datum:** 29 augustus 2026
-**Status:** ONTWERP — EERSTE REVIEWRONDE VERWERKT (29-8-2026), NOG NIET DEFINITIEF GOEDGEKEURD. Drie ontwerppunten aangescherpt (tijdelijke rerouting-constraint, dataset-versie-pinning, candidate-based map matching) en een expliciet GPS-tijdmodel toegevoegd (sectie 13B). Niet implementeren vóór definitief akkoord.
+**Status:** ONTWERP GOEDGEKEURD — GO VOOR IMPLEMENTATIE (29-8-2026). Beide resterende reviewpunten verwerkt: `PERMISSION_DENIED` als expliciete state, hysteresis-zone vastgelegd als de te kalibreren parameter `RECENT_ROUTE_MEMORY` (geen voortijdig vastgepinde meterwaarde). Implementatie volgt de volgorde in sectie 23, startend bij de GPS-simulator.
 **Basis:** Phase 1 (data, `docs/phase1b-design.md`), Phase 2 (Route Engine, `docs/phase2-route-engine-design.md`), Phase 3 (Core UX, gevalideerd — zie `docs/HANDOFF.md` sectie 1), `lib/route-engine/types.ts`, `lib/route-engine/is-traversable.ts`, `lib/route-engine/location-resolver.ts` (geraadpleegd voor dit ontwerp, niet uit het geheugen aangenomen)
 
 ---
@@ -77,7 +77,8 @@ export type NavigationState =
   | "GPS_LOST"
   | "PAUSED"
   | "ARRIVED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "PERMISSION_DENIED";
 
 export type GpsSample = {
   lat: number;
@@ -362,9 +363,25 @@ reroute: {
 **Kernregels:**
 - `temporaryAvoidEdgeIds` wordt meegegeven als `constraints.avoidEdgeIds` bij de herberekeningsaanvraag (sectie 18) — géén permanente uitsluiting van die edges uit de graph, alleen voor déze ene aanvraag.
 - **De blokkade vervalt zodra de gebruiker weer op een logisch aansluitend deel van de (nieuwe) route zit** — concreet: na de eerstvolgende bevestigde `ON_ROUTE`-transitie (sectie 14) wordt `temporaryAvoidEdgeIds` geleegd. Een edge die ooit vermeden werd, blijft dus niet voor de rest van de sessie geblokkeerd.
-- **Geen blinde blokkade van álle ooit-bereden edges** — alleen een korte hysteresis-zone rond het afwijkingspunt zelf (bijv. de laatste N bereden edges vóór het reroute-moment, of edges binnen een vaste afstand terug vanaf `previousRoutePosition` — exacte omvang te kalibreren, sectie 20/21). Reden: een blinde, volledige blokkade zou een legitieme U-bocht of brugverbinding die toevallig op het net-bereden stuk ligt, onterecht onmogelijk maken.
+- **Geen blinde blokkade van álle ooit-bereden edges** — alleen een korte zone rond het afwijkingspunt zelf, hierna aangeduid als de parameter **`RECENT_ROUTE_MEMORY`** (de laatste N bereden edges vóór het reroute-moment, óf edges binnen een vaste afstand terug vanaf `previousRoutePosition` — welke van de twee vormen, en welke waarde, wordt niet hier vastgepind). Reden: een blinde, volledige blokkade zou een legitieme U-bocht of brugverbinding die toevallig op het net-bereden stuk ligt, onterecht onmogelijk maken.
 
-Dit is nu een vastgelegd onderdeel van het contract, niet langer een open vraag.
+**BESLISSING (na review, 29-8-2026): `RECENT_ROUTE_MEMORY` blijft bewust een te kalibreren parameter, geen vast getal in dit document.** Een specifieke meterwaarde nu al vastleggen (bijv. "200 meter") zou een aanname zijn zonder meting — precies wat sectie 1 van de KERNPRINCIPES uitsluit. De parameter wordt empirisch bepaald via de geplande GPS-simulaties (sectie 20), niet hier geschat.
+
+**Het belangrijkste te toetsen scenario voor deze parameter (leidend voor de kalibratie, belangrijker dan de exacte meterwaarde zelf):**
+
+```
+afwijking
+   ↓
+reroute
+   ↓
+nieuwe route kruist de oude route (topologisch, niet per se fysiek dezelfde edges)
+   ↓
+GEEN onmiddellijke pingpong-reroute
+```
+
+Dit scenario — een nieuwe, herberekende route die op een later punt weer legitiem samenkomt met (of kruist met) de oorspronkelijke route — is de eigenlijke maatstaf voor of `RECENT_ROUTE_MEMORY` goed is afgesteld, meer dan een geïsoleerde "hoeveel meter"-vraag. Zie sectie 20 voor de bijbehorende testcase.
+
+Dit onderdeel van het contract (het mechanisme + de bijbehorende parameter-naam) is nu vastgelegd; de waarde van `RECENT_ROUTE_MEMORY` zelf is expliciet nog open, per ontwerp.
 
 ---
 
@@ -499,6 +516,12 @@ Onafhankelijke, "overlay"-transities (kunnen vanuit vrijwel elke actieve state o
   * → GPS_LOST     (sectie 12, GPS_TIMEOUT_S overschreden)
   GPS_LOST → *      (nieuwe sample: terug naar de state die past bij de nieuwe positie)
 
+  NOT_STARTED → PERMISSION_DENIED  (Geolocation-toestemming geweigerd of ingetrokken, sectie 19)
+  PERMISSION_DENIED → NOT_STARTED  (gebruiker verleent alsnog toestemming, bijv. via een
+                                     herhaalde browser-prompt of na een handmatige wijziging
+                                     in de systeeminstellingen — sessie start opnieuw op,
+                                     geen automatische hervatting van een oude state)
+
   * → PAUSED        (gebruiker pauzeert expliciet)
   PAUSED → *         (gebruiker hervat: normale detectie vanaf de huidige positie)
 
@@ -512,6 +535,7 @@ Onafhankelijke, "overlay"-transities (kunnen vanuit vrijwel elke actieve state o
 - `REROUTING` is een tussentoestand, geen "permanente" state — de sessie kan hier niet blijven hangen zonder tijdslimiet (zie sectie 19, foutafhandeling: een herberekeningsaanvraag die te lang duurt of faalt, moet expliciet terugvallen naar `OFF_ROUTE`, niet oneindig blijven wachten).
 - `ARRIVED` en `CANCELLED` zijn eindstadia — geen transities weg van deze states binnen dezelfde sessie (een nieuwe navigatie start een nieuwe `NavigationSession`).
 - `PAUSED` en `GPS_LOST` zijn beide "overlay"-achtig, maar niet identiek: `PAUSED` is een bewuste gebruikersactie (sessie blijft geldig, gebruiker verwacht geen updates), `GPS_LOST` is onbedoeld (sessie blijft geldig, systeem probeert actief te herstellen). Ze worden bewust als aparte states gemodelleerd, niet samengevoegd — een UI zou ze anders moeten tonen (bijv. `PAUSED` toont een pauze-icoon, `GPS_LOST` toont een waarschuwing).
+- **`PERMISSION_DENIED` (na review, 29-8-2026, nu een expliciete state, niet langer een losse foutopmerking):** conceptueel anders dan `GPS_LOST`. `GPS_LOST` betekent: toestemming is er, het signaal valt tijdelijk weg (sectie 12) — het systeem blijft actief proberen te herstellen. `PERMISSION_DENIED` betekent: er is helemaal geen toegang tot locatiedata, ongeacht signaalkwaliteit — er valt niets te "herstellen" totdat de gebruiker expliciet opnieuw toestemming geeft. Vóór de eerste GPS-fix bereikt is (dus vanuit `NOT_STARTED`) is dit de enige plek waar deze transitie optreedt in dit MVP-contract; toestemming die tijdens een al lopende sessie wordt ingetrokken (zeldzamer, maar mogelijk op sommige platforms) wordt voor nu behandeld als een overgang naar `PERMISSION_DENIED` vanuit elke actieve state, net als `GPS_LOST` — geen aparte sub-state nodig voor dat verschil.
 
 ---
 
@@ -596,7 +620,7 @@ Expliciet, geen stille failures (zelfde principe als Phase 2 sectie 7's 404/422-
 | Herberekeningsaanvraag faalt (netwerkfout, 5xx) | State blijft `REROUTING` gedurende een beperkte retry-poging (aantal/timeout te kalibreren); bij definitief falen: terug naar `OFF_ROUTE`, gebruiker ziet expliciete melding "herberekenen mislukt, probeer opnieuw" — nooit stil terugvallen naar `ON_ROUTE` alsof er niets aan de hand is |
 | Herberekeningsaanvraag geeft 422 (`disconnected`/`no_traversable_edges`/`all_paths_blocked_by_constraints`, zie Phase 2 sectie 7) | Zelfde principe: terug naar `OFF_ROUTE` met de specifieke `reason` doorgegeven aan de UI-laag — een gebruiker die zich op een geïsoleerde node bevindt (Phase 1 sectie 7: 389 zulke nodes bestaan) heeft recht op een begrijpelijke foutmelding, niet een oneindige `REROUTING`-spinner |
 | `datasetVersionId` van de actieve dataset wijzigt tijdens een lopende sessie (nieuwe import geactiveerd, zie Phase 1B sectie 8) | **BESLISSING (na review, 29-8-2026), definitief: dataset-versie-pinning.** Een lopende `NavigationSession` blijft altijd gekoppeld aan de `datasetVersionId` waarmee de oorspronkelijke `Route` berekend is — een sessie switcht nooit stilzwijgend van dataset-versie halverwege, ook niet bij een reroute (de herberekeningsaanvraag gebruikt expliciet dezelfde `datasetVersionId`, niet automatisch `config/activeDataset`). Reden: een gebruiker midden in een rit mag niet plotseling een ander netwerkmodel onder zich krijgen omdat er toevallig een dataset-update plaatsvond. Ná afloop van de sessie gebruikt een volgende, nieuwe navigatie gewoon de dan-actieve dataset. Een eventuele "er is een bijgewerkte kaart beschikbaar"-melding tijdens een lopende sessie is een mogelijke latere UX-toevoeging, geen automatische migratie — niet in Phase 4 MVP. |
-| Browser/OS weigert Geolocation-toestemming | Sessie kan `ON_ROUTE`-detectie nooit starten — expliciete foutstate nodig (niet in de huidige `NavigationState`-enum opgenomen; **toe te voegen bij review**: bijv. `PERMISSION_DENIED` als aparte state, of behandelen als een permanente vorm van `GPS_LOST` — te beslissen, hier bewust niet stilzwijgend ingevuld) |
+| Browser/OS weigert Geolocation-toestemming | **BESLIST (na review, 29-8-2026):** sessie gaat naar de expliciete `PERMISSION_DENIED`-state (sectie 14) — geen `ON_ROUTE`-detectie mogelijk zolang deze state actief is. UI-laag kan dit onderscheiden van `GPS_LOST` en een passende actie tonen (bijv. "geef locatietoestemming" i.p.v. "GPS-signaal wordt gezocht"). |
 | App/tab wordt gesloten tijdens een actieve sessie | Sessie is client-side (sectie 17) — bij een volledige sluiting gaat de sessie verloren, geen server-side hervatpunt in dit MVP-contract. Bewuste consequentie van de privacy-eerst-keuze, niet een over het hoofd geziene bug — expliciet te communiceren aan de gebruiker (UI-verantwoordelijkheid) |
 
 ---
@@ -625,16 +649,31 @@ Zelfde discipline als Phase 2's "Volgende stap"-sectie: eerst de kernlogica bewi
    → verwacht: POSSIBLE_DEVIATION → (na confirm-venster) OFF_ROUTE → REROUTING → REROUTED,
    binnen een verwacht aantal samples/tijdvenster
         ↓
+6B. **Kern-testcase voor `RECENT_ROUTE_MEMORY` (na review, 29-8-2026 — belangrijker dan een
+    losse meterwaarde-aanname):** een simulatie waarbij de herberekende route de oorspronkelijke
+    route op een later punt weer kruist of erbij aansluit (topologisch legitiem, niet zomaar
+    hetzelfde afgeweken stuk). Verwacht resultaat: GEEN onmiddellijke tweede reroute op het
+    kruisingsmoment zelf. Dit scenario, niet een geïsoleerde "bij hoeveel meter reroute je niet
+    opnieuw"-vraag, is de doorslaggevende test bij het kalibreren van `RECENT_ROUTE_MEMORY`
+    (sectie 10/11). Aanvullend: een variant waarbij de gebruiker een legitieme U-bocht maakt
+    vlak na een reroute → verwacht: deze blijft mogelijk, `RECENT_ROUTE_MEMORY` mag een
+    correcte U-bocht niet blokkeren (zie de "brugverbinding"-waarschuwing in sectie 10)
+        ↓
 7. Een vierde simulatie: signaalverlies (gat in de sample-reeks) → verwacht: GPS_LOST,
    daarna herstel zodra samples hervatten
+        ↓
+7B. Een simulatie van geweigerde/ingetrokken locatietoestemming → verwacht: `PERMISSION_DENIED`
+    (sectie 14), niet `GPS_LOST` — en, indien toestemming alsnog verleend wordt, een correcte
+    terugkeer naar `NOT_STARTED` (geen hervatting van oude, mogelijk verouderde state)
         ↓
 8. Een vijfde simulatie: lage-nauwkeurigheid-samples (hoge accuracyM) tussen goede samples
    → verwacht: lage-nauwkeurigheid-samples genegeerd voor matching, gpsHealth-teller omhoog
         ↓
 9. Kalibratie van de nog open constanten (DEVIATION_THRESHOLD_M, DEVIATION_CONFIRM_DURATION_S,
-   REROUTE_COOLDOWN_S, GPS_ACCURACY_THRESHOLD_M, GPS_TIMEOUT_S, matching-venstergrootte)
-   TEGEN deze gesimuleerde scenario's — dezelfde aanpak als Phase 1's threshold-sensitivity-analyse
-   (phase1b-design.md sectie 6), nu toegepast op tijd/afwijking in plaats van ruimtelijke clustering
+   REROUTE_COOLDOWN_S, GPS_ACCURACY_THRESHOLD_M, GPS_TIMEOUT_S, matching-venstergrootte,
+   RECENT_ROUTE_MEMORY) TEGEN deze gesimuleerde scenario's — dezelfde aanpak als Phase 1's
+   threshold-sensitivity-analyse (phase1b-design.md sectie 6), nu toegepast op tijd/afwijking
+   in plaats van ruimtelijke clustering
         ↓
 10. Pas dán: koppeling aan een echte `BrowserGeolocationSource` en UI
         ↓
@@ -660,7 +699,9 @@ Zelfde discipline als Phase 2's "Volgende stap"-sectie: eerst de kernlogica bewi
 6. Ná een reroute wordt de oorspronkelijke `Route` niet overschreven; `reroute.newRoute` bevat een volwaardig, zelfstandig `Route`-object dat aan hetzelfde Phase 2-contract voldoet (inclusief de distance-invariant).
 7. Signaalverlies en herstel worden correct gedetecteerd en getoond zonder dat de sessie "vastloopt" in `GPS_LOST` na herstel van het signaal.
 8. Elk foutscenario uit sectie 19 heeft een gedefinieerd, getest eindresultaat — geen scenario eindigt in een undefined/onbeschreven state.
-9. Alle nieuwe code doorstaat `tsc` en `vitest run` vóór "klaar" (zelfde discipline als HANDOFF sectie 3, les 9).
+9. Geweigerde of ingetrokken locatietoestemming resulteert in de expliciete `PERMISSION_DENIED`-state (sectie 14), nooit in `GPS_LOST` of een onbepaalde state.
+10. Een herberekende route die de oorspronkelijke route op een later punt legitiem kruist of erbij aansluit, veroorzaakt geen onmiddellijke tweede reroute (sectie 20 stap 6B) — dit is de doorslaggevende test voor een correct gekalibreerde `RECENT_ROUTE_MEMORY`.
+11. Alle nieuwe code doorstaat `tsc` en `vitest run` vóór "klaar" (zelfde discipline als HANDOFF sectie 3, les 9).
 
 ---
 
@@ -679,28 +720,43 @@ Ter aanvulling op sectie 1 (buiten scope), specifiek de dingen die tíjdens het 
 
 ---
 
-## 23. IMPLEMENTATIEVOLGORDE (na review, 29-8-2026)
+## 23. IMPLEMENTATIEVOLGORDE (definitief, na tweede reviewronde 29-8-2026)
 
 Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica bewezen is — zelfde discipline als Phase 2's "Volgende stap"-sectie:
 
 ```
-1. GPS-simulator (SimulatedGpsSource, sectie 4/20)
-2. NavigationSession state machine (sectie 14), los van echte matching
-3. Route-position matcher (sectie 5, incl. candidate-scoring)
-4. Progress calculation (sectie 8)
-5. Deviation detection (sectie 9)
-6. Reroute decision logic (sectie 10/11, incl. temporaryAvoidEdgeIds)
-7. Reroute via de bestaande Route Engine (sectie 18)
-8. GPS_LOST / PAUSED / ARRIVED-afhandeling (sectie 12/14)
-9. Integratietests (volledige gesimuleerde scenario's, sectie 20)
-10. Echte GPS op iPhone (BrowserGeolocationSource, sectie 4)
-11. Navigation-UI (buiten scope van dit document)
+1.  GPS-simulator (SimulatedGpsSource, sectie 4/20)
+2.  NavigationSession state machine (sectie 14, incl. PERMISSION_DENIED)
+3.  GPS-metadata / navigation clock (sectie 13B — vóór matching, want matching en
+    deviation-detectie bouwen hierop voort)
+4.  Candidate-based route-position matcher (sectie 5, afstand + heading + continuïteit + snelheid)
+5.  Progress calculation (sectie 8)
+6.  Deviation detection (sectie 9)
+7.  Reroute-context (sectie 10/11, incl. temporaryAvoidEdgeIds en RECENT_ROUTE_MEMORY —
+    nog los van de exacte kalibratiewaarde)
+8.  Koppeling aan de bestaande Route Engine voor de daadwerkelijke herberekeningsaanvraag (sectie 18)
+9.  GPS_LOST / PERMISSION_DENIED / PAUSED / ARRIVED-afhandeling (sectie 12/14/19)
+10. Integratietests — volledige gesimuleerde scenario's, inclusief de kruisings-/pingpong-test
+    (sectie 20 stap 6B) en de permission-simulatie (stap 7B) — kalibratie van alle open
+    constanten (incl. RECENT_ROUTE_MEMORY) gebeurt hier
+11. Echte GPS op iPhone (BrowserGeolocationSource, sectie 4)
+12. Navigation-UI (buiten scope van dit document)
 ```
 
-Stap 10 en 11 volgen pas nadat 1–9 aantoonbaar correct zijn tegen gesimuleerde tracks — dezelfde volgorde-eis als Phase 2 (eerst fixture-tests, dan pas API, dan pas koppeling aan productiedata).
+Stap 11 en 12 volgen pas nadat 1–10 aantoonbaar correct zijn tegen gesimuleerde tracks — dezelfde volgorde-eis als Phase 2 (eerst fixture-tests, dan pas API, dan pas koppeling aan productiedata). De UI blijft nadrukkelijk de laatste stap, niet een tussentijdse validatiemethode.
 
 ---
 
-## STATUS: EERSTE REVIEWRONDE VERWERKT
+## STATUS: GO VOOR IMPLEMENTATIE
 
-Na de eerste review zijn drie punten definitief vastgelegd (tijdelijke `avoidEdgeIds` bij reroute met vervalregel, dataset-versie-pinning voor de duur van een sessie, candidate-scoring in plaats van pure afstandsmatching) en is een expliciet GPS-tijdmodel (sectie 13B) toegevoegd. Resterende open punten: de exacte hysteresis-zone-omvang voor `recentlyTraversedEdgeIds` (sectie 10) en de `PERMISSION_DENIED`-state (sectie 19) — beide bewust nog niet ingevuld, te bepalen bij kalibratie/implementatie (sectie 20/21) resp. bij de volgende reviewronde. Geen implementatie vóór akkoord op deze versie — zelfde volgorde als Phase 2 (`docs/phase2-route-engine-design.md`, sectie 0/10).
+Beide resterende punten uit de eerste reviewronde zijn afgehandeld: `PERMISSION_DENIED` is een expliciete `NavigationState` geworden (sectie 14), en de hysteresis-zone is vastgelegd als de te kalibreren parameter `RECENT_ROUTE_MEMORY` (sectie 10/11) met een concreet leidend testscenario (afwijking → reroute → kruising met de oude route → geen onmiddellijke pingpong-reroute, sectie 20 stap 6B) in plaats van een voortijdig vastgepinde meterwaarde.
+
+Alle architectuurbeslissingen staan nu vast:
+- `Route` = onveranderlijke, door de gebruiker gekozen route
+- `NavigationSession` = tijdelijke, client-side live toestand (positie, voortgang, afwijking, navigatiestatus, evt. herberekende route)
+- Route Engine = ongewijzigd hergebruikt voor het daadwerkelijke berekenen van routes (initieel én bij reroute)
+- Navigation layer = nieuwe, duidelijk afgebakende laag die bepaalt wáár de gebruiker zich bevindt en wannéér een nieuwe route nodig is
+
+Deze scheiding is bewust zo ontworpen dat toekomstige uitbreidingen (offline-navigatie, wearables, geavanceerdere navigatie-intelligentie) op de bestaande contracten kunnen aanhaken zonder de kern (`Route`, `NavigationSession`, Route Engine) opnieuw te hoeven ontwerpen.
+
+**Implementatie kan starten volgens de volgorde in sectie 23**, te beginnen bij de GPS-simulator — niet bij de UI, en niet bij de echte iPhone-GPS-koppeling.
