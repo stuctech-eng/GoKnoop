@@ -1,7 +1,7 @@
 # GoKnoop — Phase 4: Navigation Master Design
 
 **Datum:** 29 augustus 2026
-**Status:** ONTWERP — TER REVIEW, NOG NIET GOEDGEKEURD (in tegenstelling tot Phase 2: dit document heeft nog geen externe review gehad. Niet implementeren vóór gezamenlijke review, zoals afgesproken.)
+**Status:** ONTWERP — EERSTE REVIEWRONDE VERWERKT (29-8-2026), NOG NIET DEFINITIEF GOEDGEKEURD. Drie ontwerppunten aangescherpt (tijdelijke rerouting-constraint, dataset-versie-pinning, candidate-based map matching) en een expliciet GPS-tijdmodel toegevoegd (sectie 13B). Niet implementeren vóór definitief akkoord.
 **Basis:** Phase 1 (data, `docs/phase1b-design.md`), Phase 2 (Route Engine, `docs/phase2-route-engine-design.md`), Phase 3 (Core UX, gevalideerd — zie `docs/HANDOFF.md` sectie 1), `lib/route-engine/types.ts`, `lib/route-engine/is-traversable.ts`, `lib/route-engine/location-resolver.ts` (geraadpleegd voor dit ontwerp, niet uit het geheugen aangenomen)
 
 ---
@@ -223,6 +223,38 @@ Implementaties:
 
 **Venstergrootte:** te bepalen empirisch bij implementatie (test-eerst, sectie 20) — voorlopig voorstel: het venster schaalt mee met de laatst bekende snelheid (`speedMps` uit de GPS-sample) plus een vaste marge, zodat een stilstaande fietser geen onnodig groot venster krijgt, maar een snelle fietser niet buiten het venster valt tussen twee GPS-updates in.
 
+**BIJSTELLING (na review, 29-8-2026): het contract beschrijft geen pure "zoek binnen X meter"-regel, maar een candidate-scoring-aanpak met meerdere signalen.** Reden: een puur geometrisch dichtstbijzijnde-punt-criterium kan de verkeerde route-tak kiezen bij een parallel liggend fietspad of een andere, dichtbij liggende route die toevallig dichterbij ligt dan de daadwerkelijk gevolgde:
+
+```
+parallel fietspad
+       │
+       │  GPS
+       ●
+       │
+gevolgde route ───────
+```
+
+Puur op afstand zou de matcher hier de verkeerde tak als "meest waarschijnlijk" aanwijzen. **Voor Phase 4 MVP is geen zwaar Hidden-Markov-model of vergelijkbaar map-matching-framework nodig** — wel een candidate-segment-aanpak die meerdere signalen combineert:
+
+```
+GPS-sample
+   ↓
+kandidaat-segmenten (binnen het venster, sectie 5 origineel)
+   ↓
+score per kandidaat, combinatie van:
+   - perpendicularDistanceM        (geometrisch, zoals hierboven)
+   - headingDeg-overeenkomst        (komt de segmentrichting overeen met de bewegingsrichting? sectie 13)
+   - continuïteit met vorige match  (ligt dit kandidaat-segment logisch "verderop" t.o.v. de vorige
+                                      matchedPosition, of zou het een onwaarschijnlijke sprong betekenen?)
+   - speedMps                       (mede input voor venstergrootte, zoals al vastgelegd hierboven)
+   ↓
+beste kandidaat = MatchedPosition
+```
+
+**Continuïteit met de vorige match weegt zwaar:** een kandidaat-segment dat een grote, onwaarschijnlijke sprong in `cumulativeDistanceM` zou betekenen ten opzichte van de vorige `matchedPosition` (bijv. plotseling 500m verderop op de route, terwijl de tijd sinds de vorige sample en de gemeten snelheid dat niet aannemelijk maken) wordt lager gescoord, zelfs als de geometrische afstand op zichzelf klein is. Dit is dezelfde soort bescherming als het matching-venster zelf, nu ook toegepast als scoringsfactor in plaats van een harde ja/nee-grens.
+
+**Exacte gewichten van elk signaal:** niet hier als hard getal vastgelegd — te kalibreren tegen gesimuleerde tracks (sectie 20), inclusief een specifiek testscenario met een parallel fietspad naast de route (zie sectie 20, stap 6B).
+
 ---
 
 ## 6. HUIDIG KNOOPPUNT / VOLGEND KNOOPPUNT
@@ -297,7 +329,42 @@ DEVIATION_CONFIRM_DURATION_S -- hoe lang moet dat aanhouden vóór het als beves
 
 **Herberekeningsaanvraag zelf:** hergebruikt de bestaande Route Engine (sectie 18) — geen nieuw pathfinding-algoritme. `fromLogicalNodeId` wordt de dichtstbijzijnde routeerbare node bij de huidige matched-positie (via `resolveNearestNodes()`, Phase 2/3, die al geïsoleerde nodes uitsluit — zie de Amsterdam-bugfix in Phase 2 sectie 9C, direct herbruikbaar hier), `toLogicalNodeId` blijft het oorspronkelijke doel (`route.nodes[route.nodes.length - 1]`).
 
-**Open vraag voor de gezamenlijke review (bewust hier benoemd, niet stilzwijgend ingevuld):** moet herberekening rekening houden met "niet terug over hetzelfde stuk waar de gebruiker net vandaan komt" (bijv. via `avoidEdgeIds`, al beschikbaar in het Route Engine-contract, sectie 8 van Phase 2)? Dit voorkomt een pingpong-effect waarbij de herberekende route de gebruiker terug over de afgeweken route stuurt. Voorstel: ja, maar dit raakt aan hoeveel van de recent bereden edges vermeden moeten worden — een parameter die eerst empirisch getest moet worden (sectie 20), niet nu vastgelegd als hard getal.
+**BESLISSING (na review, 29-8-2026): pingpong-preventie via een tijdelijke, vervallende `avoidEdgeIds`-constraint — niet het hele afgeweken traject permanent blokkeren.**
+
+Het risico is reëel: als de gebruiker bij afwijkingspunt X opnieuw wordt herberekend zonder enige beperking, kan de kortste route simpelweg teruggaan naar het punt waar de afwijking begon (B), waarna de gebruiker weer bij X uitkomt — een pingpong-lus.
+
+```
+Route
+───────→ A ── B
+             \
+              gebruiker wijkt uit
+               \
+                X   ← reroute-punt: kortste pad zou zo terug kunnen naar B
+```
+
+**Uitbreiding van `NavigationSession.reroute` (sectie 2) met expliciete reroute-context:**
+
+```typescript
+reroute: {
+  active: boolean;
+  rerouteCount: number;
+  lastRerouteAt: string | null;
+  newRoute: Route | null;
+
+  // NIEUW, na review:
+  originNodeId: string | null;              // dichtstbijzijnde node bij het reroute-moment
+  previousRoutePosition: MatchedPosition | null; // laatste matched-positie op de OUDE route vóór afwijking
+  recentlyTraversedEdgeIds: string[];        // korte, tijdgebonden geschiedenis van bereden edges
+  temporaryAvoidEdgeIds: string[];           // subset van recentlyTraversedEdgeIds, actief als constraint
+} | null;
+```
+
+**Kernregels:**
+- `temporaryAvoidEdgeIds` wordt meegegeven als `constraints.avoidEdgeIds` bij de herberekeningsaanvraag (sectie 18) — géén permanente uitsluiting van die edges uit de graph, alleen voor déze ene aanvraag.
+- **De blokkade vervalt zodra de gebruiker weer op een logisch aansluitend deel van de (nieuwe) route zit** — concreet: na de eerstvolgende bevestigde `ON_ROUTE`-transitie (sectie 14) wordt `temporaryAvoidEdgeIds` geleegd. Een edge die ooit vermeden werd, blijft dus niet voor de rest van de sessie geblokkeerd.
+- **Geen blinde blokkade van álle ooit-bereden edges** — alleen een korte hysteresis-zone rond het afwijkingspunt zelf (bijv. de laatste N bereden edges vóór het reroute-moment, of edges binnen een vaste afstand terug vanaf `previousRoutePosition` — exacte omvang te kalibreren, sectie 20/21). Reden: een blinde, volledige blokkade zou een legitieme U-bocht of brugverbinding die toevallig op het net-bereden stuk ligt, onterecht onmogelijk maken.
+
+Dit is nu een vastgelegd onderdeel van het contract, niet langer een open vraag.
 
 ---
 
@@ -339,6 +406,54 @@ Dit is het kernprobleem dat de state machine (sectie 14) oplost. Zonder hysteres
 **Gebruik van `speedMps`:**
 - Input voor de dynamische venstergrootte bij map matching (sectie 5).
 - Mogelijk input voor het bevestigingsvenster (sectie 11) — een stilstaande fietser (bijv. gestopt bij een verkeerslicht, net buiten de route) hoeft niet dezelfde tijdsdrempel te doorlopen als een snel bewegende fietser die daadwerkelijk wegrijdt. **Voorstel, te valideren bij implementatie:** niet nu als harde regel vastleggen, wel als expliciete kalibratie-vraag meenemen in sectie 20/21.
+
+---
+
+## 13B. NAVIGATION CLOCK / GPS-TIJDMODEL
+
+**Toegevoegd na review (29-8-2026) als expliciet, apart onderdeel van het contract** — niet zomaar impliciet aangenomen dat "de laatste sample" altijd voldoende is.
+
+`GpsSample` (sectie 2) bevat al `timestamp`, `accuracyM`, `lat`/`lon`, `speedMps`, `headingDeg`. Het punt hier is dat `NavigationSession` drie conceptueel verschillende tijd-/positie-begrippen uit elkaar moet houden, niet één ervan laten doen alsof het de andere twee vervangt:
+
+```
+GPS update       -- een ruwe, binnenkomende sample. Kan van lage kwaliteit zijn (sectie 12),
+                     kan ruis bevatten, wordt NIET automatisch de nieuwe waarheid.
+
+navigation time   -- de tijd zoals de NavigationSession-logica die hanteert voor
+                     tijdgebaseerde beslissingen (bevestigingsvenster sectie 11, cooldown
+                     sectie 11, GPS_TIMEOUT_S sectie 12). Gebaseerd op device-tijd van de
+                     sample (`GpsSample.timestamp`), NIET op ontvangsttijd van de browser/
+                     app zelf -- die kunnen uiteenlopen bij batching/vertraging.
+
+last valid fix    -- de laatste GPS-sample die daadwerkelijk gebruikt is voor map matching
+                     (dus: voldoende nauwkeurig, sectie 12). Kan ouder zijn dan de laatste
+                     ontvangen GPS update als recente samples zijn afgekeurd op accuracy.
+```
+
+**Waarom dit onderscheid ertoe doet — het is direct de tijdbasis voor bijna elk ander mechanisme in dit document:**
+
+| Mechanisme | Gebruikt welk tijdbegrip |
+|---|---|
+| `GPS_LOST`-detectie (sectie 12) | Verstreken tijd sinds *last valid fix*, niet sinds de laatste (mogelijk afgekeurde) GPS update |
+| Afwijkingsbevestiging (sectie 11) | Verstreken *navigation time* sinds `deviation.sinceTimestamp`, gebaseerd op device-tijdstempels van de samples, niet op wanneer de app ze verwerkte |
+| Reroute-cooldown (sectie 11) | *Navigation time* sinds `reroute.lastRerouteAt` |
+| Snelheid/heading-fallback (sectie 13) | Tijdsverschil tussen twee opeenvolgende *geldige* samples (voor de vector-berekening), dus eveneens *last valid fix*-tijdstippen |
+| Toekomstige ETA (`durationEstimate`, blijft `null` in MVP) | Zou op dezelfde basis moeten bouwen — reden om dit nu al goed vast te leggen |
+| Batterij/performance-throttling (sectie 16) | *GPS update*-tijd (elke binnenkomende sample, ook afgekeurde, telt mee voor de vraag "hoe vaak komt er data binnen") |
+| Diagnose van slechte GPS-ontvangst (`gpsHealth`, sectie 2) | Combinatie: *GPS update*-frequentie vs. *last valid fix*-frequentie — een groot verschil tussen beide is zelf een signaal (veel updates, weinig bruikbare) |
+
+**Consequentie voor het datamodel:** `NavigationSession.gpsHealth` (sectie 2) wordt met dit onderscheid preciezer:
+
+```typescript
+gpsHealth: {
+  lastUpdateAt: number | null;       // laatste ontvangen GPS update, ongeacht kwaliteit
+  lastValidFixAt: number | null;     // laatste sample die daadwerkelijk gebruikt is voor matching
+  consecutiveLowAccuracyCount: number;
+  signalLostSince: number | null;    // afgeleid: null zolang lastValidFixAt binnen GPS_TIMEOUT_S ligt
+};
+```
+
+(Vervangt het eerdere, minder specifieke `lastSampleAt`-veld uit de sectie 2-schets.)
 
 ---
 
@@ -480,7 +595,7 @@ Expliciet, geen stille failures (zelfde principe als Phase 2 sectie 7's 404/422-
 |---|---|
 | Herberekeningsaanvraag faalt (netwerkfout, 5xx) | State blijft `REROUTING` gedurende een beperkte retry-poging (aantal/timeout te kalibreren); bij definitief falen: terug naar `OFF_ROUTE`, gebruiker ziet expliciete melding "herberekenen mislukt, probeer opnieuw" — nooit stil terugvallen naar `ON_ROUTE` alsof er niets aan de hand is |
 | Herberekeningsaanvraag geeft 422 (`disconnected`/`no_traversable_edges`/`all_paths_blocked_by_constraints`, zie Phase 2 sectie 7) | Zelfde principe: terug naar `OFF_ROUTE` met de specifieke `reason` doorgegeven aan de UI-laag — een gebruiker die zich op een geïsoleerde node bevindt (Phase 1 sectie 7: 389 zulke nodes bestaan) heeft recht op een begrijpelijke foutmelding, niet een oneindige `REROUTING`-spinner |
-| `datasetVersionId` van de actieve dataset wijzigt tijdens een lopende sessie (nieuwe import geactiveerd, zie Phase 1B sectie 8) | De lopende sessie blijft de originele `Route` en `datasetVersionId` gebruiken tot expliciete beëindiging — een sessie switcht nooit stilzwijgend van dataset-versie halverwege. Een herberekeningsaanvraag ván die sessie gebruikt dus nog steeds de oude `datasetVersionId`, ook al is de live dataset inmiddels gewijzigd — consistentie binnen de sessie weegt zwaarder dan altijd de nieuwste data gebruiken. **Openstaande vraag voor review:** is dit acceptabel, of moet een dataset-wijziging tijdens navigatie een expliciete gebruikersmelding triggeren? Niet hier stilzwijgend besloten. |
+| `datasetVersionId` van de actieve dataset wijzigt tijdens een lopende sessie (nieuwe import geactiveerd, zie Phase 1B sectie 8) | **BESLISSING (na review, 29-8-2026), definitief: dataset-versie-pinning.** Een lopende `NavigationSession` blijft altijd gekoppeld aan de `datasetVersionId` waarmee de oorspronkelijke `Route` berekend is — een sessie switcht nooit stilzwijgend van dataset-versie halverwege, ook niet bij een reroute (de herberekeningsaanvraag gebruikt expliciet dezelfde `datasetVersionId`, niet automatisch `config/activeDataset`). Reden: een gebruiker midden in een rit mag niet plotseling een ander netwerkmodel onder zich krijgen omdat er toevallig een dataset-update plaatsvond. Ná afloop van de sessie gebruikt een volgende, nieuwe navigatie gewoon de dan-actieve dataset. Een eventuele "er is een bijgewerkte kaart beschikbaar"-melding tijdens een lopende sessie is een mogelijke latere UX-toevoeging, geen automatische migratie — niet in Phase 4 MVP. |
 | Browser/OS weigert Geolocation-toestemming | Sessie kan `ON_ROUTE`-detectie nooit starten — expliciete foutstate nodig (niet in de huidige `NavigationState`-enum opgenomen; **toe te voegen bij review**: bijv. `PERMISSION_DENIED` als aparte state, of behandelen als een permanente vorm van `GPS_LOST` — te beslissen, hier bewust niet stilzwijgend ingevuld) |
 | App/tab wordt gesloten tijdens een actieve sessie | Sessie is client-side (sectie 17) — bij een volledige sluiting gaat de sessie verloren, geen server-side hervatpunt in dit MVP-contract. Bewuste consequentie van de privacy-eerst-keuze, niet een over het hoofd geziene bug — expliciet te communiceren aan de gebruiker (UI-verantwoordelijkheid) |
 
@@ -564,6 +679,28 @@ Ter aanvulling op sectie 1 (buiten scope), specifiek de dingen die tíjdens het 
 
 ---
 
-## STATUS: WACHT OP GEZAMENLIJKE REVIEW
+## 23. IMPLEMENTATIEVOLGORDE (na review, 29-8-2026)
 
-Dit document legt het functionele en architecturale contract van Phase 4 vast, inclusief een aantal expliciet open vragen (sectie 10, 17, 19) die bewust niet zijn dichtgeredeneerd zonder gezamenlijke beslissing. Geen implementatie totdat dit gereviewd is — zelfde volgorde als Phase 2 (`docs/phase2-route-engine-design.md`, sectie 0/10).
+Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica bewezen is — zelfde discipline als Phase 2's "Volgende stap"-sectie:
+
+```
+1. GPS-simulator (SimulatedGpsSource, sectie 4/20)
+2. NavigationSession state machine (sectie 14), los van echte matching
+3. Route-position matcher (sectie 5, incl. candidate-scoring)
+4. Progress calculation (sectie 8)
+5. Deviation detection (sectie 9)
+6. Reroute decision logic (sectie 10/11, incl. temporaryAvoidEdgeIds)
+7. Reroute via de bestaande Route Engine (sectie 18)
+8. GPS_LOST / PAUSED / ARRIVED-afhandeling (sectie 12/14)
+9. Integratietests (volledige gesimuleerde scenario's, sectie 20)
+10. Echte GPS op iPhone (BrowserGeolocationSource, sectie 4)
+11. Navigation-UI (buiten scope van dit document)
+```
+
+Stap 10 en 11 volgen pas nadat 1–9 aantoonbaar correct zijn tegen gesimuleerde tracks — dezelfde volgorde-eis als Phase 2 (eerst fixture-tests, dan pas API, dan pas koppeling aan productiedata).
+
+---
+
+## STATUS: EERSTE REVIEWRONDE VERWERKT
+
+Na de eerste review zijn drie punten definitief vastgelegd (tijdelijke `avoidEdgeIds` bij reroute met vervalregel, dataset-versie-pinning voor de duur van een sessie, candidate-scoring in plaats van pure afstandsmatching) en is een expliciet GPS-tijdmodel (sectie 13B) toegevoegd. Resterende open punten: de exacte hysteresis-zone-omvang voor `recentlyTraversedEdgeIds` (sectie 10) en de `PERMISSION_DENIED`-state (sectie 19) — beide bewust nog niet ingevuld, te bepalen bij kalibratie/implementatie (sectie 20/21) resp. bij de volgende reviewronde. Geen implementatie vóór akkoord op deze versie — zelfde volgorde als Phase 2 (`docs/phase2-route-engine-design.md`, sectie 0/10).
