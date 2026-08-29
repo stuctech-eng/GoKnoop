@@ -21,6 +21,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
+
+// Next.js (Turbopack) breekt de automatische worker-URL-resolutie van MapLibre v6:
+// `new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url)` wordt door
+// Turbopack omgezet in een gehasht asset zonder de vereiste sibling
+// (maplibre-gl-shared.mjs) ernaast te plaatsen. Gevolg: de kaart mount (canvas,
+// achtergrondkleur, besturing werken), maar er wordt nooit een tegel opgevraagd --
+// exact het "blijft op loading staan, verder gebeurt er niets"-symptoom.
+// Oplossing: beide workerbestanden zelf in public/ zetten en hier expliciet naar
+// wijzen, één keer, vóór de eerste kaart wordt aangemaakt.
+let workerUrlConfigured = false;
+function ensureWorkerUrlConfigured() {
+  if (workerUrlConfigured) return;
+  maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
+  workerUrlConfigured = true;
+}
 import "maplibre-gl/dist/maplibre-gl.css";
 
 const DEMO_STYLE_URL = "https://demotiles.maplibre.org/style.json";
@@ -43,6 +58,8 @@ export default function MapDebugPage() {
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
+
+    ensureWorkerUrlConfigured();
 
     let map: maplibregl.Map;
     try {
