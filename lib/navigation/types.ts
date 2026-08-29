@@ -9,6 +9,28 @@
  * op een latere, nog te bouwen stap).
  */
 
+/**
+ * De 11 navigatiestatussen uit het Phase 4-ontwerp (sectie 14), inclusief
+ * PERMISSION_DENIED als expliciete state (na review, niet samengevoegd met
+ * GPS_LOST -- zie ontwerp sectie 14, laatste bullet).
+ *
+ * Dit type hoort bij implementatiestap 2 (ontwerp sectie 23). De state
+ * machine zelf staat in lib/navigation/session/navigation-state-machine.ts,
+ * bewust nog los van echte GPS/matching/reroute-logica (latere stappen).
+ */
+export type NavigationState =
+  | "NOT_STARTED"
+  | "ON_ROUTE"
+  | "POSSIBLE_DEVIATION"
+  | "OFF_ROUTE"
+  | "REROUTING"
+  | "REROUTED"
+  | "GPS_LOST"
+  | "PAUSED"
+  | "ARRIVED"
+  | "CANCELLED"
+  | "PERMISSION_DENIED";
+
 /** Eén GPS-meting, zoals de Geolocation API die levert (of de simulator nabootst). */
 export type GpsSample = {
   lat: number;
