@@ -598,7 +598,46 @@ export type NavigationOfflineContract = {
 
 **BEVESTIGD MET ECHTE METING (implementatiestap 11, 29-8-2026):** deze theoretische grens is nu concreet aangetoond op een iPhone, via de debugharness (`app/debug/navigation/page.tsx`). Bij een lopende sessie met het scherm actief werkte de volledige keten betrouwbaar over meerdere testwandelingen (zie hieronder). Zodra het scherm vergrendelde, bleek Safari niet alleen `watchPosition`-updates te pauzeren, maar ook de JavaScript-timer van de pagina zelf te bevriezen: tijdens een test van 5 minuten 34 seconden met het scherm uit kwam er **geen enkele** log-regel binnen, ook niet de periodieke GPS-gezondheidscheck (elke 2s). Bij het weer aanzetten van het scherm verwerkte de pagina in één klap een opgehoopte reeks state-transities (`GPS_LOST → POSSIBLE_DEVIATION → ON_ROUTE → POSSIBLE_DEVIATION → OFF_ROUTE` binnen 9 seconden) in plaats van één nette overgang.
 
-**Consequentie:** scherm-uit tijdens navigatie is met de huidige architectuur (browser-`watchPosition`, geen wake lock, geen achtergrond-geolocation) niet bruikbaar — geen tijdige `GPS_LOST`-detectie, onvoorspelbare inhaalslag bij hervatting. Dit is geen kalibratievraagstuk (geen combinatie van `gpsTimeoutMs`/drempels lost dit op zolang de pagina zelf bevroren is) maar vraagt een aparte architecturale maatregel — bijv. een Screen Wake Lock API-aanroep tijdens een actieve sessie, of (verdergaand) een native wrapper met achtergrond-locatietoegang. Buiten scope van Phase 4 MVP; te agenderen als eigen vervolgstap, niet stilzwijgend opgelost.
+**Consequentie:** scherm-uit tijdens navigatie is met de huidige architectuur (browser-`watchPosition`, geen wake lock, geen achtergrond-geolocation) niet bruikbaar — geen tijdige `GPS_LOST`-detectie, onvoorspelbare inhaalslag bij hervatting. Dit is geen kalibratievraagstuk (geen enkele combinatie van drempelwaarden lost dit op zolang de pagina zelf bevroren is) maar vraagt een aparte architecturale maatregel — bijv. een Screen Wake Lock API-aanroep tijdens een actieve sessie, of (verdergaand) een native wrapper met achtergrond-locatietoegang. Buiten scope van Phase 4 MVP; te agenderen als eigen vervolgstap, niet stilzwijgend opgelost.
+
+**MVP-BESLISSING (na review, 29-8-2026): Screen Wake Lock toegevoegd als kleine, aparte infrastructuurlaag (`lib/navigation/wake-lock/screen-wake-lock.ts`, implementatiestap 11B).**
+
+```
+Navigatie gestart
+       ↓
+Wake Lock aanvragen
+       ↓
+Scherm blijft actief
+       ↓
+watchPosition blijft normaal functioneren
+       ↓
+GPS → matching → progress → deviation → reroute
+```
+
+Bij `PAUSED`/`ARRIVED`/`CANCELLED`/het verlaten van navigatie: Wake Lock onmiddellijk vrijgeven. Als iOS/Safari de lock verliest door systeemgedrag (bijv. app-wissel), vraagt de controller 'm automatisch opnieuw aan zodra de pagina weer zichtbaar wordt (`visibilitychange`), maar NIET als de lock bewust is vrijgegeven (voorkomt een aanvraag-loop).
+
+**Wat dit expliciet NIET oplost, en NOOIT als opgelost gepresenteerd mag worden:**
+
+> GoKnoop web-MVP vereist dat het scherm tijdens navigatie actief blijft. Wake Lock probeert het scherm actief te houden, maar biedt geen garantie op continue JavaScript/GPS-uitvoering wanneer iOS/Safari de pagina opschort.
+
+Wake Lock voorkomt dat het scherm *automatisch* uitgaat — het is geen volwaardige achtergrond-GPS-oplossing en verandert niets aan wat implementatiestap 11 al aantoonde: als de gebruiker het scherm zelf uitzet (of iOS de pagina om een andere reden opschort), bevriest de sessie alsnog.
+
+**Architectuurkeuze, bevestigd, niet gewijzigd:** GoKnoop blijft een PWA voor de MVP. `📱` installeerbaar op het beginscherm, `🗺️` navigatie volledig in de PWA, `📍` GPS via de browser Geolocation API, `🔋` Wake Lock tijdens actieve navigatie, `🌐` geen native app nodig voor de MVP. De bestaande laagscheiding (`GpsSource → matching → progress → deviation → navigation`) maakt het mogelijk om later, zonder de navigatie-engine opnieuw te ontwerpen, een native shell met achtergrond-locatietoegang toe te voegen — mocht scherm-aan-navigatie in de praktijk te beperkend blijken.
+
+**Implementatiestap 11B — Wake Lock-validatie (nog te doen door de gebruiker, met een echt toestel), vóór Phase 4 UI:**
+```
+1. Navigatie starten
+2. Wake Lock actief controleren (zichtbaar in het debugpaneel: "wake lock actief")
+3. Scherm laten vergrendelen
+4. Kijken of het scherm daadwerkelijk actief blijft (Wake Lock doet zijn werk)
+5. 5-10 minuten wandelen/fietsen
+6. GPS-updates controleren (blijven ze doorkomen?)
+7. GPS_LOST controleren (treedt het nog op, ondanks Wake Lock?)
+8. Progress controleren (blijft die correct oplopen?)
+9. Navigatie beëindigen
+10. Controleren dat Wake Lock wordt vrijgegeven (paneel toont weer "false")
+```
+Als dit stabiel werkt: **"Web-MVP navigatie = scherm-aan navigatie"** is een houdbare, geteste aanname. Als Safari/iOS ondanks Wake Lock de JavaScript-executie alsnog bevriest, is dat een harde, empirische bevestiging dat echte achtergrondnavigatie uiteindelijk een native/achtergrond-locatie-aanpak vereist — geen kwestie van verder tunen.
 
 ---
 
@@ -853,6 +892,14 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
     volledig, geen enkele update gedurende 5+ minuten, gevolgd door een opgehoopte
     inhaalslag van state-transities bij hervatting) — zie de uitgewerkte analyse en
     consequentie in sectie 16. Dit is een architecturale grens, geen kalibratievraagstuk.
+11B. ✅ (infrastructuur klaar; ECHTE validatie nog te doen door de gebruiker zelf)
+    Screen Wake Lock (sectie 16, MVP-beslissing) — `ScreenWakeLockController`
+    (9 tests, tsc schoon), aangevraagd bij sessiestart, vrijgegeven bij Stop/
+    PERMISSION_DENIED/unmount, automatische her-aanvraag via `visibilitychange`.
+    Geïntegreerd in de debugharness (paneel toont "wake lock actief"). **Expliciet géén
+    garantie dat dit scherm-uit/pagina-opschorting volledig voorkomt** — zie het
+    validatieprotocol in sectie 16 (implementatiestap 11B), nog uit te voeren op een
+    echt toestel vóór dit als "Web-MVP navigatie = scherm-aan navigatie" geldt.
 12. Navigation-UI (buiten scope van dit document)
 ```
 

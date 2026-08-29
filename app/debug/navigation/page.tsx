@@ -36,6 +36,7 @@ import { NavigationSessionController } from "@/lib/navigation/lifecycle/navigati
 import { buildRouteProgressModel, calculateProgress } from "@/lib/navigation/progress/route-progress-model";
 import { ProgressTracker } from "@/lib/navigation/progress/progress-tracker";
 import { RerouteContextTracker } from "@/lib/navigation/reroute/reroute-context-tracker";
+import { ScreenWakeLockController } from "@/lib/navigation/wake-lock/screen-wake-lock";
 import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
 import type { GraphEdge, Point } from "@/lib/route-engine/types";
 import type { GpsSample, NavigationState } from "@/lib/navigation/types";
@@ -59,6 +60,7 @@ export default function NavigationDebugHarness() {
   const [gpsTimeoutMs, setGpsTimeoutMs] = useState(10000);
 
   const [running, setRunning] = useState(false);
+  const [wakeLockActive, setWakeLockActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<NavigationState>("NOT_STARTED");
   const [rawSample, setRawSample] = useState<GpsSample | null>(null);
@@ -71,6 +73,7 @@ export default function NavigationDebugHarness() {
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const healthIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wakeLockRef = useRef<ScreenWakeLockController | null>(null);
 
   function appendLog(text: string) {
     setLog((prev) => [{ t: new Date().toISOString().slice(11, 23), text }, ...prev].slice(0, 50));
@@ -147,6 +150,10 @@ export default function NavigationDebugHarness() {
             // De sessie is feitelijk nooit "actief" geworden -- de knop moet dus geen
             // "Stop" meer tonen, maar de retry-tekst (zie de render-logica onderaan).
             setRunning(false);
+            wakeLockRef.current?.release();
+            wakeLockRef.current?.destroy();
+            wakeLockRef.current = null;
+            setWakeLockActive(false);
             setError("Locatietoestemming geweigerd.");
           } else {
             setError(`GPS-fout: ${err.message}`);
@@ -212,8 +219,25 @@ export default function NavigationDebugHarness() {
 
     source.start();
 
+    // Screen Wake Lock (ontwerp sectie 16, MVP-beslissing 29-8-2026): aanvragen zodra
+    // navigatie start. Faalt stil op browsers/situaties zonder ondersteuning (progressive
+    // enhancement) -- geen blokkade van de sessie zelf.
+    const wakeLockController = new ScreenWakeLockController({
+      onError: (err) => appendLog(`Wake Lock-fout: ${err instanceof Error ? err.message : String(err)}`),
+    });
+    wakeLockController.request().then((ok) => {
+      setWakeLockActive(ok);
+      appendLog(ok ? "Wake Lock actief." : "Wake Lock niet beschikbaar/geweigerd (scherm kan alsnog uitgaan).");
+    });
+    wakeLockRef.current = wakeLockController;
+
     // Onafhankelijke GPS_LOST-check (ontwerp sectie 12/23-stap 9) -- ook zonder nieuwe sample.
-    const healthInterval = setInterval(() => controller.checkGpsHealth(), 2000);
+    // Tegelijk een goed, low-frequency moment om de Wake Lock-status in het paneel te verversen
+    // (bijv. na een systeem-vrijgave die via visibilitychange weer hersteld is).
+    const healthInterval = setInterval(() => {
+      controller.checkGpsHealth();
+      setWakeLockActive(wakeLockController.isActive());
+    }, 2000);
 
     sourceRef.current = source;
     unsubscribeRef.current = unsubscribe;
@@ -227,19 +251,26 @@ export default function NavigationDebugHarness() {
     sourceRef.current?.stop();
     unsubscribeRef.current?.();
     if (healthIntervalRef.current) clearInterval(healthIntervalRef.current);
+    wakeLockRef.current?.release();
+    wakeLockRef.current?.destroy();
     sourceRef.current = null;
     unsubscribeRef.current = null;
     healthIntervalRef.current = null;
+    wakeLockRef.current = null;
     setRunning(false);
-    appendLog("Sessie gestopt.");
+    setWakeLockActive(false);
+    appendLog("Sessie gestopt, Wake Lock vrijgegeven.");
   }
 
   useEffect(() => {
     return () => {
-      // Opruimen bij het verlaten van de pagina -- geen watch die blijft doorlopen.
+      // Opruimen bij het verlaten van de pagina -- geen watch die blijft doorlopen,
+      // geen Wake Lock die onnodig actief blijft (ontwerp sectie 16).
       sourceRef.current?.stop();
       unsubscribeRef.current?.();
       if (healthIntervalRef.current) clearInterval(healthIntervalRef.current);
+      wakeLockRef.current?.release();
+      wakeLockRef.current?.destroy();
     };
   }, []);
 
@@ -303,6 +334,7 @@ export default function NavigationDebugHarness() {
       <div style={panelStyle}>
         <div><strong>state:</strong> {state}</div>
         <div><strong>gps lost:</strong> {gpsHealth ? String(gpsHealth.isSignalLost) : "-"}</div>
+        <div><strong>wake lock actief:</strong> {String(wakeLockActive)}</div>
         <hr />
         <div><strong>raw sample</strong></div>
         <div>lat/lon: {rawSample ? `${rawSample.lat.toFixed(6)}, ${rawSample.lon.toFixed(6)}` : "-"}</div>
