@@ -766,9 +766,14 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
 5.  ✅ Progress calculation (sectie 8) — 25 tests, tsc schoon; matched geometrie-segment
     → Route.edges[]-index → cumulatieve afstand, edge.distanceM leidend (niet de rauwe
     geometrieafstand)
-6.  Deviation detection (sectie 9)
-7.  Reroute-context (sectie 10/11, incl. temporaryAvoidEdgeIds en RECENT_ROUTE_MEMORY —
-    nog los van de exacte kalibratiewaarde)
+6.  ✅ Deviation detection (sectie 9/11) — 13 tests, tsc schoon; orchestreert
+    GpsFixEvaluator + candidate matcher + NavigationStateMachine. Bevestigingsvenster
+    blijft uitsluitend in de state machine (stap 2), geen directe distance>X→OFF_ROUTE-
+    kortsluiting. Geen reroute-triggering, geen reportGpsLost()-aanroep (stap 7/8/9)
+7.  ✅ Reroute-context (sectie 10/11) — 9 tests, tsc schoon; RerouteContextTracker
+    houdt bezochte edges bij op cumulatieve routeafstand, levert temporaryAvoidEdgeIds
+    binnen een injecteerbaar RECENT_ROUTE_MEMORY-venster, clear() bij bevestigd ON_ROUTE.
+    Geen Route Engine-aanroep, geen startReroute() (stap 8)
 8.  Koppeling aan de bestaande Route Engine voor de daadwerkelijke herberekeningsaanvraag (sectie 18)
 9.  GPS_LOST / PERMISSION_DENIED / PAUSED / ARRIVED-afhandeling (sectie 12/14/19)
 10. Integratietests — volledige gesimuleerde scenario's, inclusief de kruisings-/pingpong-test
