@@ -774,7 +774,19 @@ Vastgelegd zodat implementatie niet naar de UI springt vóórdat de kernlogica b
     houdt bezochte edges bij op cumulatieve routeafstand, levert temporaryAvoidEdgeIds
     binnen een injecteerbaar RECENT_ROUTE_MEMORY-venster, clear() bij bevestigd ON_ROUTE.
     Geen Route Engine-aanroep, geen startReroute() (stap 8)
-8.  Koppeling aan de bestaande Route Engine voor de daadwerkelijke herberekeningsaanvraag (sectie 18)
+8.  ✅ Koppeling aan de bestaande Route Engine (sectie 18) — 12 tests, tsc schoon.
+    `RouteEngineClient` (injecteerbare interface, exact het bestaande `POST /api/route`-
+    contract), `RerouteExecutor` (vertaalt temporaryAvoidEdgeIds → constraints.avoidEdgeIds,
+    bewaakt route-onveranderlijkheid en dataset-versie-pinning), `performReroute` (koppelt aan
+    de stap 2-state machine). **BELANGRIJKE BEVINDING, nog niet opgelost:** de daadwerkelijke
+    `POST /api/route`-implementatie (`app/api/route/route.ts`) accepteert GEEN
+    `datasetVersionId`-parameter — hij leest altijd `config/activeDataset` vers uit Firestore.
+    Dat betekent dat sectie 19's dataset-versie-pinning vandaag niet door de API zelf
+    afgedwongen kan worden. `RerouteExecutor` bewaakt dit als vangnet (weigert een resultaat
+    met een afwijkende `datasetVersionId` i.p.v. het stilzwijgend te accepteren), maar de
+    onderliggende API-kloof (geen `datasetVersionId`-parameter) blijft bestaan totdat de
+    endpoint zelf wordt aangepast — buiten de scope van dit navigatiepakket, te agenderen
+    voor een volgende architectuurreview.
 9.  GPS_LOST / PERMISSION_DENIED / PAUSED / ARRIVED-afhandeling (sectie 12/14/19)
 10. Integratietests — volledige gesimuleerde scenario's, inclusief de kruisings-/pingpong-test
     (sectie 20 stap 6B) en de permission-simulatie (stap 7B) — kalibratie van alle open
