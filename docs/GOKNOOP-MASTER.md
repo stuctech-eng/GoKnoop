@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI gebouwd; startknooppunt-fallback (Volendam-fix) ✅ gebouwd + getest; groep-1 UI-polish ✅; iPhone-eindvalidatie nog te doen
+Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback ✅; heading-up-navigatie stap 1 (pure functies+tests) ✅ gebouwd; kaartrotatie/UI nog niet; 3 openstaande diagnosevragen (dubbele lijnen/Edam/positie)
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -323,6 +323,41 @@ Knooppunt 96 heeft 9 edges (niet geïsoleerd) maar is een **chokepoint**: `outbo
 - `app/page.tsx`: bewaart nu de volledige kandidatenlijst (niet alleen `candidates[0]`), stuurt die door naar `/api/route/loop`. **Eerlijke UI, geen verborgen sprong**: als het daadwerkelijk gebruikte startknooppunt afwijkt van de dichtstbijzijnde kandidaat, toont het resultatenscherm expliciet "Beste startpunt gevonden — 📍 Knooppunt X — Y km van je locatie" plus een regel dat het dichterbij gelegen knooppunt geen bruikbare route opleverde. Knooppunt-badges/labels op de resultatenlijst en het detailscherm gebruiken nu `loop.nodeDisplayNumbers[0]` (het daadwerkelijke, per-route startknooppunt) i.p.v. het oorspronkelijke, mogelijk-ongebruikte kandidaat-1-label.
 
 **Bewust nog niet gebouwd:** een start-node-score die afstand+routebeschikbaarheid+routekwaliteit combineert — eerst deze 1→5-fallback in de praktijk laten bewijzen (Volendam + Edam + een normale situatie waar kandidaat 1 al werkt), pas daarna eventueel verfijnen.
+
+---
+
+## 6C. HEADING-UP NAVIGATIE (🆕 NIEUW, spec ontvangen 29-8-2026 — stap 1 gebouwd, rest bewust uitgesteld)
+
+**Kernprincipe (vervangt "noord altijd boven" tijdens actieve navigatie):** de kaart/richtingindicator draait mee met de rijrichting van de fietser, niet met noord. Het volgende knooppunt wordt getoond ten opzichte van waar de fietser nú heen kijkt (rechtdoor/links/rechts/achteruit), niet als een absolute kompasrichting. Dit vervangt het eerder in sectie 5.9 genoemde "gebogen afslagpijl" — het is dezelfde onderliggende behoefte, nu volledig uitgespecificeerd.
+
+**Belangrijk, expliciet: dit wijzigt het "noord boven"-principe uit sectie 5.3/10 alleen voor de ACTIEVE navigatiefase.** De kaart tijdens routeplanning/-overzicht (vóór "Start") blijft noordgericht — heading-up is specifiek een eigenschap van de navigatiemodus.
+
+**Gebouwd (29-8-2026), stap 1 van de spec's eigen aanbevolen volgorde — uitsluitend pure, apart geteste functies, GEEN kaartrotatie, GEEN UI-wijziging:**
+
+`lib/navigation/direction/relative-direction.ts` (26 tests, `tsc` schoon, 304 totaal):
+- `normalizeAngleDeg`/`relativeAngleDeg` — hergebruikt de bestaande `bearingDegrees` (stap 4) voor de absolute bearing; dit bestand maakt 'm alleen relatief t.o.v. de rijrichting.
+- `classifyDirection` — RECHTDOOR/LICHT_LINKS/LINKS/LICHT_RECHTS/RECHTS/ACHTERUIT, drempels expliciet injecteerbaar (nog niet definitief, zelfde discipline als sectie 3.7).
+- `smoothHeadingDeg` — circulaire exponentiële smoothing (doorkruist de 0°/360°-grens via de kortste weg), voorkomt nerveuze rotatie (AC7).
+- `selectHeadingDeg` — GPS-bewegingsrichting tijdens voldoende snelheid, anders de laatst bekende stabiele richting vasthouden (AC8). Bewust GEEN device-kompas/magnetometer aangesloten — aparte sensor/toestemming, niet stilzwijgend toegevoegd.
+- `hasArrivedAtNode` — simpele afstandscheck; de "niet te vroeg springen"-stabiliteitslaag (spec sectie 13, vergelijkbare hysterese als deviation detection stap 6) is BEWUST nog niet gebouwd.
+
+**Nog niet gebouwd, bewust uitgesteld:**
+- Kaartrotatie zelf (MapLibre `setBearing`/continue rotatie-aansturing)
+- Wiring van deze functies in `NavigationScreen.tsx`
+- Aankomst-stabiliteitslaag (hysterese, voorkomt vroegtijdig wisselen van knooppunt)
+- Simulatie- en daarna echte-fietstests (spec sectie 26, stappen 11-12)
+
+**Reden voor de pauze na stap 1:** er lagen op het moment van deze spec drie **nog onopgeloste diagnosevragen** over hetzelfde scherm (dubbele/parallelle lijnen bij een knooppunt-paar, ontbrekende knooppunt-badges bij een Edam-test, en een verdachte kaarsrechte lijn die geen weg volgt) — bouwen op een mogelijk nog niet volledig kloppend kaartbeeld zou de resultaten van heading-up-tests onbetrouwbaar maken. Deze moeten eerst opgehelderd worden (zie sectie 6D) vóór stap 2+ van heading-up (kaartrotatie/UI) begint.
+
+---
+
+## 6D. OPENSTAANDE DIAGNOSE (29-8-2026, nog niet opgelost)
+
+1. **Dubbele/parallelle lijnen** tussen knooppunt 10 en 64 (Volendam-lus): vermoedelijk twee daadwerkelijk verschillende edges tussen dezelfde knooppunten (bijv. beide kanten van een kanaal/dijk) — technisch verklaarbaar via de bestaande "vermijd de heenweg-edges bij de terugweg"-regel (sectie 6B), maar nog niet met zekerheid bevestigd t.o.v. een echte renderfout.
+2. **Ontbrekende knooppunt-badges bij een Edam-test** — de door de gebruiker gestuurde screenshot bleek achteraf niet de Edam-test te zijn maar dezelfde Volendam-lus uitgezoomd (waar de badges wél zichtbaar zijn). De daadwerkelijke Edam-situatie is nog niet met een correcte screenshot bevestigd.
+3. **Een kaarsrechte lijn die geen weg volgt** (zichtbaar bij een Naarden-lus, tussen knooppunt 78 en 35, dwars over de snelweg) — dit oogt als een echt datakwaliteitsprobleem (mogelijk een edge met slechts 2 brongeometriepunten) of een fout in hoe heen-/terugweg-geometrie aan elkaar geplakt wordt, nog niet onderzocht.
+
+**Geen van deze drie is nu opgelost of zelfs met zekerheid als bug bevestigd** — expliciet als open punt vastgelegd, niet stilzwijgend als "waarschijnlijk oké" behandeld.
 
 ---
 
