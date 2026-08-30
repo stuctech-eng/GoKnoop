@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 ✅ GEBOUWD; dataketen-fix (Route Engine → GraphEdge[]) ✅ gebouwd + getest; Start-knop-koppeling nog te doen
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 ✅ + dataketen-fix ✅ + Start-knop-koppeling ✅ GEBOUWD + getest — klaar voor de ÉÉN echte lokale testrit
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -507,6 +507,44 @@ blijft intact over de grens Route Engine ↔ Navigation Engine heen. 273/273 tes
 **Nog te doen:** de "Start"-knop in `app/page.tsx` (die nu alleen `navigationStarted=true`
 zet en een placeholder-tekst toont) daadwerkelijk koppelen aan de nieuwe navigatie-UI,
 gevoed door `selectedLoop.resolvedEdges` in plaats van de testfixture uit `/debug/map-live`.
+
+**Start-knop-koppeling (29-8-2026), afgerond -- minimale ingreep, geen nieuwe route-
+architectuur (bewust gecontroleerd: eerst `app/page.tsx` bekeken, dan pas gewijzigd):**
+
+- `components/navigation/NavigationScreen.tsx` -- de volledige navigatielogica uit stap
+  12.4-12.7 (kaart, marker, richting, progress, fase A/B/C) omgevormd tot een herbruikbaar
+  React-component met props (`edges`, `nodeIds`, `datasetVersionId`, `onExit`) in plaats van
+  de hardcoded testfixture. `app/debug/map-live/page.tsx` is nu een dunne wrapper om
+  ditzelfde component (met de testfixture als props) -- GEEN dubbele navigatielogica meer
+  tussen debugharness en productieflow.
+- `app/page.tsx`: minimale, additieve wijziging. `Step`-type uitgebreid met `"navigating"`
+  (de bestaande state-machine-aanpak van de pagina hergebruikt, geen nieuwe architectuur).
+  De placeholder-tekst na "Start" vervangen door een echte transitie naar
+  `step === "navigating"`, die `<NavigationScreen>` rendert met de daadwerkelijk gekozen
+  route (`selectedLoop.resolvedEdges`/`selectedLoop.route.nodes`/
+  `selectedLoop.route.datasetVersionId`). Bestaande stappen (location/distance/results/
+  detail) ONGEWIJZIGD.
+- Lokale `Route`/`LoopCandidate`-types in `app/page.tsx` additief uitgebreid met
+  `datasetVersionId`/`resolvedEdges` -- precies de velden die de dataketen-fix (hierboven)
+  al server-side leverde.
+- Layoutfix, zelf gevonden tijdens het bouwen: `NavigationScreen`'s wrapper stond op
+  `position: relative`, wat prima werkte op de losstaande debugpagina maar binnen
+  `app/page.tsx`'s bestaande `<main>`-layout (header, padding, `maxWidth: 480`) tot een
+  ingesnoerd, verkeerd gepositioneerd scherm zou leiden. Gewijzigd naar
+  `position: fixed; inset: 0; z-index: 50` zodat het scherm altijd het volledige
+  viewport overneemt, ongeacht waar het in de DOM gemount wordt.
+- ✕-knop toegevoegd (alleen zichtbaar als `onExit` is meegegeven, dus niet op de
+  debugpagina) om terug te gaan naar de route-detailweergave.
+
+**Bewust NOG NIET gebouwd:** een live `POST /api/route`-aanroep bij een daadwerkelijke
+reroute (`RerouteExecutor`/`performReroute` bestaan al in `lib/navigation/reroute/`, maar
+zijn nog niet vanuit `NavigationScreen` aangesloten) -- dat blijft voor een latere stap,
+niet stilzwijgend meegenomen in deze knop-koppeling.
+
+**Resultaat:** `tsc --noEmit` schoon (tegen de ECHTE `app/page.tsx`, niet een kopie),
+**273/273 tests slagen** (ongewijzigd -- deze stap is UI-integratie, geen nieuwe
+engine-logica). De uiteindelijke flow: Routeplanner → Route detail → START → Naar
+startpunt → Start Guidance → Navigatie.
 
 **Eindvalidatie-checklist (na 12.7, één gebundelde echte iPhone-sessie, geen losse straattests per deelstap meer):**
 

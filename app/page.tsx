@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { KnoopBadge } from "@/components/KnoopBadge";
 import { RoutePreview } from "@/components/RoutePreview";
+import NavigationScreen from "@/components/navigation/NavigationScreen";
+import type { GraphEdge } from "@/lib/route-engine/types";
 
 type Point = { x: number; y: number };
 type Route = {
@@ -10,11 +12,17 @@ type Route = {
   edges: string[];
   geometry: Point[];
   distanceM: number;
+  /** Nodig om de NavigationSession aan de juiste dataset-versie te pinnen (ontwerp sectie 19). */
+  datasetVersionId: string;
 };
 type LoopCandidate = {
   route: Route;
   actualDistanceM: number;
   deviationPercent: number;
+  /** Volledige GraphEdge-objecten voor route.edges[] -- additief toegevoegd door de
+   *  dataketen-fix (/api/route/loop), nodig om de Navigation Engine te voeden zonder
+   *  edges te reconstrueren uit de platte geometrie. */
+  resolvedEdges: GraphEdge[];
 };
 type LocationCandidate = {
   logicalNodeId: string;
@@ -23,7 +31,7 @@ type LocationCandidate = {
   distanceM: number;
 };
 
-type Step = "location" | "distance" | "loading" | "results" | "detail" | "error";
+type Step = "location" | "distance" | "loading" | "results" | "detail" | "navigating" | "error";
 
 const DISTANCE_OPTIONS = [20, 30, 40, 50];
 
@@ -52,7 +60,6 @@ export default function Home() {
   const [loops, setLoops] = useState<LoopCandidate[]>([]);
   const [selectedLoop, setSelectedLoop] = useState<LoopCandidate | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-  const [navigationStarted, setNavigationStarted] = useState(false);
 
   async function resolveByPlaceName() {
     if (!placeName.trim()) return;
@@ -147,7 +154,6 @@ export default function Home() {
     setTargetDistanceKm(null);
     setLoops([]);
     setSelectedLoop(null);
-    setNavigationStarted(false);
   }
 
   return (
@@ -394,28 +400,32 @@ export default function Home() {
               <span style={{ fontSize: 14, opacity: 0.7 }}>Start en finish bij dit knooppunt — rondje</span>
             </div>
 
-            {!navigationStarted ? (
-              <button
-                onClick={() => setNavigationStarted(true)}
-                style={{
-                  width: "100%",
-                  minHeight: 56,
-                  background: "var(--color-knoop-green)",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "var(--radius-card)",
-                  fontSize: 18,
-                  fontWeight: 700,
-                }}
-              >
-                Start
-              </button>
-            ) : (
-              <p style={{ fontSize: 15, textAlign: "center", opacity: 0.7, padding: "1rem 0" }}>
-                Navigatie tijdens het fietsen volgt in een latere fase van GoKnoop.
-              </p>
-            )}
+            <button
+              onClick={() => setStep("navigating")}
+              style={{
+                width: "100%",
+                minHeight: 56,
+                background: "var(--color-knoop-green)",
+                color: "white",
+                border: "none",
+                borderRadius: "var(--radius-card)",
+                fontSize: 18,
+                fontWeight: 700,
+              }}
+            >
+              Start
+            </button>
           </section>
+        )}
+
+        {step === "navigating" && selectedLoop && (
+          <NavigationScreen
+            key={startLocation?.logicalNodeId ?? "navigation"}
+            edges={selectedLoop.resolvedEdges}
+            nodeIds={selectedLoop.route.nodes}
+            datasetVersionId={selectedLoop.route.datasetVersionId}
+            onExit={() => setStep("detail")}
+          />
         )}
       </div>
     </main>
