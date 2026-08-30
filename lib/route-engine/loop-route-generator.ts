@@ -281,3 +281,94 @@ export function generateLoopRoutes(
     },
   };
 }
+
+/**
+ * Startknooppunt-kandidaat, in afstandsvolgorde -- zelfde vorm als
+ * `LocationCandidate` uit `location-resolver.ts` (geen dubbel type, alleen
+ * de velden die deze functie nodig heeft).
+ */
+export type LoopStartCandidate = {
+  logicalNodeId: string;
+  distanceM?: number;
+};
+
+export type LoopGenerationWithFallbackResult = LoopGenerationResult & {
+  /** Het knooppunt waar de teruggegeven routes daadwerkelijk vandaan komen -- niet per se candidates[0]. */
+  selectedStartNodeId: string;
+  selectedStartNodeDisplayNumber: string;
+  /** null als de aanroeper geen afstand voor dit kandidaat heeft meegegeven. */
+  selectedStartNodeDistanceM: number | null;
+  /** 1-based: 1 = eerste (dichtstbijzijnde) kandidaat werkte al, 2 = tweede kandidaat nodig, enz. */
+  selectedCandidateRank: number;
+  candidatesAttempted: number;
+};
+
+export type LoopGenerationFallbackFailure = {
+  ok: false;
+  reason: "no_usable_candidate";
+  message: string;
+  candidatesAttempted: number;
+  attempts: { logicalNodeId: string; foundCount: number }[];
+};
+
+/**
+ * Rondje-generatie MET fallback over meerdere startknooppunt-kandidaten
+ * (Volendam-onderzoek 29-8-2026 -- ontwerpbeslissing, GOKNOOP-MASTER.md).
+ *
+ * KERN VAN DE BESLISSING: de gebruiker vraagt niet om "een route vanaf mijn
+ * dichtstbijzijnste knooppunt", maar om "een bruikbare route vanaf mijn
+ * locatie". Welke van de kandidaten daarvoor het beste startknooppunt is,
+ * is een Route Engine-verantwoordelijkheid, geen UI-beslissing (`app/page.tsx`
+ * bevat hierdoor geen fallback-logica).
+ *
+ * Probeert kandidaten STRIKT in de meegegeven volgorde (afstandsvolgorde,
+ * bepaald door de aanroeper -- deze functie herordent niet op eigen
+ * initiatief). Stopt bij de EERSTE kandidaat die minstens 1 bruikbare route
+ * oplevert -- geen kwaliteitsvergelijking tussen kandidaten (bewust nog niet:
+ * "eerst de 1->5 fallback bouwen en testen, daarna pas eventueel een
+ * start-node-score met afstand+beschikbaarheid+kwaliteit").
+ *
+ * Onderscheid, bewust zo geformuleerd: dit is niet "kandidaat 1 heeft geen
+ * routes -> neem kandidaat 2", maar "kandidaat 1 kan geen bruikbare route
+ * leveren -> probeer de volgende kandidaat" -- foundCount === 0 is het enige
+ * criterium hier, geen aanname over WAAROM een kandidaat faalt.
+ */
+export function generateLoopRoutesWithFallback(
+  provider: GraphProvider,
+  datasetVersionId: string,
+  candidates: readonly LoopStartCandidate[],
+  targetDistanceM: number,
+  options: Parameters<typeof generateLoopRoutes>[4] = {}
+): LoopGenerationWithFallbackResult | LoopGenerationFallbackFailure {
+  const attempts: { logicalNodeId: string; foundCount: number }[] = [];
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    if (!provider.getNode(candidate.logicalNodeId)) {
+      attempts.push({ logicalNodeId: candidate.logicalNodeId, foundCount: 0 });
+      continue; // onbekend knooppunt -- geen crash, gewoon de volgende kandidaat proberen
+    }
+
+    const result = generateLoopRoutes(provider, datasetVersionId, candidate.logicalNodeId, targetDistanceM, options);
+    attempts.push({ logicalNodeId: candidate.logicalNodeId, foundCount: result.foundCount });
+
+    if (result.foundCount > 0) {
+      return {
+        ...result,
+        selectedStartNodeId: candidate.logicalNodeId,
+        selectedStartNodeDisplayNumber: provider.getNode(candidate.logicalNodeId)?.displayNumber ?? candidate.logicalNodeId,
+        selectedStartNodeDistanceM: candidate.distanceM ?? null,
+        selectedCandidateRank: i + 1,
+        candidatesAttempted: i + 1,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    reason: "no_usable_candidate",
+    message: `Geen van de ${candidates.length} kandidaat-knooppunten leverde een bruikbare route op voor ${targetDistanceM}m.`,
+    candidatesAttempted: candidates.length,
+    attempts,
+  };
+}

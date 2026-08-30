@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 + dataketen + Start-koppeling ✅; groep-1 UI-polish (header/kaart/richting/progress) ✅ gebouwd, echte iPhone-validatie nog te doen; Volendam-diagnose loopt
+Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI gebouwd; startknooppunt-fallback (Volendam-fix) ✅ gebouwd + getest; groep-1 UI-polish ✅; iPhone-eindvalidatie nog te doen
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -297,6 +297,32 @@ Stap 12 is geslaagd wanneer:
 12. MapLibre volledig geïsoleerd blijft van de navigatie-engine (sectie 5.0).
 13. De interface op iPhone/PWA goed bruikbaar is.
 14. De gebruiker zonder uitleg begrijpt wat hij moet doen.
+
+---
+
+## 6B. STARTKNOOPPUNT-FALLBACK (Volendam-onderzoek, 29-8-2026, afgerond)
+
+**Het probleem:** in Volendam (Bootslot 25) gaf "Mijn locatie" op élke afstand (20-50km) "Geen routes gevonden", terwijl het netwerk daar op zich niet slecht is. Diagnose via een nieuwe debugpagina (`/debug/location-candidates`, roept uitsluitend bestaande endpoints aan, géén wijziging aan productielogica) bevestigde de oorzaak:
+
+| # | Knooppunt | Afstand | edgeCount | Routes (20km) |
+|---|---|---|---|---|
+| 1 (destijds gekozen) | 96 | 538m | 9 | **0/4** |
+| 2 | 97 | 1055m | 3 | 4/4 |
+| 3 | 95 | 1346m | 2 | 4/4 |
+| 4 | 99 | 1415m | 1 | 0/4 |
+| 5 | 98 | 1426m | 6 | 0/4 |
+
+Knooppunt 96 heeft 9 edges (niet geïsoleerd) maar is een **chokepoint**: `outboundFailed: 2, inboundFailed: 13` van de 15 kandidaat-waypoints — bijna elke heenroute gebruikt de enige praktische doorgang, waardoor een terugweg die dat stuk vermijdt (vereist om een écht rondje te zijn, geen heen-en-terug) vrijwel altijd onmogelijk is. Waarschijnlijk een dijk/brug-achtige situatie. Dit is **geen bug** in de rondje-generator (de "vermijd de heenweg"-regel is bewust) en **geen bug** in de node-resolutie (96 is niet geïsoleerd, `resolveNearestNodes()` werkte correct) — een echt kenmerk van de lokale netwerktopologie.
+
+**Architectuurbeslissing:** de gebruiker vraagt niet om "een route vanaf mijn dichtstbijzijnste knooppunt", maar om "een bruikbare route vanaf mijn locatie". Welke kandidaat daarvoor het beste startknooppunt is, is een **Route Engine-verantwoordelijkheid**, geen UI-beslissing — `app/page.tsx` bevat daarom geen fallback-logica.
+
+**Gebouwd, additief, geen breaking change:**
+- `generateLoopRoutesWithFallback()` (`lib/route-engine/loop-route-generator.ts`) — probeert kandidaten STRIKT in de meegegeven (afstands)volgorde, stopt bij de eerste die minstens 1 bruikbare route oplevert. Bewust: "kandidaat 1 heeft geen routes" ≠ "neem zomaar kandidaat 2" — het enige criterium is `foundCount === 0`, geen aanname over de oorzaak. Nog geen kwaliteitsscore (afstand+beschikbaarheid+kwaliteit) — expliciet uitgesteld tot na deze eerste, geteste versie.
+- **Test bewijst het exacte Volendam-patroon**: een fixture met een knooppunt dat wél edges heeft maar GEGARANDEERD geen bruikbare terugweg (een enkele edge naar de rest van het netwerk — elke heenweg gebruikt 'm, dus elke terugweg die 'm moet vermijden faalt per definitie) bevestigt dat de fallback correct van kandidaat 1 naar kandidaat 2 springt, en transparant rapporteert welke gebruikt is. 5 nieuwe tests, 278 in totaal, `tsc` schoon.
+- `POST /api/route/loop` accepteert nu additief `candidateNodeIds`/`candidateDistancesM` (naast het bestaande `startLogicalNodeId`, dat blijft werken als vóór deze wijziging). Respons bevat bij succes `selectedStartNodeId`/`selectedStartNodeDisplayNumber`/`selectedStartNodeDistanceM`/`selectedCandidateRank`; bij falen van ALLE kandidaten een 404 met `reason: "no_usable_candidate"` en per-kandidaat `attempts`.
+- `app/page.tsx`: bewaart nu de volledige kandidatenlijst (niet alleen `candidates[0]`), stuurt die door naar `/api/route/loop`. **Eerlijke UI, geen verborgen sprong**: als het daadwerkelijk gebruikte startknooppunt afwijkt van de dichtstbijzijnde kandidaat, toont het resultatenscherm expliciet "Beste startpunt gevonden — 📍 Knooppunt X — Y km van je locatie" plus een regel dat het dichterbij gelegen knooppunt geen bruikbare route opleverde. Knooppunt-badges/labels op de resultatenlijst en het detailscherm gebruiken nu `loop.nodeDisplayNumbers[0]` (het daadwerkelijke, per-route startknooppunt) i.p.v. het oorspronkelijke, mogelijk-ongebruikte kandidaat-1-label.
+
+**Bewust nog niet gebouwd:** een start-node-score die afstand+routebeschikbaarheid+routekwaliteit combineert — eerst deze 1→5-fallback in de praktijk laten bewijzen (Volendam + Edam + een normale situatie waar kandidaat 1 al werkt), pas daarna eventueel verfijnen.
 
 ---
 

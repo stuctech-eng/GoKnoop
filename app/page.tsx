@@ -59,6 +59,13 @@ export default function Home() {
   const [step, setStep] = useState<Step>("location");
   const [placeName, setPlaceName] = useState("");
   const [startLocation, setStartLocation] = useState<LocationCandidate | null>(null);
+  const [locationCandidates, setLocationCandidates] = useState<LocationCandidate[]>([]);
+  const [resolvedStartNode, setResolvedStartNode] = useState<{
+    logicalNodeId: string;
+    displayNumber: string;
+    distanceM: number | null;
+    rank: number;
+  } | null>(null);
   const [targetDistanceKm, setTargetDistanceKm] = useState<number | null>(null);
   const [loops, setLoops] = useState<LoopCandidate[]>([]);
   const [selectedLoop, setSelectedLoop] = useState<LoopCandidate | null>(null);
@@ -80,6 +87,7 @@ export default function Home() {
         return;
       }
       setStartLocation(data.candidates[0]);
+      setLocationCandidates(data.candidates);
       setStep("distance");
     } catch {
       setErrorMessage("Er ging iets mis bij het zoeken. Probeer het opnieuw.");
@@ -109,6 +117,7 @@ export default function Home() {
             return;
           }
           setStartLocation(data.candidates[0]);
+          setLocationCandidates(data.candidates);
           setStep("distance");
         } catch {
           setErrorMessage("Er ging iets mis bij het bepalen van je locatie. Probeer het opnieuw.");
@@ -123,7 +132,7 @@ export default function Home() {
   }
 
   async function searchRoutes(km: number) {
-    if (!startLocation) return;
+    if (!startLocation || locationCandidates.length === 0) return;
     setTargetDistanceKm(km);
     setStep("loading");
     try {
@@ -131,18 +140,35 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          startLogicalNodeId: startLocation.logicalNodeId,
+          candidateNodeIds: locationCandidates.map((c) => c.logicalNodeId),
+          candidateDistancesM: locationCandidates.map((c) => c.distanceM),
           targetDistanceM: km * 1000,
           count: 4,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setErrorMessage("Er ging iets mis bij het zoeken naar routes.");
+        // "no_usable_candidate" (Volendam-onderzoek 29-8-2026): geen van de kandidaat-
+        // knooppunten leverde een bruikbare route op -- expliciet andere melding dan een
+        // generieke serverfout, zodat de gebruiker begrijpt dat het aan de lokale
+        // netwerktopologie ligt, niet aan een kapotte aanvraag.
+        setErrorMessage(
+          data.reason === "no_usable_candidate"
+            ? `We konden geen bruikbare route van ${km} km vinden vanaf ${data.candidatesAttempted ?? locationCandidates.length} knooppunten bij je locatie. Probeer een andere afstand of locatie.`
+            : "Er ging iets mis bij het zoeken naar routes."
+        );
         setStep("error");
         return;
       }
       setLoops(data.loops || []);
+      if (data.selectedStartNodeId) {
+        setResolvedStartNode({
+          logicalNodeId: data.selectedStartNodeId,
+          displayNumber: data.selectedStartNodeDisplayNumber,
+          distanceM: data.selectedStartNodeDistanceM,
+          rank: data.selectedCandidateRank,
+        });
+      }
       setStep("results");
     } catch {
       setErrorMessage("Er ging iets mis bij het zoeken naar routes. Probeer het opnieuw.");
@@ -154,6 +180,8 @@ export default function Home() {
     setStep("location");
     setPlaceName("");
     setStartLocation(null);
+    setLocationCandidates([]);
+    setResolvedStartNode(null);
     setTargetDistanceKm(null);
     setLoops([]);
     setSelectedLoop(null);
@@ -321,8 +349,29 @@ export default function Home() {
                 : `Ik heb ${loops.length} ${loops.length === 1 ? "route" : "routes"} gevonden`}
             </h2>
             <p style={{ fontSize: 14, opacity: 0.65, marginBottom: "1.5rem" }}>
-              Rond {targetDistanceKm} km vanaf knooppunt {startLocation?.displayNumber}
+              Rond {targetDistanceKm} km vanaf knooppunt {resolvedStartNode?.displayNumber ?? startLocation?.displayNumber}
             </p>
+
+            {resolvedStartNode && resolvedStartNode.rank > 1 && (
+              <div
+                style={{
+                  background: "var(--color-sand)",
+                  borderRadius: "var(--radius-card)",
+                  padding: "0.85rem 1rem",
+                  marginBottom: "1.5rem",
+                  fontSize: 14,
+                }}
+              >
+                <strong>Beste startpunt gevonden</strong>
+                <br />
+                📍 Knooppunt {resolvedStartNode.displayNumber}
+                {resolvedStartNode.distanceM != null && <> — {(resolvedStartNode.distanceM / 1000).toFixed(1)} km van je locatie</>}
+                <br />
+                <span style={{ opacity: 0.7 }}>
+                  Knooppunt {startLocation?.displayNumber} lag dichterbij, maar leverde geen bruikbare route op.
+                </span>
+              </div>
+            )}
 
             {loops.length === 0 && (
               <>
@@ -364,7 +413,7 @@ export default function Home() {
                     boxShadow: "var(--shadow-card)",
                   }}
                 >
-                  <RoutePreview geometry={loop.route.geometry} height={140} startLabel={startLocation?.displayNumber} />
+                  <RoutePreview geometry={loop.route.geometry} height={140} startLabel={loop.nodeDisplayNumbers[0]} />
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
                     <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 28, fontWeight: 700 }}>
                       ~{formatKm(loop.actualDistanceM)} km
@@ -389,7 +438,7 @@ export default function Home() {
               ← Terug naar routes
             </button>
 
-            <RoutePreview geometry={selectedLoop.route.geometry} height={220} startLabel={startLocation?.displayNumber} />
+            <RoutePreview geometry={selectedLoop.route.geometry} height={220} startLabel={selectedLoop.nodeDisplayNumbers[0]} />
 
             <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "1.25rem 0" }}>
               <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 40, fontWeight: 700 }}>
@@ -399,7 +448,7 @@ export default function Home() {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "1.5rem" }}>
-              <KnoopBadge label={startLocation?.displayNumber || "?"} size={40} />
+              <KnoopBadge label={selectedLoop.nodeDisplayNumbers[0] || "?"} size={40} />
               <span style={{ fontSize: 14, opacity: 0.7 }}>Start en finish bij dit knooppunt — rondje</span>
             </div>
 

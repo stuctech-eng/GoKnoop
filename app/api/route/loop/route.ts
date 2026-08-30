@@ -1,32 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
-import { generateLoopRoutes } from "@/lib/route-engine/loop-route-generator";
+import { generateLoopRoutesWithFallback } from "@/lib/route-engine/loop-route-generator";
+import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/route/loop
- * Body: { startLogicalNodeId, targetDistanceM, count? }
- * Response: LoopGenerationResult (zie loop-route-generator.ts)
+ * Body: { startLogicalNodeId?, candidateNodeIds?, candidateDistancesM?, targetDistanceM, count? }
+ * Response: LoopGenerationWithFallbackResult (zie loop-route-generator.ts) op succes,
+ *           of { error, reason, attempts, ... } (404) als geen kandidaat werkte.
  *
  * Concrete invulling van Master Plan sectie 74/90: "Hoe ver? -> 20/30/40/50km
  * -> meerdere routevoorstellen" -- geen bekend eindpunt vooraf.
+ *
+ * UITGEBREID (Volendam-onderzoek 29-8-2026, additief -- `startLogicalNodeId`
+ * blijft werken als vóór deze wijziging, geen breaking change): de
+ * dichtstbijzijnde knooppunt-kandidaat is niet altijd een BRUIKBAAR
+ * startpunt (bijv. een knooppunt op een dijk/doorgang zonder terugweg-optie
+ * die de heenweg-edges vermijdt). De aanroeper kan nu `candidateNodeIds`
+ * (in afstandsvolgorde, typisch de volledige `/api/location/resolve`-
+ * kandidatenlijst) meegeven; deze endpoint probeert ze in die volgorde en
+ * rapporteert transparant welk knooppunt daadwerkelijk gebruikt is
+ * (`selectedStartNodeId`/`selectedCandidateRank`) -- nooit een stille
+ * wissel zonder dat de aanroeper het kan zien.
  */
 
 export async function POST(req: NextRequest) {
-  let body: { startLogicalNodeId?: string; targetDistanceM?: number; count?: number };
+  let body: {
+    startLogicalNodeId?: string;
+    candidateNodeIds?: string[];
+    candidateDistancesM?: number[];
+    targetDistanceM?: number;
+    count?: number;
+  };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
   }
 
-  const { startLogicalNodeId, targetDistanceM, count = 4 } = body;
-  if (!startLogicalNodeId || !targetDistanceM) {
+  const { startLogicalNodeId, candidateNodeIds, candidateDistancesM, targetDistanceM, count = 4 } = body;
+
+  const candidates: LoopStartCandidate[] =
+    candidateNodeIds && candidateNodeIds.length > 0
+      ? candidateNodeIds.map((logicalNodeId, i) => ({ logicalNodeId, distanceM: candidateDistancesM?.[i] }))
+      : startLogicalNodeId
+        ? [{ logicalNodeId: startLogicalNodeId }]
+        : [];
+
+  if (candidates.length === 0 || !targetDistanceM) {
     return NextResponse.json(
-      { error: "startLogicalNodeId en targetDistanceM zijn verplicht." },
+      { error: "startLogicalNodeId (of candidateNodeIds) en targetDistanceM zijn verplicht." },
       { status: 400 }
     );
   }
@@ -45,16 +72,19 @@ export async function POST(req: NextRequest) {
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
 
-    if (!provider.getNode(startLogicalNodeId)) {
+    const result = generateLoopRoutesWithFallback(provider, datasetVersionId, candidates, targetDistanceM, { count });
+
+    if ("ok" in result && result.ok === false) {
       return NextResponse.json(
-        { error: `startLogicalNodeId '${startLogicalNodeId}' bestaat niet.` },
+        {
+          error: result.message,
+          reason: result.reason,
+          candidatesAttempted: result.candidatesAttempted,
+          attempts: result.attempts,
+        },
         { status: 404 }
       );
     }
-
-    const result = generateLoopRoutes(provider, datasetVersionId, startLogicalNodeId, targetDistanceM, {
-      count,
-    });
 
     return NextResponse.json(result);
   } catch (err) {
