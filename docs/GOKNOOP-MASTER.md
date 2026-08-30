@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 ✅ + dataketen-fix ✅ + Start-knop-koppeling ✅ GEBOUWD + getest — klaar voor de ÉÉN echte lokale testrit
+Phase 4   — Navigation UI                ⬜ stap 12 — 12.1-12.7 + dataketen + Start-koppeling ✅; groep-1 UI-polish (header/kaart/richting/progress) ✅ gebouwd, echte iPhone-validatie nog te doen; Volendam-diagnose loopt
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -254,6 +254,28 @@ GPS (BrowserGeolocationSource, stap 11 — al gebouwd, al gevalideerd)
 Route Engine (POST /api/route, stap 8 — al gekoppeld)
 ```
 De UI **consumeert** deze keten (via dezelfde soort bekabeling als de debugharness, `app/debug/navigation/page.tsx`, die als referentie-implementatie kan dienen — niet als eindproduct), maar voegt géén nieuwe navigatielogica toe. Elke berekening (matching, progress, deviation, state) blijft in `lib/navigation/`.
+
+### 5.9 Visuele noordster + groep-1 UI-polish (🆕 NIEUW als referentiebeeld, 29-8-2026)
+
+Een visuele mockup ("Overzichtelijk. Rustig. Duidelijk.") is vastgelegd als **richting, niet als letterlijke bouwopdracht** — de bestaande architectuur blijft leidend, bestaande functies worden naar dat kwaliteitsniveau gebracht.
+
+**Expliciet uit de mockup NIET meegenomen (aparte, latere beslissing, niet stilzwijgend):**
+- Gebogen afslagpijl (links/rechts/rechtdoor) — vereist een andere richtingsberekening dan de huidige absolute kompasrichting; bewust uitgesteld
+- Verwachte aankomsttijd (ETA) — `Route.durationEstimate` blijft `null` tot er een degelijk snelheidsmodel is
+- Offline kaarten downloaden — aparte technische fase, al eerder uitgesloten (sectie 5.7)
+- Nieuwe onderste tabbalk (Overzicht/Route/Navigatie/Profiel) — raakt de hele app-navigatiestructuur, niet alleen dit scherm
+- Foto's in route-detail, donut-voortgangsring — geen prioriteit boven de kerninformatie
+
+**Leidend ontwerpprincipe (herbevestigd):** binnen één seconde antwoord op *waar ben ik / waar moet ik heen / hoe ver nog* — kaart = totaalbeeld, grote richting = direct antwoord, voortgang = context.
+
+**Groep 1 — UI-polish binnen bestaande architectuur, gebouwd 29-8-2026 (`components/navigation/NavigationScreen.tsx`), géén nieuwe navigatielogica:**
+- **Navigatie-header**: horizontale layout (witte knooppunt-badge + grote afstand + pijl-icoon in één rij, i.p.v. verticaal gestapeld), meer witruimte, `#085041`.
+- **Kaart**: knooppunt-cirkels iets groter/duidelijker (radius 9→10, tekst 11→12px bold); **positiemarker van teal naar subtiel blauw** (`#3B82F6`) omdat dat de gangbare "hier ben je"-kleur is en teal daardoor exclusief voor de route/knooppunten blijft — de ROUTE zelf blijft teal, dus dit maakt de kaart niet alsnog Google Maps-achtig.
+- **Richting**: unicode-pijl (`↑`) vervangen door een echt SVG-pijlicoon, nog steeds geroteerd op dezelfde `bearingToNextNodeDeg` (stap 12.5, ongewijzigde berekening) — puur visuele vervanging, geen nieuwe richtinglogica.
+- **Voortgang**: statistiekenrij (Tot. afstand / Resterend / Voltooid%) boven een rustigere, dunnere balk — bewust **geen** derde ETA-kolom.
+- **Startfasen**: bestaande A/B/C (sectie 5.4) visueel meegenomen in dezelfde stijlvernieuwing (badge-vormtaal, witruimte), geen gedragswijziging.
+
+**Nog te doen:** echte iPhone-validatie van deze polish-pass (nog niet uitgevoerd op het moment van schrijven).
 
 ---
 

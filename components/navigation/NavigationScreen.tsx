@@ -159,19 +159,20 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
         id: "goknoop-route-nodes-circle",
         type: "circle",
         source: "goknoop-route-nodes",
-        paint: { "circle-radius": 9, "circle-color": "#FFFFFF", "circle-stroke-color": ROUTE_COLOR, "circle-stroke-width": 3 },
+        paint: { "circle-radius": 10, "circle-color": "#FFFFFF", "circle-stroke-color": ROUTE_COLOR, "circle-stroke-width": 3 },
       });
       map.addLayer({
         id: "goknoop-route-nodes-label",
         type: "symbol",
         source: "goknoop-route-nodes",
-        layout: { "text-field": ["get", "nodeId"], "text-size": 11, "text-font": ["Noto Sans Bold"] },
+        layout: { "text-field": ["get", "nodeId"], "text-size": 12, "text-font": ["Noto Sans Bold"] },
         paint: { "text-color": ROUTE_COLOR },
       });
 
-      // Live-positiemarker (stap 12.4, NIEUW): duidelijk onderscheiden van route/knooppunten --
-      // solide teal vulling + witte rand (omgekeerd van de knooppuntstijl: witte vulling +
-      // teal rand). Bewust nog GEEN richtingpijl -- die hoort bij de volgende navigatielaag.
+      // Live-positiemarker (stap 12.4, gepolijst 29-8-2026): subtiel blauw stipje --
+      // bewust anders dan de teal route/knooppunten, zodat "waar ben ik" nooit met de
+      // route zelf verward wordt. De ROUTE blijft teal (geen Google-blauwe navigatielijn),
+      // alleen de positie-indicator gebruikt het gangbare "hier ben je"-blauw.
       map.addSource("goknoop-position", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -181,8 +182,8 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
         type: "circle",
         source: "goknoop-position",
         paint: {
-          "circle-radius": 8,
-          "circle-color": ROUTE_COLOR,
+          "circle-radius": 7,
+          "circle-color": "#3B82F6",
           "circle-stroke-color": "#FFFFFF",
           "circle-stroke-width": 3,
         },
@@ -382,12 +383,14 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
           onClick={running ? stop : start}
           disabled={mapStatus !== "loaded"}
           style={{
-            padding: "8px 14px",
-            borderRadius: 8,
+            padding: "9px 18px",
+            borderRadius: 20,
             border: "none",
-            background: running ? "#b00020" : "#1a7a3c",
+            background: running ? "#b00020" : "#085041",
             color: "white",
             fontSize: 13,
+            fontWeight: 600,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
           }}
         >
           {running ? "Stop" : "Start"}
@@ -413,55 +416,92 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
           <div
             style={{
               background: "#085041",
-              borderRadius: 16,
-              padding: "12px 24px",
-              textAlign: "center",
+              borderRadius: 20,
+              padding: "18px 20px",
               width: "100%",
-              maxWidth: 320,
-              boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+              maxWidth: 340,
+              boxShadow: "0 4px 20px rgba(0,0,0,0.28)",
               transition: "opacity 0.25s ease",
               boxSizing: "border-box",
             }}
           >
             {phase === "TO_START" && startInfo && (
-              <>
-                <div style={{ fontSize: 32, lineHeight: 1, color: "#FFFFFF" }}>🚲</div>
-                <div style={{ fontSize: 12, color: "#9FE1CB", marginTop: 4 }}>Rijd naar het startpunt</div>
-                <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {startInfo.nodeId}</div>
-                <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(startInfo.distanceM)} m</div>
-              </>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    background: "rgba(255,255,255,0.14)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    fontSize: 22,
+                  }}
+                >
+                  🚲
+                </div>
+                <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: "#9FE1CB" }}>Rijd naar het startpunt</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: "#FFFFFF", letterSpacing: -0.5 }}>
+                    {Math.round(startInfo.distanceM)} m
+                  </div>
+                  <div style={{ fontSize: 13, color: "#9FE1CB" }}>Knooppunt {startInfo.nodeId}</div>
+                </div>
+              </div>
             )}
 
             {phase === "START_GUIDANCE" && (
-              <>
-                <div style={{ fontSize: 12, color: "#9FE1CB", marginBottom: 2 }}>Je staat bij het startpunt</div>
-                <div style={{ fontSize: 32, lineHeight: 1, color: "#FFFFFF" }}>🧭</div>
-                <div style={{ fontSize: 18, fontWeight: 600, color: "#FFFFFF", marginTop: 4 }}>Rijd deze richting op</div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 12, color: "#9FE1CB", marginBottom: 4 }}>Je staat bij het startpunt</div>
+                <div style={{ fontSize: 30, lineHeight: 1, marginBottom: 6 }}>🧭</div>
+                <div style={{ fontSize: 19, fontWeight: 800, color: "#FFFFFF" }}>Rijd deze richting op</div>
                 {nextNode && (
-                  <>
-                    <div style={{ fontSize: 15, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
-                    <div style={{ fontSize: 13, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
-                  </>
+                  <div style={{ fontSize: 14, color: "#9FE1CB", marginTop: 4 }}>
+                    Knooppunt {nextNode.nodeId} · {Math.round(nextNode.distanceM)} m
+                  </div>
                 )}
-              </>
+              </div>
             )}
 
             {phase === "NAVIGATING" && nextNode && (
-              <>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                 <div
                   style={{
-                    fontSize: 32,
-                    lineHeight: 1,
-                    color: "#FFFFFF",
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    background: "#FFFFFF",
+                    color: "#085041",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    fontSize: 17,
+                    fontWeight: 800,
+                  }}
+                >
+                  {nextNode.nodeId}
+                </div>
+                <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: "#9FE1CB" }}>Volgend knooppunt</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: "#FFFFFF", letterSpacing: -0.5 }}>
+                    {Math.round(nextNode.distanceM)} m
+                  </div>
+                </div>
+                <div
+                  style={{
+                    flexShrink: 0,
                     transform: `rotate(${nextNode.bearingDeg}deg)`,
                     transition: "transform 0.3s ease",
                   }}
                 >
-                  ↑
+                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L12 22M12 2L5 9M12 2L19 9" stroke="#FFFFFF" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
                 </div>
-                <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
-                <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
-              </>
+              </div>
             )}
           </div>
         )}
@@ -511,24 +551,36 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
             bottom: 164,
             left: 12,
             right: 12,
-            background: "rgba(255,255,255,0.92)",
-            borderRadius: 12,
-            padding: "10px 14px",
+            background: "rgba(255,255,255,0.95)",
+            borderRadius: 16,
+            padding: "14px 18px",
             zIndex: 10,
+            boxShadow: "0 2px 10px rgba(0,0,0,0.12)",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-            <span>
-              {(progressInfo.distanceAlongM / 1000).toFixed(1)} km / {(progressInfo.totalM / 1000).toFixed(1)} km
-            </span>
-            <strong>{Math.round(progressInfo.ratio * 100)}%</strong>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#7A7A7A" }}>Tot. afstand</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#1A1A1A" }}>{(progressInfo.totalM / 1000).toFixed(1)} km</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#7A7A7A" }}>Resterend</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#1A1A1A" }}>
+                {((progressInfo.totalM - progressInfo.distanceAlongM) / 1000).toFixed(1)} km
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 11, color: "#7A7A7A" }}>Voltooid</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#085041" }}>{Math.round(progressInfo.ratio * 100)}%</div>
+            </div>
           </div>
-          <div style={{ height: 6, background: "#e0e0e0", borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ height: 6, background: "#E8E8E4", borderRadius: 4, overflow: "hidden" }}>
             <div
               style={{
                 height: "100%",
                 width: `${Math.min(100, Math.max(0, progressInfo.ratio * 100))}%`,
                 background: "#085041",
+                transition: "width 0.4s ease",
               }}
             />
           </div>
