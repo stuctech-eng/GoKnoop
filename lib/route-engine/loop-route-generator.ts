@@ -43,10 +43,19 @@ export type LoopCandidate = {
    * waarheid, geen tweede/parallel edge-datamodel.
    */
   resolvedEdges: GraphEdge[];
+  /**
+   * Weergavenummers (GraphNode.displayNumber) voor route.nodes[], in dezelfde
+   * volgorde -- ADDITIEF toegevoegd (bugfix 29-8-2026: de navigatie-UI toonde
+   * anders de interne Firestore-document-ID als "knooppuntnummer", bijv.
+   * "9CHmIH3BmYvDp7wmARBq" i.p.v. "96"). Valt terug op de logicalNodeId zelf
+   * als een node onverhoopt geen displayNumber heeft (geen crash, wel zichtbaar
+   * een technisch ID i.p.v. een stil leeg label).
+   */
+  nodeDisplayNumbers: string[];
 };
 
-/** Interne, tussentijdse vorm vóór dedup -- resolvedEdges pas berekend voor de daadwerkelijk geaccepteerde kandidaten (geen verspilde GraphProvider-lookups voor afgewezen/duplicate kandidaten). */
-type LoopCandidateDraft = Omit<LoopCandidate, "resolvedEdges">;
+/** Interne, tussentijdse vorm vóór dedup -- resolvedEdges/nodeDisplayNumbers pas berekend voor de daadwerkelijk geaccepteerde kandidaten (geen verspilde GraphProvider-lookups voor afgewezen/duplicate kandidaten). */
+type LoopCandidateDraft = Omit<LoopCandidate, "resolvedEdges" | "nodeDisplayNumbers">;
 
 export type LoopGenerationResult = {
   loops: LoopCandidate[];
@@ -253,6 +262,7 @@ export function generateLoopRoutes(
     accepted.push({
       ...candidate,
       resolvedEdges: resolveRouteEdges(provider, candidate.route),
+      nodeDisplayNumbers: candidate.route.nodes.map((nodeId) => provider.getNode(nodeId)?.displayNumber ?? nodeId),
     });
   }
 

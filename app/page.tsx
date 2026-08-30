@@ -23,6 +23,9 @@ type LoopCandidate = {
    *  dataketen-fix (/api/route/loop), nodig om de Navigation Engine te voeden zonder
    *  edges te reconstrueren uit de platte geometrie. */
   resolvedEdges: GraphEdge[];
+  /** Echte knooppuntnummers (GraphNode.displayNumber) voor route.nodes[], additief
+   *  toegevoegd -- bugfix: route.nodes[] zijn interne Firestore-ID's, geen weergavenummers. */
+  nodeDisplayNumbers: string[];
 };
 type LocationCandidate = {
   logicalNodeId: string;
@@ -422,7 +425,7 @@ export default function Home() {
           <NavigationScreen
             key={startLocation?.logicalNodeId ?? "navigation"}
             edges={selectedLoop.resolvedEdges}
-            nodeIds={selectedLoop.route.nodes}
+            nodeIds={selectedLoop.nodeDisplayNumbers}
             datasetVersionId={selectedLoop.route.datasetVersionId}
             onExit={() => setStep("detail")}
           />

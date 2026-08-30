@@ -334,150 +334,175 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
   }, []);
 
   return (
-    <div style={{ position: "fixed", inset: 0, width: "100%", height: "100dvh", zIndex: 50 }}>
+    <div style={{ position: "fixed", inset: 0, width: "100%", height: "100dvh", zIndex: 50, background: "#000" }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
-      {(phase === "TO_START" ? startInfo : nextNode) && (
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 10,
-            background: "#085041",
-            borderRadius: 16,
-            padding: "12px 24px",
-            textAlign: "center",
-            minWidth: 180,
-            boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
-            transition: "opacity 0.25s ease",
-          }}
-        >
-          {phase === "TO_START" && startInfo && (
-            <>
-              <div style={{ fontSize: 32, lineHeight: 1, color: "#FFFFFF" }}>🚲</div>
-              <div style={{ fontSize: 12, color: "#9FE1CB", marginTop: 4 }}>Rijd naar het startpunt</div>
-              <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {startInfo.nodeId}</div>
-              <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(startInfo.distanceM)} m</div>
-            </>
-          )}
-
-          {phase === "START_GUIDANCE" && (
-            <>
-              <div style={{ fontSize: 12, color: "#9FE1CB", marginBottom: 2 }}>Je staat bij het startpunt</div>
-              <div style={{ fontSize: 32, lineHeight: 1, color: "#FFFFFF" }}>🧭</div>
-              <div style={{ fontSize: 18, fontWeight: 600, color: "#FFFFFF", marginTop: 4 }}>Rijd deze richting op</div>
-              {nextNode && (
-                <>
-                  <div style={{ fontSize: 15, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
-                  <div style={{ fontSize: 13, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
-                </>
-              )}
-            </>
-          )}
-
-          {phase === "NAVIGATING" && nextNode && (
-            <>
-              <div
-                style={{
-                  fontSize: 32,
-                  lineHeight: 1,
-                  color: "#FFFFFF",
-                  transform: `rotate(${nextNode.bearingDeg}deg)`,
-                  transition: "transform 0.3s ease",
-                }}
-              >
-                ↑
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
-              <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
-            </>
-          )}
-        </div>
-      )}
-
+      {/* Top bar: exit-knop links, Start/Stop rechts -- vaste hoogte, geen overlap met wat eronder komt. */}
       <div
         style={{
           position: "absolute",
-          top: 56,
-          left: 12,
-          background: "rgba(255,255,255,0.92)",
-          borderRadius: 8,
-          padding: "8px 12px",
-          fontFamily: "monospace",
-          fontSize: 12,
-          maxWidth: 200,
-          zIndex: 10,
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 56,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 12px",
+          zIndex: 12,
         }}
       >
-        <div style={{ marginBottom: 6 }}>
-          <span
+        {onExit ? (
+          <button
+            onClick={() => {
+              stop();
+              onExit();
+            }}
+            aria-label="Navigatie verlaten"
             style={{
-              display: "inline-block",
-              background: STATE_STYLE[navState].background,
-              color: STATE_STYLE[navState].color,
-              borderRadius: 6,
-              padding: "3px 8px",
-              fontSize: 11,
-              fontWeight: 600,
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              border: "none",
+              background: "rgba(0,0,0,0.55)",
+              color: "white",
+              fontSize: 18,
+              lineHeight: "36px",
+              textAlign: "center",
+              padding: 0,
             }}
           >
-            {STATE_STYLE[navState].label}
-          </span>
-        </div>
-        <div><strong>map:</strong> {mapStatus}</div>
-        <div><strong>fase:</strong> {phase}</div>
-        <div><strong>nav state:</strong> {navState}</div>
-        {error && <div style={{ color: "#b00020" }}>{error}</div>}
-      </div>
+            ✕
+          </button>
+        ) : (
+          <span />
+        )}
 
-      {onExit && (
         <button
-          onClick={() => {
-            stop();
-            onExit();
-          }}
-          aria-label="Navigatie verlaten"
+          onClick={running ? stop : start}
+          disabled={mapStatus !== "loaded"}
           style={{
-            position: "absolute",
-            top: 12,
-            left: 12,
-            zIndex: 11,
-            width: 36,
-            height: 36,
-            borderRadius: 18,
+            padding: "8px 14px",
+            borderRadius: 8,
             border: "none",
-            background: "rgba(0,0,0,0.55)",
+            background: running ? "#b00020" : "#1a7a3c",
             color: "white",
-            fontSize: 18,
-            lineHeight: "36px",
-            textAlign: "center",
-            padding: 0,
+            fontSize: 13,
           }}
         >
-          ✕
+          {running ? "Stop" : "Start"}
         </button>
-      )}
+      </div>
 
-      <button
-        onClick={running ? stop : start}
-        disabled={mapStatus !== "loaded"}
+      {/* Inhoudskolom onder de top bar: richtingkaart, en (alleen in debugmodus) het statuspaneel --
+          gestapeld in normale flow, nooit overlappend, ongeacht schermbreedte of tekstlengte. */}
+      <div
         style={{
           position: "absolute",
-          top: 12,
-          right: 60,
+          top: 64,
+          left: 12,
+          right: 12,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 8,
           zIndex: 10,
-          padding: "8px 14px",
-          borderRadius: 8,
-          border: "none",
-          background: running ? "#b00020" : "#1a7a3c",
-          color: "white",
-          fontSize: 13,
         }}
       >
-        {running ? "Stop" : "Start"}
-      </button>
+        {(phase === "TO_START" ? startInfo : nextNode) && (
+          <div
+            style={{
+              background: "#085041",
+              borderRadius: 16,
+              padding: "12px 24px",
+              textAlign: "center",
+              width: "100%",
+              maxWidth: 320,
+              boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+              transition: "opacity 0.25s ease",
+              boxSizing: "border-box",
+            }}
+          >
+            {phase === "TO_START" && startInfo && (
+              <>
+                <div style={{ fontSize: 32, lineHeight: 1, color: "#FFFFFF" }}>🚲</div>
+                <div style={{ fontSize: 12, color: "#9FE1CB", marginTop: 4 }}>Rijd naar het startpunt</div>
+                <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {startInfo.nodeId}</div>
+                <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(startInfo.distanceM)} m</div>
+              </>
+            )}
+
+            {phase === "START_GUIDANCE" && (
+              <>
+                <div style={{ fontSize: 12, color: "#9FE1CB", marginBottom: 2 }}>Je staat bij het startpunt</div>
+                <div style={{ fontSize: 32, lineHeight: 1, color: "#FFFFFF" }}>🧭</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: "#FFFFFF", marginTop: 4 }}>Rijd deze richting op</div>
+                {nextNode && (
+                  <>
+                    <div style={{ fontSize: 15, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
+                    <div style={{ fontSize: 13, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
+                  </>
+                )}
+              </>
+            )}
+
+            {phase === "NAVIGATING" && nextNode && (
+              <>
+                <div
+                  style={{
+                    fontSize: 32,
+                    lineHeight: 1,
+                    color: "#FFFFFF",
+                    transform: `rotate(${nextNode.bearingDeg}deg)`,
+                    transition: "transform 0.3s ease",
+                  }}
+                >
+                  ↑
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 600, color: "#FFFFFF", marginTop: 2 }}>Knooppunt {nextNode.nodeId}</div>
+                <div style={{ fontSize: 14, color: "#9FE1CB" }}>{Math.round(nextNode.distanceM)} m</div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Statuspaneel: alleen in debugmodus (geen onExit meegegeven), niet in de echte app --
+            een monospace technisch paneel hoort niet in de productie-UX. */}
+        {!onExit && (
+          <div
+            style={{
+              background: "rgba(255,255,255,0.92)",
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontFamily: "monospace",
+              fontSize: 12,
+              width: "100%",
+              maxWidth: 320,
+              boxSizing: "border-box",
+            }}
+          >
+            <div style={{ marginBottom: 6 }}>
+              <span
+                style={{
+                  display: "inline-block",
+                  background: STATE_STYLE[navState].background,
+                  color: STATE_STYLE[navState].color,
+                  borderRadius: 6,
+                  padding: "3px 8px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}
+              >
+                {STATE_STYLE[navState].label}
+              </span>
+            </div>
+            <div><strong>map:</strong> {mapStatus}</div>
+            <div><strong>fase:</strong> {phase}</div>
+            <div><strong>nav state:</strong> {navState}</div>
+            {error && <div style={{ color: "#b00020" }}>{error}</div>}
+          </div>
+        )}
+      </div>
 
       {progressInfo && (
         <div
