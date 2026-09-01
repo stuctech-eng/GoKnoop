@@ -35,6 +35,8 @@ export async function POST(req: NextRequest) {
     candidateDistancesM?: number[];
     targetDistanceM?: number;
     count?: number;
+    /** Edge-ID-sets van eerder gereden routes (Fase 2, 29-8-2026) -- optioneel, additief. */
+    avoidRouteEdgeSets?: string[][];
   };
   try {
     body = await req.json();
@@ -42,7 +44,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
   }
 
-  const { startLogicalNodeId, candidateNodeIds, candidateDistancesM, targetDistanceM, count = 4 } = body;
+  const { startLogicalNodeId, candidateNodeIds, candidateDistancesM, targetDistanceM, count = 4, avoidRouteEdgeSets } = body;
 
   const candidates: LoopStartCandidate[] =
     candidateNodeIds && candidateNodeIds.length > 0
@@ -72,7 +74,10 @@ export async function POST(req: NextRequest) {
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
 
-    const result = generateLoopRoutesWithFallback(provider, datasetVersionId, candidates, targetDistanceM, { count });
+    const result = generateLoopRoutesWithFallback(provider, datasetVersionId, candidates, targetDistanceM, {
+      count,
+      avoidRouteEdgeSets,
+    });
 
     if ("ok" in result && result.ok === false) {
       return NextResponse.json(

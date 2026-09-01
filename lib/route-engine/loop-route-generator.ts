@@ -68,6 +68,8 @@ export type LoopGenerationResult = {
     outboundFailed: number;
     inboundFailed: number;
     duplicateRejected: number;
+    /** Aantal kandidaten overgeslagen wegens te veel overlap met eerder gereden routes (Fase 2, 29-8-2026). */
+    historyRejected: number;
     succeeded: number;
   };
 };
@@ -194,6 +196,16 @@ export function generateLoopRoutes(
     radiusTolerance?: number;
     overlapThreshold?: number;
     candidatesPerBucket?: number;
+    /**
+     * Edge-ID-sets van eerder GEREDEN routes (Fase 2, gereden-routes-
+     * tracking, 29-8-2026) -- een nieuwe kandidaat die te veel overlapt met
+     * een van deze sets wordt overgeslagen, net als bij de bestaande
+     * onderlinge dedup tussen kandidaten binnen één aanvraag (zelfde
+     * `edgeOverlapRatio`-mechanisme, geen nieuwe/afwijkende logica). Puur
+     * gebaseerd op edge-overlap, geen aanname over WAAROM een route eerder
+     * gereden is.
+     */
+    avoidRouteEdgeSets?: string[][];
   } = {}
 ): LoopGenerationResult {
   const count = options.count ?? 4;
@@ -202,6 +214,7 @@ export function generateLoopRoutes(
   const radiusTolerance = options.radiusTolerance ?? DEFAULT_RADIUS_TOLERANCE;
   const overlapThreshold = options.overlapThreshold ?? DEFAULT_OVERLAP_THRESHOLD;
   const candidatesPerBucket = options.candidatesPerBucket ?? CANDIDATES_PER_BUCKET;
+  const avoidRouteEdgeSets = options.avoidRouteEdgeSets ?? [];
 
   const estimatedRadiusM = targetDistanceM / 2 / circuityFactor;
   const waypointCandidates = findCandidateWaypoints(
@@ -250,6 +263,7 @@ export function generateLoopRoutes(
 
   const accepted: LoopCandidate[] = [];
   let duplicateRejected = 0;
+  let historyRejected = 0;
   for (const candidate of candidates) {
     if (accepted.length >= count) break;
     const isDuplicate = accepted.some(
@@ -257,6 +271,13 @@ export function generateLoopRoutes(
     );
     if (isDuplicate) {
       duplicateRejected++;
+      continue;
+    }
+    const matchesRiddenHistory = avoidRouteEdgeSets.some(
+      (riddenEdges) => edgeOverlapRatio(riddenEdges, candidate.route.edges) > overlapThreshold
+    );
+    if (matchesRiddenHistory) {
+      historyRejected++;
       continue;
     }
     accepted.push({
@@ -277,6 +298,7 @@ export function generateLoopRoutes(
       outboundFailed,
       inboundFailed,
       duplicateRejected,
+      historyRejected,
       succeeded: candidates.length,
     },
   };

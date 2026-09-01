@@ -6,6 +6,7 @@ import { RoutePreview } from "@/components/RoutePreview";
 import NavigationScreen from "@/components/navigation/NavigationScreen";
 import LiveLocationScreen from "@/components/location/LiveLocationScreen";
 import TabBar, { type TabId } from "@/components/layout/TabBar";
+import { getRiddenRoutes } from "@/lib/history/ridden-routes-store";
 import type { GraphEdge } from "@/lib/route-engine/types";
 
 type Point = { x: number; y: number };
@@ -134,6 +135,7 @@ export default function Home() {
           candidateDistancesM: locationCandidates.map((c) => c.distanceM),
           targetDistanceM: km * 1000,
           count: 4,
+          avoidRouteEdgeSets: getRiddenRoutes().map((r) => r.edgeIds),
         }),
       });
       const data = await res.json();

@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+bugfix+live-locatiekaart ✅; APP-STRUCTUUR HERONTWERP fase 1 (tabbalk, Home=kaart) ✅ gebouwd; fase 2 (gereden-routes-tracking) en fase 3 (Mijn routes) nog te doen
+Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+bugfix+live-locatiekaart+tabbalk ✅; Fase 2 (gereden-routes-tracking) ✅ gebouwd, 320/320 tests, tsc schoon; Fase 3 (Mijn routes) nog te doen
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -397,7 +397,20 @@ Op verzoek: de bestaande "Mijn locatie"-knop (locatiestap, `app/page.tsx`) leidt
 
 **Geplande vervolgfasen (nog NIET gebouwd, bewuste volgorde):**
 
-**Fase 2 — Gereden routes automatisch onthouden.** Trigger: `NavigationStateMachine` bereikt `ARRIVED` (expliciete, ondubbelzinnige keuze -- niet "op Start gedrukt", dat zou een niet-voltooide poging ook als "gereden" tellen). Opgeslagen (lokaal, geen backend-account-systeem): knooppuntenreeks, vertrekpunt, afstand, datum. Doel: de rondje-generator (`generateLoopRoutes`/`generateLoopRoutesWithFallback`) laten controleren of een nieuwe kandidaat te veel overlapt met een eerder gereden route, en die dan overslaan -- hergebruikt hetzelfde `edgeOverlapRatio`-mechanisme dat al bestaat voor onderlinge dedup tussen kandidaten binnen één aanvraag (sectie... loop-route-generator.ts), nu ook toegepast tegen de geschiedenis. Geen naamgeving, geen gebruikersactie nodig -- volledig automatisch.
+**Fase 2 — Gereden routes automatisch onthouden. ✅ GEBOUWD (29-8-2026).**
+
+Trigger: `NavigationStateMachine` bereikt `ARRIVED` -- expliciete, ondubbelzinnige keuze (niet "op Start gedrukt", dat zou een niet-voltooide poging ook als "gereden" tellen).
+
+**Belangrijke bijvangst, zelf ontdekt tijdens het bouwen:** `NavigationSessionController.checkArrival()` bestond al sinds stap 9, maar werd NERGENS vanuit `NavigationScreen.tsx` aangeroepen -- `ARRIVED` werd dus nooit daadwerkelijk bereikt in de praktijk, ongeacht deze nieuwe feature. Nu alsnog gekoppeld: `checkArrival(progress.remainingDistanceM, ARRIVAL_AT_END_THRESHOLD_M)` (uitgangspunt 25m, net als de startdrempel nog niet definitief) wordt bij elke geaccepteerde sample aangeroepen; bij bevestigde aankomst wordt de rit precies ÉÉN keer vastgelegd (`hasRecordedArrivalRef`-guard, gereset bij `stop()`).
+
+**Gebouwd:**
+- `lib/history/ridden-routes-store.ts` (`getRiddenRoutes`/`recordRiddenRoute`) -- puur browserlokaal (`localStorage`), SSR-veilig (`typeof window === "undefined"`-guard), best-effort (opslagfout breekt de navigatie nooit), begrensd tot de laatste 20 ritten. 6 tests, met een handmatige in-memory `localStorage`-polyfill (geen jsdom-afhankelijkheid toegevoegd).
+- `generateLoopRoutes()` uitgebreid met optioneel `avoidRouteEdgeSets: string[][]` -- hergebruikt LETTERLIJK hetzelfde `edgeOverlapRatio`-mechanisme dat al bestond voor onderlinge dedup tussen kandidaten binnen één aanvraag, nu ook toegepast tegen de geschiedenis. Nieuw diagnosticveld `historyRejected` voor transparantie. 4 nieuwe tests, incl. een test die eerst een baseline-kandidaat vindt, die exact als "gereden" opgeeft, en bevestigt dat 'ie daarna overgeslagen wordt.
+- `/api/route/loop` accepteert nu additief `avoidRouteEdgeSets` in de request-body, geeft 'm door.
+- `app/page.tsx`'s `searchRoutes()` stuurt `getRiddenRoutes().map(r => r.edgeIds)` mee bij elke aanvraag.
+- Geen naamgeving, geen gebruikersactie nodig -- volledig automatisch, zoals afgesproken.
+
+**320/320 tests, `tsc` schoon.** Nog geen echte iPhone-validatie (vereist een daadwerkelijk voltooide rit om te bevestigen dat `ARRIVED`/opslag/dedup end-to-end werkt).
 
 **Fase 3 — "Mijn routes" (bewust apart van fase 2).** Expliciete, door de gebruiker gekozen opslag (bijv. een hart-icoon "♡ Opslaan in Mijn routes"), optioneel een eigen naam. Zonder naam: automatische weergave als "Route van [datum]". Dit is een animo-gedreven lijst (routes die de gebruiker zelf de moeite waard vindt om te bewaren), nadrukkelijk NIET hetzelfde als de automatische gereden-routes-geschiedenis van fase 2 -- die twee concepten blijven gescheiden datamodellen.
 

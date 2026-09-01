@@ -49,6 +49,7 @@ import type { PreNavigationPhase } from "@/lib/navigation/session/pre-navigation
 import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
 import { buildRouteGeoJson } from "@/lib/map/route-geometry-adapter";
 import { buildPositionMarkerGeoJson } from "@/lib/map/position-marker-adapter";
+import { recordRiddenRoute } from "@/lib/history/ridden-routes-store";
 import type { GraphEdge } from "@/lib/route-engine/types";
 import type { NavigationState } from "@/lib/navigation/types";
 
@@ -68,6 +69,9 @@ const COOLDOWN_MS = 10000;
 // overige kalibratiewaarden nog niet definitief vastgezet (sectie 3.7).
 const ARRIVAL_AT_START_THRESHOLD_M = 25;
 const MOVEMENT_SPEED_THRESHOLD_MPS = 0.5;
+// Fase 2 (gereden-routes-tracking, 29-8-2026): aankomstdrempel voor het EINDE van de route --
+// zelfde uitgangspunt/orde-grootte als de startdrempel, ook nog niet definitief vastgezet.
+const ARRIVAL_AT_END_THRESHOLD_M = 25;
 
 // Statusweergave per NavigationState (stap 12.6) -- puur weergave, geen nieuwe
 // navigatielogica. Beknopte, niet-alarmistische labels (ontwerpregel: afwijking
@@ -115,6 +119,7 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
   const mapRef = useRef<maplibregl.Map | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const hasRecordedArrivalRef = useRef(false);
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
@@ -314,6 +319,25 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
         setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: info.bearingToNextNodeDeg });
         setProgressInfo({ ratio: progress.progressRatio, distanceAlongM: progress.distanceAlongRouteM, totalM: model.totalDistanceM });
 
+        // Fase 2 (gereden-routes-tracking, 29-8-2026): checkArrival() bestond al in de
+        // controller maar werd nooit aangeroepen -- ARRIVED werd zo nooit bereikt. Nu
+        // gekoppeld: bij bevestigde aankomst wordt de rit precies ÉÉN keer vastgelegd
+        // (hasRecordedArrivalRef voorkomt dubbele registratie bij volgende samples).
+        const justArrived = controller.checkArrival(progress.remainingDistanceM, ARRIVAL_AT_END_THRESHOLD_M);
+        if (justArrived) {
+          setNavState(stateMachine.getState());
+          if (!hasRecordedArrivalRef.current) {
+            hasRecordedArrivalRef.current = true;
+            recordRiddenRoute({
+              edgeIds: edges.map((e) => e.id),
+              nodeIds: nodeSequence,
+              startNodeId: nodeSequence[0],
+              distanceM: model.totalDistanceM,
+            });
+            appendLog("aangekomen -- rit onthouden voor toekomstige routevoorstellen");
+          }
+        }
+
         appendLog(`positie bijgewerkt (${outcome.action}), perpendicularDistanceM=${markerFeature.properties.perpendicularDistanceM.toFixed(1)}`);
       } else {
         appendLog(`sample afgewezen: ${outcome.action}${"reason" in outcome ? ` (${outcome.reason})` : ""}`);
@@ -332,6 +356,7 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
     unsubscribeRef.current?.();
     sourceRef.current = null;
     unsubscribeRef.current = null;
+    hasRecordedArrivalRef.current = false;
     setRunning(false);
     setPhase("TO_START");
     setStartInfo(null);
