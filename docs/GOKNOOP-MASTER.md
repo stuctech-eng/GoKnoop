@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — fase A live positie/richting ✅; fitBounds-marge gefixt ✅; HEADING-UP-NAVIGATIE (6C stap 2) ✅ gebouwd: kaart draait mee + zoomt in tijdens NAVIGATING, terug naar noord bij terugval naar Start Guidance; 329/329 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — heading-up ✅; 4 fixes/features: progress-blok pas bij NAVIGATING ✅, richtingpijl in Start Guidance ✅, zoom/Stop-overlap ✅, linksom/rechtsom-omkering ✅; 330/330 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -462,6 +462,19 @@ Naar aanleiding van een echte test ("ik wil dat er ingezoomd wordt en het knoopp
 **Bewust nog niet gebouwd:** links/rechts/rechtdoor-classificatie (`classifyDirection()`, ook al gebouwd en getest) wordt nog niet visueel getoond als tekst/icoon naast de pijl -- de pijlrotatie zelf is voor nu de eerste, geteste stap.
 
 329/329 tests, `tsc` schoon (hergebruikt uitsluitend de 26 al bestaande tests van stap 1 -- deze stap is zelf UI-wiring, geen nieuwe pure logica). Nog geen echte iPhone-validatie van de daadwerkelijke rotatie/zoom-tijdens-het-fietsen.
+
+---
+
+## 6I. VIER VERBETERINGEN UIT ECHTE IPHONE-TESTS (🆕 NIEUW, 29-8-2026)
+
+Naar aanleiding van meerdere echte tests met de Volendam-route (fase A/B, kaartcentrering-vragen, "99 vs 98"-verwarring die uiteindelijk verklaard bleek door fysieke verplaatsing van de gebruiker tussen twee tests, niet een bug):
+
+1. **Voortgangsblok verborgen tot fase NAVIGATING** -- werd eerder ook al getoond tijdens Start Guidance (met altijd 0%), verwarrend vóórdat er daadwerkelijk gefietst wordt. Nu: `{progressInfo && phase === "NAVIGATING" && (...)}`.
+2. **Echte richtingpijl in Start Guidance** (fase B) -- verving het statische 🧭-icoon door dezelfde geroteerde SVG-pijl als elders, gebaseerd op de al beschikbare absolute bearing (de kaart blijft noordgericht in deze fase, dus absolute bearing blijft correct -- geen wijziging aan de onderliggende berekening).
+3. **Zoomknoppen/Stop-knop overlapten elkaar** -- MapLibre's eigen `NavigationControl` (top-right) wist niets van onze eigen topbalk (ook top-right). Gefixt met een gerichte CSS-override (`.maplibregl-ctrl-top-right { top: 68px !important; }`) die de zoomknoppen onder de topbalk duwt.
+4. **Linksom/rechtsom-keuze** (nieuwe functie) -- een lus kan nu omgekeerd doorlopen worden vanaf het detailscherm ("↻ Andere kant op rijden"). Volledig CLIENT-SIDE, geen nieuwe serveraanroep: `reverseLoopCandidate()` (`app/page.tsx`) keert simpelweg `route.nodes[]`/`route.edges[]`/`resolvedEdges[]`/`nodeDisplayNumbers[]` om. Werkt correct dankzij de bestaande richtingscorrectie in `buildRouteProgressModel` (Naarden-bugfix, sectie 6D) -- die bepaalt de juiste geometrie-richting per edge aan de hand van de knooppuntvolgorde, dus een omgekeerde volgorde wordt vanzelf correct verwerkt. Bevestigd met een gerichte sanity-check-test: de omgekeerde route levert exact de voorwaartse geometrie in omgekeerde volgorde op, met dezelfde totale afstand.
+
+330/330 tests (1 nieuw, de omkerings-sanity-check), `tsc` schoon.
 
 ---
 

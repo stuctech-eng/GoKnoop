@@ -59,6 +59,29 @@ function qualifyDeviation(deviationPercent: number): { label: string; icon: stri
   return { label: "Alternatief", icon: "↘" };
 }
 
+/**
+ * Keert de rijrichting van een gekozen lus om (linksom <-> rechtsom) --
+ * puur client-side, geen nieuwe serveraanroep nodig. Werkt correct dankzij
+ * de richtingscorrectie in `buildRouteProgressModel` (Naarden-bugfix,
+ * GOKNOOP-MASTER.md sectie 6D): die bepaalt per edge de juiste geometrie-
+ * richting aan de hand van de knooppuntvolgorde, dus simpelweg de
+ * nodes/edges-volgorde omkeren is voldoende -- geen handmatige edge-voor-
+ * edge geometrie-omkering nodig.
+ */
+function reverseLoopCandidate(loop: LoopCandidate): LoopCandidate {
+  return {
+    ...loop,
+    route: {
+      ...loop.route,
+      nodes: [...loop.route.nodes].reverse(),
+      edges: [...loop.route.edges].reverse(),
+      geometry: [...loop.route.geometry].reverse(),
+    },
+    resolvedEdges: [...loop.resolvedEdges].reverse(),
+    nodeDisplayNumbers: [...loop.nodeDisplayNumbers].reverse(),
+  };
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("kaart");
   const [step, setStep] = useState<Step | null>(null);
@@ -549,10 +572,27 @@ export default function Home() {
               <span style={{ fontSize: 14, opacity: 0.6 }}>({selectedLoop.route.nodes.length} knooppunten)</span>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "1.5rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
               <KnoopBadge label={selectedLoop.nodeDisplayNumbers[0] || "?"} size={40} />
               <span style={{ fontSize: 14, opacity: 0.7 }}>Start en finish bij dit knooppunt — rondje</span>
             </div>
+
+            <button
+              onClick={() => setSelectedLoop(reverseLoopCandidate(selectedLoop))}
+              style={{
+                width: "100%",
+                minHeight: 44,
+                marginBottom: "1.5rem",
+                background: "white",
+                color: "var(--color-ink)",
+                border: "1px solid #ccc",
+                borderRadius: "var(--radius-card)",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              ↻ Andere kant op rijden (linksom / rechtsom)
+            </button>
 
             {!showSaveNamePrompt ? (
               <button

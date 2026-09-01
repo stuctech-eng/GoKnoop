@@ -436,6 +436,10 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
 
   return (
     <div style={{ position: "fixed", inset: 0, width: "100%", height: "100dvh", zIndex: 50, background: "#000" }}>
+      {/* MapLibre's eigen zoomcontrol (top-right) weet niets van onze eigen topbalk (X/Start-Stop,
+          ook top-right) en overlapte die. Duw 'm expliciet naar beneden, onder de topbalk. */}
+      <style>{`.maplibregl-ctrl-top-right { top: 68px !important; }`}</style>
+
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
       {/* Top bar: exit-knop links, Start/Stop rechts -- vaste hoogte, geen overlap met wat eronder komt. */}
@@ -566,7 +570,20 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
             {phase === "START_GUIDANCE" && (
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 12, color: "#9FE1CB", marginBottom: 4 }}>Je staat bij het startpunt</div>
-                <div style={{ fontSize: 30, lineHeight: 1, marginBottom: 6 }}>🧭</div>
+                {nextNode && (
+                  <div
+                    style={{
+                      display: "inline-block",
+                      marginBottom: 6,
+                      transform: `rotate(${nextNode.bearingDeg}deg)`,
+                      transition: "transform 0.3s ease",
+                    }}
+                  >
+                    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12 2L12 22M12 2L5 9M12 2L19 9" stroke="#FFFFFF" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                )}
                 <div style={{ fontSize: 19, fontWeight: 800, color: "#FFFFFF" }}>Rijd deze richting op</div>
                 {nextNode && (
                   <div style={{ fontSize: 14, color: "#9FE1CB", marginTop: 4 }}>
@@ -655,7 +672,7 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
         )}
       </div>
 
-      {progressInfo && (
+      {progressInfo && phase === "NAVIGATING" && (
         <div
           style={{
             position: "absolute",
