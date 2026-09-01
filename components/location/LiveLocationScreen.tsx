@@ -36,7 +36,14 @@ const POSITION_COLOR = "#3B82F6"; // zelfde blauw als de live-positiemarker op h
 export type LiveLocationScreenProps = {
   /** Aangeroepen zodra de gebruiker deze locatie bevestigt om door te gaan naar afstandskeuze. */
   onConfirm: (lat: number, lon: number) => void;
-  onCancel: () => void;
+  /** Weglaten als er niets is om naar terug te gaan (bijv. als Kaart-hometab) -- dan verschijnt er geen ✕-knop. */
+  onCancel?: () => void;
+  /**
+   * true wanneer dit scherm permanent onder de tabbalk zit (de Kaart-hometab) i.p.v. als
+   * volledig-scherm modale stap. Bepaalt alleen positionering/ruimte voor de tabbalk, geen
+   * gedragsverschil.
+   */
+  embedded?: boolean;
 };
 
 function accuracyLabel(accuracyM: number): string {
@@ -45,7 +52,7 @@ function accuracyLabel(accuracyM: number): string {
   return "GPS onnauwkeurig";
 }
 
-export default function LiveLocationScreen({ onConfirm, onCancel }: LiveLocationScreenProps) {
+export default function LiveLocationScreen({ onConfirm, onCancel, embedded = false }: LiveLocationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
@@ -154,31 +161,43 @@ export default function LiveLocationScreen({ onConfirm, onCancel }: LiveLocation
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, width: "100%", height: "100dvh", zIndex: 50, background: "#000" }}>
+    <div
+      style={{
+        position: embedded ? "absolute" : "fixed",
+        inset: 0,
+        bottom: embedded ? 56 : 0, // ruimte voor de tabbalk (env(safe-area) zit al in de tabbalk zelf)
+        width: "100%",
+        height: embedded ? "100%" : "100dvh",
+        zIndex: embedded ? 1 : 50,
+        background: "#000",
+      }}
+    >
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
-      <button
-        onClick={onCancel}
-        aria-label="Terug"
-        style={{
-          position: "absolute",
-          top: 12,
-          left: 12,
-          zIndex: 11,
-          width: 36,
-          height: 36,
-          borderRadius: 18,
-          border: "none",
-          background: "rgba(0,0,0,0.55)",
-          color: "white",
-          fontSize: 18,
-          lineHeight: "36px",
-          textAlign: "center",
-          padding: 0,
-        }}
-      >
-        ✕
-      </button>
+      {onCancel && (
+        <button
+          onClick={onCancel}
+          aria-label="Terug"
+          style={{
+            position: "absolute",
+            top: 12,
+            left: 12,
+            zIndex: 11,
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            border: "none",
+            background: "rgba(0,0,0,0.55)",
+            color: "white",
+            fontSize: 18,
+            lineHeight: "36px",
+            textAlign: "center",
+            padding: 0,
+          }}
+        >
+          ✕
+        </button>
+      )}
 
       <button
         onClick={recenter}

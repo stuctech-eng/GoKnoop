@@ -5,6 +5,7 @@ import { KnoopBadge } from "@/components/KnoopBadge";
 import { RoutePreview } from "@/components/RoutePreview";
 import NavigationScreen from "@/components/navigation/NavigationScreen";
 import LiveLocationScreen from "@/components/location/LiveLocationScreen";
+import TabBar, { type TabId } from "@/components/layout/TabBar";
 import type { GraphEdge } from "@/lib/route-engine/types";
 
 type Point = { x: number; y: number };
@@ -35,7 +36,7 @@ type LocationCandidate = {
   distanceM: number;
 };
 
-type Step = "location" | "confirmLocation" | "distance" | "loading" | "results" | "detail" | "navigating" | "error";
+type Step = "distance" | "loading" | "results" | "detail" | "navigating" | "error";
 
 const DISTANCE_OPTIONS = [20, 30, 40, 50];
 
@@ -57,7 +58,8 @@ function qualifyDeviation(deviationPercent: number): { label: string; icon: stri
 }
 
 export default function Home() {
-  const [step, setStep] = useState<Step>("location");
+  const [activeTab, setActiveTab] = useState<TabId>("kaart");
+  const [step, setStep] = useState<Step | null>(null);
   const [placeName, setPlaceName] = useState("");
   const [startLocation, setStartLocation] = useState<LocationCandidate | null>(null);
   const [locationCandidates, setLocationCandidates] = useState<LocationCandidate[]>([]);
@@ -94,15 +96,6 @@ export default function Home() {
       setErrorMessage("Er ging iets mis bij het zoeken. Probeer het opnieuw.");
       setStep("error");
     }
-  }
-
-  function showLocationConfirmation() {
-    if (!navigator.geolocation) {
-      setErrorMessage("Dit toestel ondersteunt geen locatiebepaling. Zoek op plaatsnaam.");
-      setStep("error");
-      return;
-    }
-    setStep("confirmLocation");
   }
 
   async function resolveFromConfirmedCoords(lat: number, lon: number) {
@@ -174,7 +167,8 @@ export default function Home() {
   }
 
   function reset() {
-    setStep("location");
+    setStep(null);
+    setActiveTab("kaart");
     setPlaceName("");
     setStartLocation(null);
     setLocationCandidates([]);
@@ -194,93 +188,105 @@ export default function Home() {
         flexDirection: "column",
       }}
     >
-      <header
-        style={{
-          background: "var(--color-knoop-green)",
-          color: "white",
-          padding: "1.5rem 1.25rem 2rem",
-        }}
-      >
-        <h1 style={{ fontSize: 34, color: "white" }}>GoKnoop</h1>
-        {step !== "location" && (
-          <button
-            onClick={reset}
+      {step === null ? (
+        <>
+          <header
             style={{
-              marginTop: 8,
-              background: "transparent",
-              border: "none",
-              color: "rgba(255,255,255,0.85)",
-              fontSize: 14,
-              padding: 0,
-              textDecoration: "underline",
+              background: "var(--color-knoop-green)",
+              color: "white",
+              padding: "1rem 1.25rem",
             }}
           >
-            Opnieuw beginnen
-          </button>
-        )}
-      </header>
+            <h1 style={{ fontSize: 26, color: "white" }}>GoKnoop</h1>
+          </header>
 
-      <div style={{ flex: 1, padding: "1.5rem 1.25rem 3rem" }}>
-        {step === "location" && (
-          <section>
-            <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Waar wil je fietsen?</h2>
+          <div style={{ flex: 1, position: "relative", paddingBottom: 56 }}>
+            {activeTab === "kaart" && <LiveLocationScreen embedded onConfirm={resolveFromConfirmedCoords} />}
 
+            {activeTab === "zoeken" && (
+              <section style={{ padding: "1.5rem 1.25rem" }}>
+                <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Zoek een plaats</h2>
+                <input
+                  value={placeName}
+                  onChange={(e) => setPlaceName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && resolveByPlaceName()}
+                  placeholder="Zoek een plaatsnaam"
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    padding: "0 16px",
+                    fontSize: 17,
+                    border: "2px solid var(--color-sand)",
+                    borderRadius: "var(--radius-card)",
+                    background: "white",
+                  }}
+                />
+                <button
+                  onClick={resolveByPlaceName}
+                  disabled={!placeName.trim()}
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    marginTop: 12,
+                    background: placeName.trim() ? "var(--color-canal-blue)" : "var(--color-sand)",
+                    color: placeName.trim() ? "white" : "var(--color-ink)",
+                    opacity: placeName.trim() ? 1 : 0.5,
+                    border: "none",
+                    borderRadius: "var(--radius-card)",
+                    fontSize: 17,
+                    fontWeight: 600,
+                  }}
+                >
+                  Zoek plaats
+                </button>
+              </section>
+            )}
+
+            {activeTab === "mijnroutes" && (
+              <section style={{ padding: "1.5rem 1.25rem", textAlign: "center" }}>
+                <h2 style={{ fontSize: 24, marginBottom: "0.75rem" }}>Mijn routes</h2>
+                <p style={{ fontSize: 15, opacity: 0.6 }}>Je hebt nog geen routes opgeslagen.</p>
+              </section>
+            )}
+
+            {activeTab === "profiel" && (
+              <section style={{ padding: "1.5rem 1.25rem", textAlign: "center" }}>
+                <h2 style={{ fontSize: 24, marginBottom: "0.75rem" }}>Profiel</h2>
+                <p style={{ fontSize: 15, opacity: 0.6 }}>Binnenkort beschikbaar.</p>
+              </section>
+            )}
+          </div>
+
+          <TabBar active={activeTab} onChange={setActiveTab} />
+        </>
+      ) : (
+        <>
+          <header
+            style={{
+              background: "var(--color-knoop-green)",
+              color: "white",
+              padding: "1.5rem 1.25rem 2rem",
+            }}
+          >
+            <h1 style={{ fontSize: 34, color: "white" }}>GoKnoop</h1>
             <button
-              onClick={showLocationConfirmation}
+              onClick={reset}
               style={{
-                width: "100%",
-                minHeight: 52,
-                background: "var(--color-knoop-green)",
-                color: "white",
+                marginTop: 8,
+                background: "transparent",
                 border: "none",
-                borderRadius: "var(--radius-card)",
-                fontSize: 17,
-                fontWeight: 600,
-                marginBottom: 12,
+                color: "rgba(255,255,255,0.85)",
+                fontSize: 14,
+                padding: 0,
+                textDecoration: "underline",
               }}
             >
-              📍 Mijn locatie
+              Opnieuw beginnen
             </button>
+          </header>
 
-            <div style={{ textAlign: "center", color: "var(--color-ink)", opacity: 0.5, fontSize: 13, margin: "10px 0" }}>of</div>
-
-            <input
-              value={placeName}
-              onChange={(e) => setPlaceName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && resolveByPlaceName()}
-              placeholder="Zoek een plaatsnaam"
-              style={{
-                width: "100%",
-                minHeight: 52,
-                padding: "0 16px",
-                fontSize: 17,
-                border: "2px solid var(--color-sand)",
-                borderRadius: "var(--radius-card)",
-                background: "white",
-              }}
-            />
-            <button
-              onClick={resolveByPlaceName}
-              disabled={!placeName.trim()}
-              style={{
-                width: "100%",
-                minHeight: 52,
-                marginTop: 12,
-                background: placeName.trim() ? "var(--color-canal-blue)" : "var(--color-sand)",
-                color: placeName.trim() ? "white" : "var(--color-ink)",
-                opacity: placeName.trim() ? 1 : 0.5,
-                border: "none",
-                borderRadius: "var(--radius-card)",
-                fontSize: 17,
-                fontWeight: 600,
-              }}
-            >
-              Zoek plaats
-            </button>
-          </section>
-        )}
-
-        {step === "distance" && startLocation && (
+          <div style={{ flex: 1, padding: "1.5rem 1.25rem 3rem" }}>
+            {step === "distance" && startLocation && (
           <section>
             <p style={{ fontSize: 14, opacity: 0.65, marginBottom: 4 }}>
               Startpunt: knooppunt {startLocation.displayNumber} — {startLocation.displayRegio}
@@ -467,10 +473,6 @@ export default function Home() {
           </section>
         )}
 
-        {step === "confirmLocation" && (
-          <LiveLocationScreen onConfirm={resolveFromConfirmedCoords} onCancel={() => setStep("location")} />
-        )}
-
         {step === "navigating" && selectedLoop && (
           <NavigationScreen
             key={startLocation?.logicalNodeId ?? "navigation"}
@@ -481,7 +483,9 @@ export default function Home() {
             onExit={() => setStep("detail")}
           />
         )}
-      </div>
+          </div>
+        </>
+      )}
     </main>
   );
 }

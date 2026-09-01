@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+direction-bugfix ✅ (306/306); live-locatiekaart (nieuw, na "Mijn locatie") ✅ gebouwd, 310/310 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+bugfix+live-locatiekaart ✅; APP-STRUCTUUR HERONTWERP fase 1 (tabbalk, Home=kaart) ✅ gebouwd; fase 2 (gereden-routes-tracking) en fase 3 (Mijn routes) nog te doen
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -378,6 +378,28 @@ Op verzoek: de bestaande "Mijn locatie"-knop (locatiestap, `app/page.tsx`) leidt
 **Bewust NIET meegenomen (expliciete keuze, niet vergeten):** de onderste tabbalk (Kaart/Zoeken/Mijn routes/Profiel) uit de bijbehorende mockup. Die blijft een aparte, latere beslissing (raakt de hele app-navigatiestructuur) — de gebruiker gaf aan dat dit ook later kan.
 
 **310/310 tests, `tsc` schoon.** Nog geen echte iPhone-validatie van dit specifieke scherm.
+
+---
+
+## 6F. APP-STRUCTUUR HERONTWERP: TABBALK + HOME=KAART (🆕 NIEUW, 29-8-2026)
+
+**Bewust een eerdere beslissing teruggedraaid, niet stilzwijgend.** Sectie 6E/5.9 hield de onderste tabbalk expliciet buiten scope ("raakt de hele app-navigatiestructuur... latere beslissing"). Op uitdrukkelijk verzoek (29-8-2026) is dat nu bewust wél gedaan.
+
+**Fase 1 (gebouwd, 29-8-2026): tabbalk + Home=kaart, geen knoppenlijst meer.**
+- `components/layout/TabBar.tsx` — vier tabs: Kaart/Zoeken/Mijn routes/Profiel.
+- `app/page.tsx` grondig herstructureerd: `step` is nu `Step | null` (`null` = geen actieve flow, toon de tabbladen; niet-`null` = bestaande stap-gebaseerde flow, tabbalk verborgen). De oude `"location"`/`"confirmLocation"`-stappen zijn VERVALLEN -- de Kaart-tab IS nu permanent het live-locatiebevestigingsscherm (geen aparte stap meer nodig).
+  - **Kaart-tab**: `<LiveLocationScreen embedded onConfirm={...} />` -- geen "Mijn locatie"-knop meer, de kaart zelf is de home.
+  - **Zoeken-tab**: de bestaande plaatsnaam-zoekfunctie, ongewijzigde logica, alleen verplaatst van de oude homepage naar deze tab.
+  - **Mijn routes-tab**: lege-staat-placeholder ("Je hebt nog geen routes opgeslagen") -- de daadwerkelijke opslag komt in fase 3.
+  - **Profiel-tab**: placeholder, zoals afgesproken.
+- `LiveLocationScreen` uitgebreid met een `embedded`-modus (`position: absolute` i.p.v. `fixed`, ruimte voor de tabbalk) en een optionele `onCancel` (geen ✕-terugknop nodig als hometab, wél als losse bevestigingsstap elders).
+- 310/310 tests ongewijzigd (pure UI-herstructurering, geen engine-wijziging). Nog geen echte iPhone-validatie.
+
+**Geplande vervolgfasen (nog NIET gebouwd, bewuste volgorde):**
+
+**Fase 2 — Gereden routes automatisch onthouden.** Trigger: `NavigationStateMachine` bereikt `ARRIVED` (expliciete, ondubbelzinnige keuze -- niet "op Start gedrukt", dat zou een niet-voltooide poging ook als "gereden" tellen). Opgeslagen (lokaal, geen backend-account-systeem): knooppuntenreeks, vertrekpunt, afstand, datum. Doel: de rondje-generator (`generateLoopRoutes`/`generateLoopRoutesWithFallback`) laten controleren of een nieuwe kandidaat te veel overlapt met een eerder gereden route, en die dan overslaan -- hergebruikt hetzelfde `edgeOverlapRatio`-mechanisme dat al bestaat voor onderlinge dedup tussen kandidaten binnen één aanvraag (sectie... loop-route-generator.ts), nu ook toegepast tegen de geschiedenis. Geen naamgeving, geen gebruikersactie nodig -- volledig automatisch.
+
+**Fase 3 — "Mijn routes" (bewust apart van fase 2).** Expliciete, door de gebruiker gekozen opslag (bijv. een hart-icoon "♡ Opslaan in Mijn routes"), optioneel een eigen naam. Zonder naam: automatische weergave als "Route van [datum]". Dit is een animo-gedreven lijst (routes die de gebruiker zelf de moeite waard vindt om te bewaren), nadrukkelijk NIET hetzelfde als de automatische gereden-routes-geschiedenis van fase 2 -- die twee concepten blijven gescheiden datamodellen.
 
 ---
 
