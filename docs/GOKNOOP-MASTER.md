@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — omkeerknop-feedback ✅; HEADING-UP OOK OP HOME-SCHERM ✅ gebouwd (alleen rotatie, geen auto-zoom, bewust bevestigd vóór bouwen); knooppunten-op-Home bewust NIET gebouwd (nieuwe databehoefte, apart traject); 333/333 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — heading-up op Home ✅; ECHTE BUG 3: logpaneel (technische regels) was NIET verborgen in productie zoals bedoeld — nu gefixt, zelfde !onExit-bescherming als het statuspaneel; 333/333 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -513,6 +513,16 @@ Op verzoek: de live-locatiekaart op de Kaart-hometab (`LiveLocationScreen`, sect
 - **Knooppunten-op-Home bewust NIET gebouwd** -- de gebruiker vroeg er ook naar, maar dit vereist een geheel nieuwe databehoefte ("welke knooppunten liggen er rond deze kaartuitsnede", los van een gekozen route) die nog niet bestaat. Expliciet als apart, later traject afgesproken, niet stilzwijgend meegenomen of vergeten.
 
 Geen nieuwe pure logica (volledig hergebruik), dus geen nieuwe tests nodig -- 333/333 ongewijzigd, `tsc` schoon.
+
+---
+
+## 6M. ECHTE BUG 3: LOGPANEEL NIET VERBORGEN IN PRODUCTIE (29-8-2026)
+
+Het monospace technische statuspaneel (map:/fase:/nav state:) kreeg bij een eerdere polish-stap terecht een `!onExit`-bescherming (alleen zichtbaar in debugmodus, niet in de echte app) -- maar het LOGPANEEL eronder (de tijdgestempelde regels, bijv. "onderweg naar startpunt, nog 1052m") stond daar per ongeluk BUITEN, en bleef dus altijd zichtbaar, ook in productie. Gefixt: zelfde `!onExit`-bescherming nu ook om het logpaneel.
+
+**Open vraag, nog niet beantwoord:** de gebruiker vroeg ook "kunnen we niet naar het knooppunt navigeren?" tijdens fase A. Onduidelijk of dit een verzoek is om ECHTE, straatvolgende routing naar het startpunt (via de Route Engine, i.p.v. de huidige hemelsbrede afstand+richting) -- dat zou een groter, nieuw stuk werk zijn (een punt-naar-punt-routeberekening vanaf de live positie naar het startknooppunt, met een getekende lijn op de kaart net als bij de hoofdroute). Nog te verduidelijken met de gebruiker voordat hieraan begonnen wordt.
+
+333/333 tests, `tsc` schoon.
 
 ---
 

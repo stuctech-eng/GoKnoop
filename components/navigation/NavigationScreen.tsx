@@ -767,26 +767,28 @@ export default function NavigationScreen({
         </div>
       )}
 
-      <div
-        style={{
-          position: "absolute",
-          bottom: 12,
-          left: 12,
-          right: 12,
-          background: "rgba(255,255,255,0.92)",
-          borderRadius: 8,
-          padding: "8px 12px",
-          fontFamily: "monospace",
-          fontSize: 11,
-          maxHeight: 140,
-          overflowY: "auto",
-          zIndex: 10,
-        }}
-      >
-        {log.map((entry, i) => (
-          <div key={i}>{entry}</div>
-        ))}
-      </div>
+      {!onExit && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 12,
+            left: 12,
+            right: 12,
+            background: "rgba(255,255,255,0.92)",
+            borderRadius: 8,
+            padding: "8px 12px",
+            fontFamily: "monospace",
+            fontSize: 11,
+            maxHeight: 140,
+            overflowY: "auto",
+            zIndex: 10,
+          }}
+        >
+          {log.map((entry, i) => (
+            <div key={i}>{entry}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
