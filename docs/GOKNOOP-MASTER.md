@@ -845,3 +845,75 @@ apart te forceren. De 267 geautomatiseerde tests + de bevestigde fase-A-iPhone-t
 voldoende vertrouwen om door te bouwen naar de volgende integratiestap (Phase 3-flow-
 koppeling). Bovenstaande openstaande punten worden in ÉÉN echte lokale testrit gevalideerd
 zodra die integratie staat -- niet eerder, en niet met een kunstmatige locatie geforceerd.
+
+---
+
+## 8. BACKLOG — VERZAMELD OVERZICHT VAN ALLE OPENSTAANDE PUNTEN (29-8-2026)
+
+Deze sectie verzamelt alle nog-niet-gebouwde/nog-niet-gekalibreerde punten die verspreid
+door dit document genoemd zijn, op één plek, zodat ze niet stilzwijgend verloren raken.
+Niets hierin is nu al gebouwd -- dit is een TODO-overzicht, geen statusverslag.
+
+### 8A. GPS-/navigatiekalibratie (uitgangspunten, nog niet definitief)
+
+Deze waarden staan nu op een redelijke inschatting, maar zijn nog nooit tegen een
+daadwerkelijke, langere fietsrit getest. Pas afstellen na echte tests (te snel/te traag
+reagerend, valse afwijkingsmeldingen, hortende richtingaanwijzingen, etc.):
+
+| Waarde | Huidige instelling | Waar |
+|---|---|---|
+| `deviationThresholdM` | 20 m | Afwijkingsdetectie (stap 6) |
+| `deviationConfirmDurationMs` | ~5000 ms | Bevestigingsvenster vóór een afwijking "telt" |
+| `rerouteCooldownMs` | ~10000 ms | Afkoelperiode tussen reroutes |
+| `RECENT_ROUTE_MEMORY` | 200 m | Voorkomt heen-en-weer-springen tussen twee routes na reroute |
+| `ARRIVAL_AT_START_THRESHOLD_M` | 25 m | Wanneer fase A → fase B overgaat |
+| `ARRIVAL_AT_END_THRESHOLD_M` | 25 m | Wanneer `checkArrival()`/"Aangekomen" afgaat |
+| `MOVEMENT_SPEED_THRESHOLD_MPS` | 0,5 m/s | Drempel voor "betrouwbare bewegingsrichting" |
+| `HEADING_SMOOTHING_ALPHA` | 0,35 | Hoe snel de kaartrotatie een nieuwe richting volgt |
+| `classifyDirection`-grenzen | 15° / 45° / 135° | Rechtdoor/licht-links-rechts/links-rechts/achteruit |
+
+### 8B. Stabiliteitslagen (ontbreken nog, kunnen tot "flikkerend" gedrag leiden)
+
+- **Te vroeg "aangekomen bij knooppunt" wisselen**: `hasArrivedAtNode()`/`checkArrival()`
+  zijn nu simpele, eenmalige afstandschecks (spec-sectie 13 noemde dit expliciet als risico:
+  één toevallig te dichtbij GPS-punt kan een voortijdige/foutieve knooppuntwissel
+  veroorzaken). Ontbrekend: een bevestigingsvenster/hysterese, vergelijkbaar met hoe
+  `deviationConfirmDurationMs` dat al doet voor afwijkingsdetectie (stap 6) -- dezelfde
+  aanpak zou hier hergebruikt kunnen worden, geen nieuw patroon nodig.
+- **Richtingclassificatie kan rond een grenswaarde heen-en-weer springen** (bijv. exact op
+  de grens tussen "licht rechts" en "rechts") -- `classifyDirection()` zelf is stateless/puur,
+  er is nog geen dempingslaag die dit voorkomt.
+
+### 8C. Slimmere startknooppunt-keuze
+
+De huidige fallback (`generateLoopRoutesWithFallback`/`computeRouteWithFallback`, sectie 6B)
+probeert kandidaten simpelweg in afstandsvolgorde en stopt bij de EERSTE bruikbare. Genoemd
+als mogelijke verfijning: een echte score die afstand + routebeschikbaarheid + routekwaliteit
+combineert, zodat bijv. een kandidaat die net iets verder ligt maar een significant betere
+route oplevert, verkozen kan worden boven "de eerste die toevallig werkt". Bewust uitgesteld
+tot de simpele fallback voldoende in de praktijk bewezen is (Volendam + Edam + een normale
+situatie).
+
+### 8D. Uit de GPT-mockup, nog niet gebouwd
+
+- Gebogen afslagpijl (echte links/rechts/rechtdoor-symbolen i.p.v. alleen een geroteerde pijl)
+- Verwachte aankomsttijd (ETA) -- wacht op een degelijk snelheidsmodel (`Route.durationEstimate` blijft `null`)
+- Offline kaarten downloaden (aparte technische fase)
+- Foto's in route-detail
+- Donut-voortgangsring (als aanvulling op, niet vervanging van, de huidige balk)
+
+### 8E. Andere genoemde, nog niet gebouwde features
+
+- **Knooppunten tonen op het Home-scherm** (los van een gekozen route) -- vereist een nieuwe
+  serverfunctionaliteit ("welke knooppunten liggen er rond deze kaartuitsnede")
+- **Algemene stratengraaf (bijv. OSM) naast het knooppuntennetwerk** -- voor écht
+  kortste-weg-routing buiten het knooppuntennetwerk om (sectie 6O: "navigeren naar het
+  startpunt" kan nu alleen via knooppunten-netwerk-edges routeren, niet via willekeurige
+  straten)
+- **Live herberekening van de route-naar-startpunt** als de gebruiker een andere weg neemt
+  dan de getoonde, eenmalig berekende route (sectie 6N)
+- **Portrait-modus-vergrendeling** -- technisch niet haalbaar op iPhone (Screen Orientation
+  Lock-API niet ondersteund door iOS/Safari, bevestigd via webzoekopdracht); het enige
+  werkende alternatief (een "draai terug"-melding bij landscape) is voorgesteld en door de
+  gebruiker afgewezen (sectie 6O) -- blijft bewust ongebouwd
+
