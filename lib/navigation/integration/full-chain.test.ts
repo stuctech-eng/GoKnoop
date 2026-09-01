@@ -45,14 +45,15 @@ function edge(overrides: Partial<GraphEdge> & Pick<GraphEdge, "id" | "distanceM"
 }
 
 function routeFromEdges(id: string, edges: GraphEdge[], overrides: Partial<Route> = {}): Route {
-  const model = buildRouteProgressModel(edges);
+  const nodeSequence = ["n1", ...edges.map((e) => e.toLogicalNodeId)];
+  const model = buildRouteProgressModel(edges, nodeSequence);
   return {
     id,
     datasetVersionId: DATASET_VERSION,
     source: "route-engine-v1",
     network: "fiets",
     mode: "bicycle",
-    nodes: ["n1", ...edges.map((e) => e.toLogicalNodeId)],
+    nodes: nodeSequence,
     edges: edges.map((e) => e.id),
     geometry: model.geometry as Point[],
     distanceM: model.totalDistanceM,
@@ -87,7 +88,7 @@ const COOLDOWN_MS = 10_000;
 function buildSession(edges: GraphEdge[], detectorOptions: Partial<Omit<DeviationDetectorOptions, "matchOptions">> = {}) {
   const clock = new ManualNavigationClock(0);
   const stateMachine = new NavigationStateMachine({ deviationConfirmDurationMs: CONFIRM_MS, rerouteCooldownMs: COOLDOWN_MS });
-  let progressModel = buildRouteProgressModel(edges);
+  let progressModel = buildRouteProgressModel(edges, ["n1", ...edges.map((e) => e.toLogicalNodeId)]);
   let detector = new DeviationDetector(progressModel.geometry, stateMachine, clock, {
     ...DEFAULT_DETECTOR_OPTIONS,
     ...detectorOptions,
@@ -111,7 +112,7 @@ function buildSession(edges: GraphEdge[], detectorOptions: Partial<Omit<Deviatio
 
   /** Vervangt de actieve route na een succesvolle reroute -- NIEUWE matching-geometrie, ZELFDE state machine/klok. */
   function switchToRoute(newEdges: GraphEdge[]) {
-    progressModel = buildRouteProgressModel(newEdges);
+    progressModel = buildRouteProgressModel(newEdges, ["n1", ...newEdges.map((e) => e.toLogicalNodeId)]);
     detector = new DeviationDetector(progressModel.geometry, stateMachine, clock, {
       ...DEFAULT_DETECTOR_OPTIONS,
       ...detectorOptions,

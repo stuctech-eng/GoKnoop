@@ -474,7 +474,8 @@ export default function Home() {
           <NavigationScreen
             key={startLocation?.logicalNodeId ?? "navigation"}
             edges={selectedLoop.resolvedEdges}
-            nodeIds={selectedLoop.nodeDisplayNumbers}
+            nodeSequence={selectedLoop.route.nodes}
+            nodeDisplayNumbers={selectedLoop.nodeDisplayNumbers}
             datasetVersionId={selectedLoop.route.datasetVersionId}
             onExit={() => setStep("detail")}
           />

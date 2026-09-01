@@ -82,7 +82,7 @@ describe("generateLoopRoutes + resolveRouteEdges — Route Engine → GraphEdge[
 
     // DE KERNPROEF: dit is precies wat de Navigation Engine (stap 5) nodig heeft --
     // rechtstreeks, zonder tussenstap, zonder de edges opnieuw af te leiden.
-    const model = buildRouteProgressModel(loop.resolvedEdges);
+    const model = buildRouteProgressModel(loop.resolvedEdges, loop.route.nodes);
 
     // Distance-invariant blijft intact over de grens Route Engine <-> Navigation Engine heen:
     // de som van de ECHTE edge.distanceM-waarden (Navigation Engine) komt overeen met
@@ -102,7 +102,7 @@ describe("generateLoopRoutes + resolveRouteEdges — Route Engine → GraphEdge[
 
     for (const loop of result.loops) {
       expect(loop.resolvedEdges.map((e) => e.id)).toEqual(loop.route.edges);
-      const model = buildRouteProgressModel(loop.resolvedEdges);
+      const model = buildRouteProgressModel(loop.resolvedEdges, loop.route.nodes);
       expect(model.totalDistanceM).toBeCloseTo(loop.route.distanceM, 6);
     }
   });

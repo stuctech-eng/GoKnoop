@@ -114,7 +114,7 @@ export default function NavigationDebugHarness() {
       deviationConfirmDurationMs,
       rerouteCooldownMs,
     });
-    const progressModel = buildRouteProgressModel(edges);
+    const progressModel = buildRouteProgressModel(edges, ["debug-from", "debug-to"]);
     const detector = new DeviationDetector(progressModel.geometry, stateMachine, clock, {
       deviationThresholdM,
       accuracyThresholdM,

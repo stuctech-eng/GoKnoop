@@ -11,15 +11,15 @@ function edge(overrides: Partial<GraphEdge> & Pick<GraphEdge, "id" | "distanceM"
 describe("buildRouteGeoJson — Test 1: eenvoudige route met 2 edges → één doorlopende lijn", () => {
   it("levert één LineString met alle punten van beide edges samengevoegd", () => {
     const edges: GraphEdge[] = [
-      edge({ id: "e1", distanceM: 100, geometry: [{ x: 136000, y: 456000 }, { x: 136000, y: 456100 }] }),
-      edge({ id: "e2", distanceM: 50, geometry: [{ x: 136000, y: 456100 }, { x: 136000, y: 456150 }] }),
+      edge({ id: "e1", fromLogicalNodeId: "n1", toLogicalNodeId: "n2", distanceM: 100, geometry: [{ x: 136000, y: 456000 }, { x: 136000, y: 456100 }] }),
+      edge({ id: "e2", fromLogicalNodeId: "n2", toLogicalNodeId: "n3", distanceM: 50, geometry: [{ x: 136000, y: 456100 }, { x: 136000, y: 456150 }] }),
     ];
-    const model = buildRouteProgressModel(edges);
+    const model = buildRouteProgressModel(edges, ["n1", "n2", "n3"]);
     const result = buildRouteGeoJson(model, ["n1", "n2", "n3"]);
 
     expect(result.line.type).toBe("Feature");
     expect(result.line.geometry.type).toBe("LineString");
-    expect(result.line.geometry.coordinates).toHaveLength(3); // grenspunt niet gedupliceerd
+    expect(result.line.geometry.coordinates).toHaveLength(3);
     expect(result.nodes.features).toHaveLength(3);
     expect(result.nodes.features.map((f) => f.properties.nodeId)).toEqual(["n1", "n2", "n3"]);
   });
@@ -28,18 +28,16 @@ describe("buildRouteGeoJson — Test 1: eenvoudige route met 2 edges → één d
 describe("buildRouteGeoJson — Test 2: meerdere edges, volgorde en volledigheid", () => {
   it("behoudt de Route.edges[]-volgorde, geen ontbrekende segmenten, correcte geometrie", () => {
     const edges: GraphEdge[] = [
-      edge({ id: "e1", distanceM: 100, geometry: [{ x: 0, y: 0 }, { x: 0, y: 100 }] }),
-      edge({ id: "e2", distanceM: 100, geometry: [{ x: 0, y: 100 }, { x: 100, y: 100 }] }),
-      edge({ id: "e3", distanceM: 100, geometry: [{ x: 100, y: 100 }, { x: 100, y: 200 }] }),
+      edge({ id: "e1", fromLogicalNodeId: "n1", toLogicalNodeId: "n2", distanceM: 100, geometry: [{ x: 0, y: 0 }, { x: 0, y: 100 }] }),
+      edge({ id: "e2", fromLogicalNodeId: "n2", toLogicalNodeId: "n3", distanceM: 100, geometry: [{ x: 0, y: 100 }, { x: 100, y: 100 }] }),
+      edge({ id: "e3", fromLogicalNodeId: "n3", toLogicalNodeId: "n4", distanceM: 100, geometry: [{ x: 100, y: 100 }, { x: 100, y: 200 }] }),
     ];
-    const model = buildRouteProgressModel(edges);
+    const model = buildRouteProgressModel(edges, ["n1", "n2", "n3", "n4"]);
     const result = buildRouteGeoJson(model, ["n1", "n2", "n3", "n4"]);
 
-    // 4 punten totaal (0,0)-(0,100)-(100,100)-(100,200), geen duplicaten, geen gaten.
     expect(result.line.geometry.coordinates).toHaveLength(4);
     expect(result.nodes.features.map((f) => f.properties.sequenceIndex)).toEqual([0, 1, 2, 3]);
 
-    // Knooppunt n2 (grens e1/e2) moet overeenkomen met RD-punt (0,100), n3 met (100,100).
     const expectedN2 = rdToWgs84(0, 100);
     const expectedN3 = rdToWgs84(100, 100);
     expect(result.nodes.features[1].geometry.coordinates[0]).toBeCloseTo(expectedN2.lon, 6);
@@ -51,39 +49,33 @@ describe("buildRouteGeoJson — Test 2: meerdere edges, volgorde en volledigheid
 
 describe("buildRouteGeoJson — Test 3: parallelle edges tussen dezelfde nodes worden niet gededupliceerd", () => {
   it("twee edges met identieke from/to-nodes, maar andere geometrie, leveren beide hun eigen lijnstuk", () => {
-    // Twee fysiek verschillende paden tussen dezelfde twee (logische) knooppunten --
-    // een lus die heen en terug gaat via een ANDERE route (bijv. twee fietspaden).
     const edges: GraphEdge[] = [
       edge({ id: "e1", fromLogicalNodeId: "A", toLogicalNodeId: "B", distanceM: 100, geometry: [{ x: 0, y: 0 }, { x: 0, y: 100 }] }),
-      edge({ id: "e2", fromLogicalNodeId: "B", toLogicalNodeId: "A", distanceM: 100, geometry: [{ x: 0, y: 100 }, { x: 10, y: 0 }] }), // andere geometrie terug
+      edge({ id: "e2", fromLogicalNodeId: "B", toLogicalNodeId: "A", distanceM: 100, geometry: [{ x: 0, y: 100 }, { x: 10, y: 0 }] }),
     ];
-    const model = buildRouteProgressModel(edges);
+    const model = buildRouteProgressModel(edges, ["A", "B", "A"]);
     const result = buildRouteGeoJson(model, ["nA", "nB", "nA2"]);
 
-    // Beide edges leveren hun eigen segment op -- geen samenvoeging/dedup op basis van node-ID's.
     expect(result.line.geometry.coordinates).toHaveLength(3);
-    expect(model.edges.map((e) => e.id)).toEqual(["e1", "e2"]); // route-engine-data ongewijzigd/intact
-    expect(model.edges).toHaveLength(2); // geen edge verdwenen door dedup
+    expect(model.edges.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(model.edges).toHaveLength(2);
   });
 });
 
 describe("buildRouteGeoJson — Test 4: distance-invariant blijft ongewijzigd (de kaart is alleen visualisatie)", () => {
   it("de adapter herberekent distanceM niet en de bestaande progress-invariant blijft exact gelden", () => {
     const edges: GraphEdge[] = [
-      edge({ id: "e1", distanceM: 137, geometry: [{ x: 0, y: 0 }, { x: 0, y: 100 }] }), // echte distanceM wijkt bewust af van de rauwe 100m
-      edge({ id: "e2", distanceM: 63, geometry: [{ x: 0, y: 100 }, { x: 0, y: 150 }] }),
+      edge({ id: "e1", fromLogicalNodeId: "n1", toLogicalNodeId: "n2", distanceM: 137, geometry: [{ x: 0, y: 0 }, { x: 0, y: 100 }] }),
+      edge({ id: "e2", fromLogicalNodeId: "n2", toLogicalNodeId: "n3", distanceM: 63, geometry: [{ x: 0, y: 100 }, { x: 0, y: 150 }] }),
     ];
-    const model = buildRouteProgressModel(edges);
+    const model = buildRouteProgressModel(edges, ["n1", "n2", "n3"]);
 
-    // De adapter aanroepen mag totalDistanceM niet beïnvloeden.
     buildRouteGeoJson(model, ["n1", "n2", "n3"]);
-    expect(model.totalDistanceM).toBe(200); // 137 + 63, ongewijzigd
+    expect(model.totalDistanceM).toBe(200);
 
-    // De bestaande invariant (stap 5) blijft onaangetast gelden na gebruik door de kaartlaag.
     const progress = calculateProgress(model, { segmentIndex: 1, segmentT: 0.5, point: { x: 0, y: 125 }, perpendicularDistanceM: 0, cumulativeDistanceM: 125 });
     expect(progress.distanceAlongRouteM + progress.remainingDistanceM).toBeCloseTo(model.totalDistanceM, 6);
 
-    // Het GeoJSON-resultaat zelf bevat GEEN distanceM-veld -- puur coördinaten, geen tweede afstandsbron.
     const result = buildRouteGeoJson(model, ["n1", "n2", "n3"]);
     expect(result.line.properties).toEqual({});
     expect(Object.keys(result.nodes.features[0].properties)).toEqual(["nodeId", "sequenceIndex"]);
@@ -92,15 +84,14 @@ describe("buildRouteGeoJson — Test 4: distance-invariant blijft ongewijzigd (d
 
 describe("buildRouteGeoJson — Test 5: lege/ongeldige geometrie → geen crash, expliciete foutstatus", () => {
   it("gooit een duidelijke fout bij een geometrie met minder dan 2 punten (via buildRouteProgressModel's eigen edge)", () => {
-    // Een enkele-punt-edge levert een model met een te korte samengevoegde geometrie op.
-    const edges: GraphEdge[] = [edge({ id: "e1", distanceM: 0, geometry: [{ x: 0, y: 0 }] })];
-    const model = buildRouteProgressModel(edges);
+    const edges: GraphEdge[] = [edge({ id: "e1", fromLogicalNodeId: "n1", toLogicalNodeId: "n2", distanceM: 0, geometry: [{ x: 0, y: 0 }] })];
+    const model = buildRouteProgressModel(edges, ["n1", "n2"]);
     expect(() => buildRouteGeoJson(model, ["n1", "n2"])).toThrow(/minder dan 2 punten/);
   });
 
   it("gooit een duidelijke fout als nodeIds niet overeenkomt met edges.length + 1", () => {
-    const edges: GraphEdge[] = [edge({ id: "e1", distanceM: 100, geometry: [{ x: 0, y: 0 }, { x: 0, y: 100 }] })];
-    const model = buildRouteProgressModel(edges);
+    const edges: GraphEdge[] = [edge({ id: "e1", fromLogicalNodeId: "n1", toLogicalNodeId: "n2", distanceM: 100, geometry: [{ x: 0, y: 0 }, { x: 0, y: 100 }] })];
+    const model = buildRouteProgressModel(edges, ["n1", "n2"]);
     expect(() => buildRouteGeoJson(model, ["alleen-een-node"])).toThrow(/nodeIds\.length/);
   });
 });
@@ -108,13 +99,12 @@ describe("buildRouteGeoJson — Test 5: lege/ongeldige geometrie → geen crash,
 describe("buildRouteGeoJson — Test 6: bounds voor auto-fit", () => {
   it("levert correcte [[minLon,minLat],[maxLon,maxLat]]-bounds die de hele route omvatten", () => {
     const edges: GraphEdge[] = [
-      edge({ id: "e1", distanceM: 1000, geometry: [{ x: 136000, y: 456000 }, { x: 137000, y: 457000 }] }),
+      edge({ id: "e1", fromLogicalNodeId: "n1", toLogicalNodeId: "n2", distanceM: 1000, geometry: [{ x: 136000, y: 456000 }, { x: 137000, y: 457000 }] }),
     ];
-    const model = buildRouteProgressModel(edges);
+    const model = buildRouteProgressModel(edges, ["n1", "n2"]);
     const result = buildRouteGeoJson(model, ["n1", "n2"]);
 
     const [[minLon, minLat], [maxLon, maxLat]] = result.bounds;
-    // Elk lijnpunt moet binnen de bounds vallen.
     for (const [lon, lat] of result.line.geometry.coordinates) {
       expect(lon).toBeGreaterThanOrEqual(minLon);
       expect(lon).toBeLessThanOrEqual(maxLon);

@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback ✅; heading-up-navigatie stap 1 (pure functies+tests) ✅ gebouwd; kaartrotatie/UI nog niet; 3 openstaande diagnosevragen (dubbele lijnen/Edam/positie)
+Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+heading-up-stap1 ✅; ECHTE BUG GEVONDEN+GEFIXT: edge-richtingscorrectie ontbrak in buildRouteProgressModel (Naarden-onderzoek); 306/306 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -351,13 +351,15 @@ Knooppunt 96 heeft 9 edges (niet geïsoleerd) maar is een **chokepoint**: `outbo
 
 ---
 
-## 6D. OPENSTAANDE DIAGNOSE (29-8-2026, nog niet opgelost)
+## 6D. OPENSTAANDE DIAGNOSE (29-8-2026) — punt 3 OPGELOST, echte engine-bug gevonden
 
-1. **Dubbele/parallelle lijnen** tussen knooppunt 10 en 64 (Volendam-lus): vermoedelijk twee daadwerkelijk verschillende edges tussen dezelfde knooppunten (bijv. beide kanten van een kanaal/dijk) — technisch verklaarbaar via de bestaande "vermijd de heenweg-edges bij de terugweg"-regel (sectie 6B), maar nog niet met zekerheid bevestigd t.o.v. een echte renderfout.
-2. **Ontbrekende knooppunt-badges bij een Edam-test** — de door de gebruiker gestuurde screenshot bleek achteraf niet de Edam-test te zijn maar dezelfde Volendam-lus uitgezoomd (waar de badges wél zichtbaar zijn). De daadwerkelijke Edam-situatie is nog niet met een correcte screenshot bevestigd.
-3. **Een kaarsrechte lijn die geen weg volgt** (zichtbaar bij een Naarden-lus, tussen knooppunt 78 en 35, dwars over de snelweg) — dit oogt als een echt datakwaliteitsprobleem (mogelijk een edge met slechts 2 brongeometriepunten) of een fout in hoe heen-/terugweg-geometrie aan elkaar geplakt wordt, nog niet onderzocht.
+1. **Dubbele/parallelle lijnen** tussen knooppunt 10 en 64 (Volendam-lus): nog steeds de werkhypothese dat dit twee daadwerkelijk verschillende edges tussen dezelfde knooppunten zijn (bijv. beide kanten van een kanaal/dijk, samenhangend met de "vermijd de heenweg-edges bij de terugweg"-regel, sectie 6B) — niet met zekerheid uitgesloten dat de hieronder beschreven richtingsbug hier ook aan bijdroeg; opnieuw te beoordelen ná de fix.
+2. **Ontbrekende knooppunt-badges bij Edam** — bleek een test-menselijke fout: de gestuurde screenshot was per ongeluk de eerder gepande/ingezoomde Volendam-kaart, niet een verse Edam-zoekopdracht (de app "onthoudt" de laatst geladen route totdat er een nieuwe zoekopdracht gedaan wordt — geen bug, wel een makkelijk te maken testfout). Nog te herhalen met een echte, verse Edam-zoekopdracht.
+3. **✅ OPGELOST: de kaarsrechte lijn.** Bevestigd met een nieuwe `/debug/route-geometry-inspector`-pagina (roept alleen bestaande endpoints aan, geen serverwijziging): ALLE edges in de Naarden-route bleken dichte, realistische geometrie te hebben (19-39m tussen punten) — dus GEEN brondata-kwaliteitsprobleem. De echte oorzaak: `buildRouteProgressModel()` (stap 5) miste de richtingscorrectie die `route-builder.ts` (Phase 2, al langer correct) wél had. Een edge is bidirectioneel doorloopbaar, maar de brongeometrie ligt vast in één richting (`fromLogicalNodeId → toLogicalNodeId`); als de route 'm omgekeerd doorloopt, moet de coördinatenreeks omgekeerd worden. Zonder die correctie "sprong" de samengevoegde lijn naar het verkeerde uiteinde van zo'n edge — precies het waargenomen patroon. **Dit trof niet alleen de kaartweergave maar ook matching/progress/richting**, die allemaal op dezelfde `model.geometry` draaien.
 
-**Geen van deze drie is nu opgelost of zelfs met zekerheid als bug bevestigd** — expliciet als open punt vastgelegd, niet stilzwijgend als "waarschijnlijk oké" behandeld.
+   **Fix:** `buildRouteProgressModel(edges, nodeSequence)` — `nodeSequence` (nieuw, verplicht parameter) toegevoegd, exact dezelfde, al bewezen richtingslogica hergebruikt als `route-builder.ts`'s `concatenateGeometry()` (geen nieuwe, afwijkende implementatie). Bijkomend: `NavigationScreen`'s `nodeIds`-prop bleek zelf ook een tweede, gerelateerd probleem te verbergen — die werd zowel voor de ECHTE interne knooppunt-ID's (nodig voor deze richtingscorrectie) als voor mensleesbare weergavenummers gebruikt. Nu netjes gesplitst in twee aparte props: `nodeSequence` (echte ID's, structureel) en `nodeDisplayNumbers` (weergave, cosmetisch) — dezelfde soort verwarring als de eerdere "9CHmIH3BmYvDp7wmARBq i.p.v. 96"-bug, nu definitief voorkomen door het onderscheid expliciet in het type-systeem vast te leggen.
+
+   Een nieuwe test bewijst de fix direct: een edge die in de brondata omgekeerd is opgeslagen t.o.v. de routevolgorde, levert nu de juiste (niet-springende) samengevoegde geometrie op. **306/306 tests, `tsc` schoon.**
 
 ---
 

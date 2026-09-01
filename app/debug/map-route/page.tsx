@@ -92,7 +92,7 @@ export default function MapRouteDebugPage() {
 
     let geoJson: ReturnType<typeof buildRouteGeoJson>;
     try {
-      const model = buildRouteProgressModel(TEST_EDGES);
+      const model = buildRouteProgressModel(TEST_EDGES, TEST_NODE_IDS);
       geoJson = buildRouteGeoJson(model, TEST_NODE_IDS);
     } catch (err) {
       setStatus("error");

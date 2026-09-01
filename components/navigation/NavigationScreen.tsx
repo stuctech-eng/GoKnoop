@@ -28,7 +28,7 @@
  * zelf al doet. `lib/navigation/` en `lib/route-engine/` kennen MapLibre
  * niet -- dat blijft uitsluitend hier en in `lib/map/`.
  *
- * Route blijft immutable: de meegegeven `edges`/`nodeIds` representeren de
+ * Route blijft immutable: de meegegeven `edges`/`nodeSequence` representeren de
  * door de gebruiker gekozen route. Een eventuele reroute (nog niet in dit
  * component aangesloten op een live Route Engine-aanroep) zou een NIEUW
  * `Route`-object opleveren, nooit een mutatie van de oorspronkelijke keuze.
@@ -89,15 +89,28 @@ const STATE_STYLE: Record<NavigationState, { label: string; color: string; backg
 export type NavigationScreenProps = {
   /** De gekozen route, als volledige GraphEdge[] (Route Engine → GraphEdge[], zie de dataketen-fix). */
   edges: GraphEdge[];
-  /** Route.nodes[] -- lengte moet edges.length + 1 zijn. */
-  nodeIds: string[];
+  /**
+   * Route.nodes[] -- de ECHTE, interne logicalNodeId's, lengte edges.length + 1.
+   * Nodig voor `buildRouteProgressModel`'s richtingscorrectie (bugfix 29-8-2026:
+   * een edge kan bidirectioneel doorlopen worden, de brongeometrie ligt vast in
+   * één richting) -- NIET voor weergave, dat is `nodeDisplayNumbers`.
+   */
+  nodeSequence: string[];
+  /**
+   * Echte knooppuntnummers (GraphNode.displayNumber), zelfde lengte/volgorde als
+   * `nodeSequence` -- uitsluitend voor UI-tekst/kaartlabels. Bewust een apart
+   * veld: `nodeSequence` en `nodeDisplayNumbers` zijn NIET dezelfde waarden
+   * (interne Firestore-ID versus mensleesbaar nummer) -- ze door elkaar
+   * gebruiken was precies de eerdere "9CHmIH3BmYvDp7wmARBq i.p.v. 96"-bug.
+   */
+  nodeDisplayNumbers: string[];
   /** Route.datasetVersionId -- gepind voor deze sessie (ontwerp sectie 19), nog niet actief gebruikt voor een live reroute-aanroep in dit component. */
   datasetVersionId: string;
   /** Aangeroepen wanneer de gebruiker de navigatie expliciet verlaat/stopt. */
   onExit?: () => void;
 };
 
-export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onExit }: NavigationScreenProps) {
+export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbers, datasetVersionId, onExit }: NavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
@@ -124,8 +137,8 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
 
     let geoJson: ReturnType<typeof buildRouteGeoJson>;
     try {
-      const model = buildRouteProgressModel(edges);
-      geoJson = buildRouteGeoJson(model, nodeIds);
+      const model = buildRouteProgressModel(edges, nodeSequence);
+      geoJson = buildRouteGeoJson(model, nodeDisplayNumbers);
     } catch (err) {
       setMapStatus("error");
       setError(err instanceof Error ? err.message : String(err));
@@ -218,7 +231,7 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
 
     const clock = new SystemNavigationClock();
     const stateMachine = new NavigationStateMachine({ deviationConfirmDurationMs: CONFIRM_MS, rerouteCooldownMs: COOLDOWN_MS });
-    const model = buildRouteProgressModel(edges);
+    const model = buildRouteProgressModel(edges, nodeSequence);
     const detector = new DeviationDetector(model.geometry, stateMachine, clock, {
       deviationThresholdM: 20,
       accuracyThresholdM: 25,
@@ -268,7 +281,7 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
       setPhase(currentPhase);
 
       if (currentPhase === "TO_START") {
-        setStartInfo({ nodeId: nodeIds[0], distanceM: distanceToStartM });
+        setStartInfo({ nodeId: nodeDisplayNumbers[0], distanceM: distanceToStartM });
         appendLog(`onderweg naar startpunt, nog ${Math.round(distanceToStartM)}m`);
         return; // nog geen matching/navigatie -- sessie is bewust nog niet gestart
       }
@@ -297,7 +310,7 @@ export default function NavigationScreen({ edges, nodeIds, datasetVersionId, onE
         // Niveau 1 (richting, stap 12.5): dezelfde matchedPosition hergebruikt, geen
         // nieuwe matching/positiebepaling -- alleen afgeleide weergave-informatie.
         const progress = calculateProgress(model, outcome.matchedPosition);
-        const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, nodeIds);
+        const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, nodeDisplayNumbers);
         setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: info.bearingToNextNodeDeg });
         setProgressInfo({ ratio: progress.progressRatio, distanceAlongM: progress.distanceAlongRouteM, totalM: model.totalDistanceM });
 

@@ -52,5 +52,5 @@ const TEST_EDGES: GraphEdge[] = [
 const TEST_NODE_IDS = ["12", "34", "56", "78"];
 
 export default function MapLiveDebugPage() {
-  return <NavigationScreen edges={TEST_EDGES} nodeIds={TEST_NODE_IDS} datasetVersionId="debug-fixture" />;
+  return <NavigationScreen edges={TEST_EDGES} nodeSequence={TEST_NODE_IDS} nodeDisplayNumbers={TEST_NODE_IDS} datasetVersionId="debug-fixture" />;
 }
