@@ -164,10 +164,15 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
     <div
       style={{
         position: embedded ? "absolute" : "fixed",
-        inset: 0,
-        bottom: embedded ? 56 : 0, // ruimte voor de tabbalk (env(safe-area) zit al in de tabbalk zelf)
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: embedded ? 64 : 0, // ruimte voor de (nu grotere) tabbalk (env(safe-area) zit al in de tabbalk zelf)
         width: "100%",
-        height: embedded ? "100%" : "100dvh",
+        // GEEN expliciete height hier: top+bottom bepalen de hoogte volledig. Een expliciete
+        // height ernaast (zoals voorheen "100%") overschrijft `bottom` stilzwijgend (CSS
+        // negeert bottom als top+height+bottom samen overconstrained zijn) -- dat was de
+        // daadwerkelijke oorzaak van de eerdere overlap met de tabbalk.
         zIndex: embedded ? 1 : 50,
         background: "#000",
       }}

@@ -45,15 +45,16 @@ export default function TabBar({ active, onChange }: { active: TabId; onChange: 
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              gap: 2,
-              padding: "8px 0 6px",
+              gap: 4,
+              padding: "12px 0 10px",
+              minHeight: 64,
               border: "none",
               background: "transparent",
-              color: isActive ? "#085041" : "#8A8A85",
+              color: isActive ? "#085041" : "#5A5A55",
             }}
           >
-            <span style={{ fontSize: 20 }}>{tab.icon}</span>
-            <span style={{ fontSize: 11, fontWeight: isActive ? 700 : 500 }}>{tab.label}</span>
+            <span style={{ fontSize: 28 }}>{tab.icon}</span>
+            <span style={{ fontSize: 13, fontWeight: isActive ? 700 : 600 }}>{tab.label}</span>
           </button>
         );
       })}
