@@ -9,6 +9,7 @@ import TabBar, { type TabId } from "@/components/layout/TabBar";
 import { getRiddenRoutes } from "@/lib/history/ridden-routes-store";
 import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
 import type { GraphEdge } from "@/lib/route-engine/types";
+import { loopOrientation } from "@/lib/route-engine/loop-orientation";
 
 type Point = { x: number; y: number };
 type Route = {
@@ -582,7 +583,7 @@ export default function Home() {
               style={{
                 width: "100%",
                 minHeight: 44,
-                marginBottom: "1.5rem",
+                marginBottom: 8,
                 background: "white",
                 color: "var(--color-ink)",
                 border: "1px solid #ccc",
@@ -591,8 +592,11 @@ export default function Home() {
                 fontWeight: 600,
               }}
             >
-              ↻ Andere kant op rijden (linksom / rechtsom)
+              ↻ Andere kant op rijden
             </button>
+            <p style={{ fontSize: 13, opacity: 0.6, textAlign: "center", marginBottom: "1.5rem" }}>
+              Rijdrichting: <strong>{loopOrientation(selectedLoop.route.geometry) === "linksom" ? "linksom" : "rechtsom"}</strong>
+            </p>
 
             {!showSaveNamePrompt ? (
               <button

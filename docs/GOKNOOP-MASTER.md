@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — 4 fixes ✅; ECHTE BUG GEVONDEN+GEFIXT: omkeerfunctie werkte niet door ontbrekende remount-key; "Aangekomen"-kaart toegevoegd; omkeren nu ook bij het startpunt zelf mogelijk; 330/330 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — remount-key-bug gefixt ✅; ECHTE BUG 2: omkeerknop gaf geen zichtbare feedback (identieke lijnvorm bij omkering) — "Linksom"/"Rechtsom"-label toegevoegd, berekend uit echte geometrie; 333/333 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -489,6 +489,18 @@ Naar aanleiding van meerdere echte tests met de Volendam-route (fase A/B, kaartc
 **Aangekomen-kaart toegevoegd:** `navState === "ARRIVED"` had voorheen GEEN eigen weergave -- de laatst bekende (verouderde) "Rijd deze richting op"-tekst bleef gewoon staan, wat aanvoelde als "vastzitten" i.p.v. een voltooide rit. Nu een expliciete 🏁 "Aangekomen!"-kaart, gecontroleerd VÓÓR de fase-gebaseerde logica.
 
 330/330 tests, `tsc` schoon.
+
+---
+
+## 6K. ECHTE BUG 2: OMKEERKNOP GAF GEEN ZICHTBARE FEEDBACK (29-8-2026)
+
+Ná de remount-key-fix (sectie 6J) werkte de omkeerfunctie zelf wel correct, maar de gebruiker zag nog steeds geen enkel verschil op het detailscherm. Oorzaak: `RoutePreview` tekent `route.geometry` als een simpele lijn -- een omgekeerde puntenreeks van een GESLOTEN lus tekent EXACT dezelfde vorm (dezelfde punten, alleen in omgekeerde volgorde), dus zonder een expliciet label lijkt de knop niets te doen.
+
+**Fix:** `lib/route-engine/loop-orientation.ts` (`loopOrientation()`) -- pure geometrische berekening (shoelace-formule/signed area op de RD-coördinaten van `route.geometry`), geeft ondubbelzinnig "linksom" of "rechtsom" terug. Bewust GEEN losse toggle-state die kan afwijken van de werkelijke geometrie -- de daadwerkelijke puntenvolgorde is de enige bron van waarheid. 3 tests, incl. de garantie dat een omgekeerde lus altijd de tegenovergestelde uitkomst geeft.
+
+Het detailscherm toont nu "Rijdrichting: linksom/rechtsom" direct onder de omkeerknop, die bij elke druk meteen (zichtbaar) verandert.
+
+333/333 tests, `tsc` schoon.
 
 ---
 
