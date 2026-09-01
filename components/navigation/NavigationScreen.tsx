@@ -143,6 +143,8 @@ export default function NavigationScreen({
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const hasRecordedArrivalRef = useRef(false);
   const smoothedHeadingRef = useRef<number | null>(null);
+  const hasRequestedRouteToStartRef = useRef(false);
+  const routeToStartDistanceRef = useRef<number | null>(null);
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
@@ -150,6 +152,9 @@ export default function NavigationScreen({
   const [progressInfo, setProgressInfo] = useState<{ ratio: number; distanceAlongM: number; totalM: number } | null>(null);
   const [phase, setPhase] = useState<PreNavigationPhase>("TO_START");
   const [startInfo, setStartInfo] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
+  // Sectie 6N: echte, straatvolgende afstand naar het startpunt (via de Route Engine), zodra
+  // bekend -- vervangt de hemelsbrede afstand in de weergave. null = nog niet opgehaald/mislukt.
+  const [routeToStartDistanceM, setRouteToStartDistanceM] = useState<number | null>(null);
   const [navState, setNavState] = useState<NavigationState>("NOT_STARTED");
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -272,6 +277,75 @@ export default function NavigationScreen({
 
     let sessionStarted = false;
 
+    /**
+     * Sectie 6N: echte, straatvolgende route naar het startpunt -- op verzoek
+     * ("navigeren naar het knooppunt", niet alleen hemelsbrede afstand+richting).
+     * Eenmalig aangeroepen (hasRequestedRouteToStartRef), geen doorlopende
+     * herberekening bij elke sample -- bewust een scoped-eerste-versie, geen
+     * live re-routing als de gebruiker een andere weg neemt.
+     */
+    async function fetchRouteToStart(lat: number, lon: number) {
+      try {
+        const resolveRes = await fetch("/api/location/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat, lon, limit: 5 }),
+        });
+        const resolveData = await resolveRes.json();
+        if (!resolveRes.ok || !resolveData.candidates?.length) {
+          appendLog("route naar startpunt: locatie kon niet geresolved worden");
+          return;
+        }
+
+        const toStartRes = await fetch("/api/route/to-start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            candidateNodeIds: resolveData.candidates.map((c: { logicalNodeId: string }) => c.logicalNodeId),
+            candidateDistancesM: resolveData.candidates.map((c: { distanceM: number }) => c.distanceM),
+            toLogicalNodeId: nodeSequence[0],
+          }),
+        });
+        const toStartData = await toStartRes.json();
+        if (!toStartRes.ok) {
+          appendLog(`route naar startpunt niet gevonden: ${toStartData.error ?? "onbekende fout"}`);
+          return;
+        }
+
+        const toStartModel = buildRouteProgressModel(toStartData.resolvedEdges, toStartData.route.nodes);
+        const geoJson = buildRouteGeoJson(toStartModel, toStartData.nodeDisplayNumbers);
+
+        const map = mapRef.current;
+        if (map) {
+          if (!map.getSource("goknoop-route-to-start")) {
+            map.addSource("goknoop-route-to-start", { type: "geojson", data: geoJson.line as GeoJSON.Feature });
+            // Onder de hoofdroute-laag getekend (dun, gestippeld, ander blauw) -- duidelijk
+            // onderscheiden van de daadwerkelijke gekozen fietsroute (dikke, effen teal lijn).
+            map.addLayer(
+              {
+                id: "goknoop-route-to-start-line",
+                type: "line",
+                source: "goknoop-route-to-start",
+                layout: { "line-join": "round", "line-cap": "round" },
+                paint: { "line-color": "#3B82F6", "line-width": 4, "line-dasharray": [2, 2] },
+              },
+              "goknoop-route-line"
+            );
+          } else {
+            (map.getSource("goknoop-route-to-start") as maplibregl.GeoJSONSource).setData(geoJson.line as GeoJSON.Feature);
+          }
+        }
+
+        routeToStartDistanceRef.current = toStartModel.totalDistanceM;
+        setRouteToStartDistanceM(toStartModel.totalDistanceM);
+        appendLog(
+          `route naar startpunt getekend (${Math.round(toStartModel.totalDistanceM)}m, via kandidaat #${toStartData.selectedCandidateRank})`
+        );
+      } catch (err) {
+        appendLog(`route-naar-startpunt-fout: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     let source: BrowserGeolocationSource;
     try {
       source = new BrowserGeolocationSource({
@@ -312,7 +386,12 @@ export default function NavigationScreen({
 
       if (currentPhase === "TO_START") {
         const bearingToStartDeg = bearingDegrees(rdPosition, model.geometry[0]);
-        setStartInfo({ nodeId: nodeDisplayNumbers[0], distanceM: distanceToStartM, bearingDeg: bearingToStartDeg });
+        setStartInfo({ nodeId: nodeDisplayNumbers[0], distanceM: routeToStartDistanceRef.current ?? distanceToStartM, bearingDeg: bearingToStartDeg });
+
+        if (!hasRequestedRouteToStartRef.current) {
+          hasRequestedRouteToStartRef.current = true;
+          fetchRouteToStart(sample.lat, sample.lon);
+        }
 
         // Positiemarker + kaart ook al tijdens fase A bijwerken -- de ruwe GPS-positie zelf
         // (geen matching, die begint pas bij sessiestart), zodat het aanrijden ook echt als
@@ -326,7 +405,7 @@ export default function NavigationScreen({
           });
         }
 
-        appendLog(`onderweg naar startpunt, nog ${Math.round(distanceToStartM)}m`);
+        appendLog(`onderweg naar startpunt, nog ${Math.round(routeToStartDistanceRef.current ?? distanceToStartM)}m`);
         return; // nog geen matching/navigatie -- sessie is bewust nog niet gestart
       }
 
@@ -433,6 +512,9 @@ export default function NavigationScreen({
     sourceRef.current = null;
     unsubscribeRef.current = null;
     hasRecordedArrivalRef.current = false;
+    hasRequestedRouteToStartRef.current = false;
+    routeToStartDistanceRef.current = null;
+    setRouteToStartDistanceM(null);
     smoothedHeadingRef.current = null;
     mapRef.current?.easeTo({ bearing: 0, duration: 500 });
     setRunning(false);

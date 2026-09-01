@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — heading-up op Home ✅; ECHTE BUG 3: logpaneel (technische regels) was NIET verborgen in productie zoals bedoeld — nu gefixt, zelfde !onExit-bescherming als het statuspaneel; 333/333 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — logpaneel-bug gefixt ✅; NAVIGEREN NAAR HET STARTPUNT (fase A) ✅ gebouwd: echte, straatvolgende route i.p.v. hemelsbrede pijl, met dezelfde fallback-architectuur als de rondje-generator; 336/336 tests, tsc schoon; nog geen echte iPhone-validatie
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -523,6 +523,26 @@ Het monospace technische statuspaneel (map:/fase:/nav state:) kreeg bij een eerd
 **Open vraag, nog niet beantwoord:** de gebruiker vroeg ook "kunnen we niet naar het knooppunt navigeren?" tijdens fase A. Onduidelijk of dit een verzoek is om ECHTE, straatvolgende routing naar het startpunt (via de Route Engine, i.p.v. de huidige hemelsbrede afstand+richting) -- dat zou een groter, nieuw stuk werk zijn (een punt-naar-punt-routeberekening vanaf de live positie naar het startknooppunt, met een getekende lijn op de kaart net als bij de hoofdroute). Nog te verduidelijken met de gebruiker voordat hieraan begonnen wordt.
 
 333/333 tests, `tsc` schoon.
+
+---
+
+## 6N. NAVIGEREN NAAR HET STARTPUNT: ECHTE, STRAATVOLGENDE ROUTE (🆕 NIEUW, 29-8-2026)
+
+Op verzoek, optie B van de eerder gestelde vraag: fase A ("Rijd naar het startpunt") toonde tot nu toe alleen een hemelsbrede afstand + kompasrichting. Nu wordt er, zodra de eerste live positie binnenkomt, een ECHTE punt-naar-punt-routeberekening gedaan (via de Route Engine) en als eigen lijn op de kaart getekend.
+
+**Server, hergebruikt exact het fallback-patroon van sectie 6B, geen nieuwe aanpak:**
+- `lib/route-engine/route-to-point-fallback.ts` (`computeRouteWithFallback`) -- wraps de bestaande `computeRoute()` (punt-naar-punt Dijkstra, al langer bestaand maar nog niet gekoppeld aan de UI) met dezelfde kandidaat-fallback-logica als `generateLoopRoutesWithFallback`: als het dichtstbijzijnde geresolvede knooppunt geen route naar het doel oplevert, wordt de volgende kandidaat geprobeerd. 3 tests, incl. een fallback-scenario.
+- `POST /api/route/to-start` (nieuw endpoint) -- accepteert `candidateNodeIds`/`candidateDistancesM` (dezelfde kandidatenlijst als `/api/location/resolve` al levert) + `toLogicalNodeId`, retourneert `resolvedEdges`/`nodeDisplayNumbers` net als de andere route-endpoints (dataketen-fix-patroon).
+
+**Client (`NavigationScreen.tsx`):**
+- Bij de EERSTE live positie tijdens fase A wordt eenmalig (niet bij elke sample -- bewust geen doorlopende herberekening) `/api/location/resolve` + `/api/route/to-start` aangeroepen.
+- De teruggekregen route wordt getekend als een DUN, GESTIPPELD blauw lijntje, ONDER de hoofdroute-laag -- duidelijk te onderscheiden van de dikke, effen teal hoofdroute.
+- De getoonde afstand in de richtingkaart schakelt over van hemelsbreed naar de ECHTE routeafstand zodra bekend.
+- **Bugfix tijdens het bouwen zelf gevonden**: de eerste opzet gebruikte de React-state `routeToStartDistanceM` rechtstreeks in de GPS-sample-closure -- een stale-closure-bug (de closure van `start()` wordt maar ÉÉN keer aangemaakt en ziet nooit de bijgewerkte state-waarde). Gefixt met een aparte `routeToStartDistanceRef` die wél altijd de actuele waarde geeft, terwijl de React-state alleen voor de weergave-rerender dient.
+
+**Bewust NIET gebouwd:** live herberekening als de gebruiker een andere weg neemt dan de getoonde route-naar-het-startpunt -- eerste, scoped versie, eenmalige berekening.
+
+336/336 tests, `tsc` schoon. Nog geen echte iPhone-validatie.
 
 ---
 
