@@ -7,6 +7,7 @@ import NavigationScreen from "@/components/navigation/NavigationScreen";
 import LiveLocationScreen from "@/components/location/LiveLocationScreen";
 import TabBar, { type TabId } from "@/components/layout/TabBar";
 import { getRiddenRoutes } from "@/lib/history/ridden-routes-store";
+import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
 import type { GraphEdge } from "@/lib/route-engine/types";
 
 type Point = { x: number; y: number };
@@ -61,6 +62,15 @@ function qualifyDeviation(deviationPercent: number): { label: string; icon: stri
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("kaart");
   const [step, setStep] = useState<Step | null>(null);
+  const [activeSavedRoute, setActiveSavedRoute] = useState<{
+    edges: GraphEdge[];
+    nodeSequence: string[];
+    nodeDisplayNumbers: string[];
+    datasetVersionId: string;
+  } | null>(null);
+  const [savedRoutesVersion, setSavedRoutesVersion] = useState(0); // bumpen om de Mijn-routes-lijst opnieuw te lezen
+  const [showSaveNamePrompt, setShowSaveNamePrompt] = useState(false);
+  const [routeNameInput, setRouteNameInput] = useState("");
   const [placeName, setPlaceName] = useState("");
   const [startLocation, setStartLocation] = useState<LocationCandidate | null>(null);
   const [locationCandidates, setLocationCandidates] = useState<LocationCandidate[]>([]);
@@ -168,9 +178,52 @@ export default function Home() {
     }
   }
 
+  function confirmSaveRoute() {
+    if (!selectedLoop) return;
+    saveRoute({
+      name: routeNameInput.trim() || null,
+      edgeIds: selectedLoop.route.edges,
+      nodeIds: selectedLoop.route.nodes,
+      startNodeId: selectedLoop.route.nodes[0],
+      distanceM: selectedLoop.actualDistanceM,
+      datasetVersionId: selectedLoop.route.datasetVersionId,
+    });
+    setShowSaveNamePrompt(false);
+    setRouteNameInput("");
+    setSavedRoutesVersion((v) => v + 1);
+  }
+
+  async function startSavedRoute(saved: SavedRoute) {
+    setStep("loading");
+    try {
+      const res = await fetch("/api/route/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ datasetVersionId: saved.datasetVersionId, edgeIds: saved.edgeIds, nodeIds: saved.nodeIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.error ?? "Deze opgeslagen route kon niet worden geladen.");
+        setStep("error");
+        return;
+      }
+      setActiveSavedRoute({
+        edges: data.resolvedEdges,
+        nodeSequence: saved.nodeIds,
+        nodeDisplayNumbers: data.nodeDisplayNumbers,
+        datasetVersionId: saved.datasetVersionId,
+      });
+      setStep("navigating");
+    } catch {
+      setErrorMessage("Er ging iets mis bij het laden van deze route.");
+      setStep("error");
+    }
+  }
+
   function reset() {
     setStep(null);
     setActiveTab("kaart");
+    setActiveSavedRoute(null);
     setPlaceName("");
     setStartLocation(null);
     setLocationCandidates([]);
@@ -245,9 +298,53 @@ export default function Home() {
             )}
 
             {activeTab === "mijnroutes" && (
-              <section style={{ padding: "1.5rem 1.25rem", textAlign: "center" }}>
-                <h2 style={{ fontSize: 24, marginBottom: "0.75rem" }}>Mijn routes</h2>
-                <p style={{ fontSize: 15, opacity: 0.6 }}>Je hebt nog geen routes opgeslagen.</p>
+              <section style={{ padding: "1.5rem 1.25rem" }}>
+                <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Mijn routes</h2>
+                {getSavedRoutes().length === 0 ? (
+                  <p style={{ fontSize: 15, opacity: 0.6, textAlign: "center" }}>Je hebt nog geen routes opgeslagen.</p>
+                ) : (
+                  getSavedRoutes().map((saved) => (
+                    <div
+                      key={saved.id}
+                      style={{
+                        background: "white",
+                        border: "1px solid #e5e5e0",
+                        borderRadius: "var(--radius-card)",
+                        padding: "1rem",
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 17, fontWeight: 700 }}>{saved.name ?? defaultSavedRouteName(saved.savedAt)}</div>
+                          <div style={{ fontSize: 13, opacity: 0.6 }}>{formatKm(saved.distanceM)} km · {saved.nodeIds.length} knooppunten</div>
+                        </div>
+                        <button
+                          onClick={() => { deleteSavedRoute(saved.id); setSavedRoutesVersion((v) => v + 1); }}
+                          aria-label="Verwijderen"
+                          style={{ background: "transparent", border: "none", color: "#999", fontSize: 13, padding: 4 }}
+                        >
+                          Verwijder
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => startSavedRoute(saved)}
+                        style={{
+                          width: "100%",
+                          minHeight: 44,
+                          background: "var(--color-knoop-green)",
+                          color: "white",
+                          border: "none",
+                          borderRadius: 8,
+                          fontSize: 15,
+                          fontWeight: 600,
+                        }}
+                      >
+                        Start route
+                      </button>
+                    </div>
+                  ))
+                )}
               </section>
             )}
 
@@ -457,6 +554,49 @@ export default function Home() {
               <span style={{ fontSize: 14, opacity: 0.7 }}>Start en finish bij dit knooppunt — rondje</span>
             </div>
 
+            {!showSaveNamePrompt ? (
+              <button
+                onClick={() => setShowSaveNamePrompt(true)}
+                style={{
+                  width: "100%",
+                  minHeight: 48,
+                  marginBottom: 12,
+                  background: "white",
+                  color: "var(--color-knoop-green)",
+                  border: "2px solid var(--color-knoop-green)",
+                  borderRadius: "var(--radius-card)",
+                  fontSize: 15,
+                  fontWeight: 600,
+                }}
+              >
+                ♡ Opslaan in Mijn routes
+              </button>
+            ) : (
+              <div style={{ marginBottom: 12, background: "var(--color-sand)", borderRadius: "var(--radius-card)", padding: "0.85rem 1rem" }}>
+                <p style={{ fontSize: 14, marginBottom: 8 }}>Geef je route een naam (optioneel)</p>
+                <input
+                  value={routeNameInput}
+                  onChange={(e) => setRouteNameInput(e.target.value)}
+                  placeholder="Bijv. Rondje Waterland"
+                  style={{ width: "100%", minHeight: 44, padding: "0 12px", fontSize: 15, border: "1px solid #ccc", borderRadius: 8, marginBottom: 8, boxSizing: "border-box" }}
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={confirmSaveRoute}
+                    style={{ flex: 1, minHeight: 44, background: "var(--color-knoop-green)", color: "white", border: "none", borderRadius: 8, fontSize: 15, fontWeight: 600 }}
+                  >
+                    Opslaan
+                  </button>
+                  <button
+                    onClick={() => { setShowSaveNamePrompt(false); setRouteNameInput(""); }}
+                    style={{ flex: 1, minHeight: 44, background: "white", color: "var(--color-ink)", border: "1px solid #ccc", borderRadius: 8, fontSize: 15 }}
+                  >
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={() => setStep("navigating")}
               style={{
@@ -475,14 +615,22 @@ export default function Home() {
           </section>
         )}
 
-        {step === "navigating" && selectedLoop && (
+        {step === "navigating" && (activeSavedRoute || selectedLoop) && (
           <NavigationScreen
-            key={startLocation?.logicalNodeId ?? "navigation"}
-            edges={selectedLoop.resolvedEdges}
-            nodeSequence={selectedLoop.route.nodes}
-            nodeDisplayNumbers={selectedLoop.nodeDisplayNumbers}
-            datasetVersionId={selectedLoop.route.datasetVersionId}
-            onExit={() => setStep("detail")}
+            key={activeSavedRoute ? `saved-${activeSavedRoute.datasetVersionId}-${activeSavedRoute.nodeSequence[0]}` : (startLocation?.logicalNodeId ?? "navigation")}
+            edges={activeSavedRoute ? activeSavedRoute.edges : selectedLoop!.resolvedEdges}
+            nodeSequence={activeSavedRoute ? activeSavedRoute.nodeSequence : selectedLoop!.route.nodes}
+            nodeDisplayNumbers={activeSavedRoute ? activeSavedRoute.nodeDisplayNumbers : selectedLoop!.nodeDisplayNumbers}
+            datasetVersionId={activeSavedRoute ? activeSavedRoute.datasetVersionId : selectedLoop!.route.datasetVersionId}
+            onExit={() => {
+              if (activeSavedRoute) {
+                setActiveSavedRoute(null);
+                setStep(null);
+                setActiveTab("mijnroutes");
+              } else {
+                setStep("detail");
+              }
+            }}
           />
         )}
           </div>

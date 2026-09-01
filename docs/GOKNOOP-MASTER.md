@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+bugfix+live-locatiekaart+tabbalk ✅; Fase 2 (gereden-routes-tracking) ✅ gebouwd, 320/320 tests, tsc schoon; Fase 3 (Mijn routes) nog te doen
+Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+bugfix+live-locatiekaart+tabbalk+gereden-routes ✅; Fase 3 (Mijn routes) ✅ gebouwd, 329/329 tests, tsc schoon — alle drie geplande fasen van de app-structuurherziening nu compleet
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -412,7 +412,17 @@ Trigger: `NavigationStateMachine` bereikt `ARRIVED` -- expliciete, ondubbelzinni
 
 **320/320 tests, `tsc` schoon.** Nog geen echte iPhone-validatie (vereist een daadwerkelijk voltooide rit om te bevestigen dat `ARRIVED`/opslag/dedup end-to-end werkt).
 
-**Fase 3 — "Mijn routes" (bewust apart van fase 2).** Expliciete, door de gebruiker gekozen opslag (bijv. een hart-icoon "♡ Opslaan in Mijn routes"), optioneel een eigen naam. Zonder naam: automatische weergave als "Route van [datum]". Dit is een animo-gedreven lijst (routes die de gebruiker zelf de moeite waard vindt om te bewaren), nadrukkelijk NIET hetzelfde als de automatische gereden-routes-geschiedenis van fase 2 -- die twee concepten blijven gescheiden datamodellen.
+**Fase 3 — "Mijn routes" (bewust apart van fase 2). ✅ GEBOUWD (29-8-2026).**
+
+Expliciete, door de gebruiker gekozen opslag ("♡ Opslaan in Mijn routes" op het detailscherm), optionele naam via een inline prompt. Zonder naam: automatisch "Route van [datum]" (`defaultSavedRouteName`). Nadrukkelijk een apart datamodel van Fase 2's automatische geschiedenis -- geen vermenging.
+
+**Belangrijke ontwerpkeuze: GEEN volledige geometrie in localStorage.** Een bewaarde route bevat alleen `edgeIds`/`nodeIds`/`datasetVersionId`/naam/afstand/datum -- niet de volledige `GraphEdge[]`-geometrie (die zou al snel tientallen KB per route worden). Bij het opnieuw starten wordt de route "vers" teruggehaald via een nieuw endpoint:
+
+- **`POST /api/route/resolve`** (nieuw) -- vertaalt `{datasetVersionId, edgeIds, nodeIds}` terug naar `{resolvedEdges, nodeDisplayNumbers, distanceM}`. Hergebruikt UITSLUITEND bestaande bouwstenen (`resolveRouteEdges()`, dezelfde displayNumber-mapping als `generateLoopRoutes()`) -- geen nieuwe resolutielogica. Bewaakt expliciet `datasetVersionId`-mismatch (409, duidelijke foutmelding "van een oudere datasetversie") -- zelfde discipline als reroute-versiepinning (sectie 19), geen stille corruptie als de dataset ooit ververst wordt.
+- **`lib/history/saved-routes-store.ts`** (`getSavedRoutes`/`saveRoute`/`deleteSavedRoute`/`defaultSavedRouteName`) -- zelfde architectuur als Fase 2's `ridden-routes-store.ts` (localStorage, SSR-veilig, best-effort), maar een eigen, gescheiden opslagsleutel. 9 tests.
+- **UI**: detailscherm kreeg een "♡ Opslaan in Mijn routes"-knop met inline naam-prompt (optioneel, "Annuleren" mogelijk). "Mijn routes"-tab toont de lijst (naam/datum, afstand, knooppuntaantal, "Start route"/"Verwijder"). Een herstarte opgeslagen route deelt hetzelfde `NavigationScreen`-component als de normale flow (geen tweede navigatie-implementatie) via een kleine `activeSavedRoute`-state naast het bestaande `selectedLoop`; de exit-knop keert terug naar de Mijn-routes-tab i.p.v. het detailscherm van de normale flow.
+
+**329/329 tests, `tsc` schoon.** Nog geen echte iPhone-validatie. Hiermee zijn alle drie geplande fasen van de app-structuurherziening (tabbalk/Home=kaart, gereden-routes-tracking, Mijn routes) gebouwd.
 
 ---
 
