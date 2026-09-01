@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — heading-up ✅; 4 fixes/features: progress-blok pas bij NAVIGATING ✅, richtingpijl in Start Guidance ✅, zoom/Stop-overlap ✅, linksom/rechtsom-omkering ✅; 330/330 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — 4 fixes ✅; ECHTE BUG GEVONDEN+GEFIXT: omkeerfunctie werkte niet door ontbrekende remount-key; "Aangekomen"-kaart toegevoegd; omkeren nu ook bij het startpunt zelf mogelijk; 330/330 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -475,6 +475,20 @@ Naar aanleiding van meerdere echte tests met de Volendam-route (fase A/B, kaartc
 4. **Linksom/rechtsom-keuze** (nieuwe functie) -- een lus kan nu omgekeerd doorlopen worden vanaf het detailscherm ("↻ Andere kant op rijden"). Volledig CLIENT-SIDE, geen nieuwe serveraanroep: `reverseLoopCandidate()` (`app/page.tsx`) keert simpelweg `route.nodes[]`/`route.edges[]`/`resolvedEdges[]`/`nodeDisplayNumbers[]` om. Werkt correct dankzij de bestaande richtingscorrectie in `buildRouteProgressModel` (Naarden-bugfix, sectie 6D) -- die bepaalt de juiste geometrie-richting per edge aan de hand van de knooppuntvolgorde, dus een omgekeerde volgorde wordt vanzelf correct verwerkt. Bevestigd met een gerichte sanity-check-test: de omgekeerde route levert exact de voorwaartse geometrie in omgekeerde volgorde op, met dezelfde totale afstand.
 
 330/330 tests (1 nieuw, de omkerings-sanity-check), `tsc` schoon.
+
+---
+
+## 6J. ECHTE BUG: OMKEERFUNCTIE WERKTE NIET (REMOUNT-KEY), + AANGEKOMEN-KAART + OMKEREN BIJ HET STARTPUNT (29-8-2026)
+
+**Bevestigde bug:** de "↻ Andere kant op rijden"-knop uit sectie 6I veranderde de route-data intern wel correct (bevestigd met de sanity-check-test), maar `NavigationScreen` bouwt zijn kaart/navigatielogica EENMALIG bij het mounten (React). De `key` die bepaalt of het scherm opnieuw opgebouwd wordt, hield geen rekening met een omkering (dezelfde startlocatie = dezelfde `key` = geen remount) -- het scherm bleef dus stiekem de oude, niet-omgekeerde route tonen.
+
+**Fix:** de `key` bevat nu ook `selectedLoop.route.edges.join(",")` -- verandert de edge-volgorde (door omkering), dan verandert de key, dan forceert React een echte remount, en wordt alles (kaart, matching, state machine) vers opgebouwd met de nieuwe data.
+
+**Bijkomende, gerelateerde verbetering (op verzoek):** de omkeerknop is nu OOK beschikbaar tijdens Start Guidance (fase B, bij het startpunt zelf) via een nieuwe `onReverseDirection`-prop op `NavigationScreen` -- "je weet dan pas welke kant de knooppunten opgaan". Bij indrukken keert `app/page.tsx` de route om; dezelfde `key`-gebaseerde remount zorgt automatisch voor een schone herstart van de sessie (geen aparte in-place-reset-logica nodig binnen `NavigationScreen` zelf).
+
+**Aangekomen-kaart toegevoegd:** `navState === "ARRIVED"` had voorheen GEEN eigen weergave -- de laatst bekende (verouderde) "Rijd deze richting op"-tekst bleef gewoon staan, wat aanvoelde als "vastzitten" i.p.v. een voltooide rit. Nu een expliciete 🏁 "Aangekomen!"-kaart, gecontroleerd VÓÓR de fase-gebaseerde logica.
+
+330/330 tests, `tsc` schoon.
 
 ---
 

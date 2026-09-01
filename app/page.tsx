@@ -657,7 +657,11 @@ export default function Home() {
 
         {step === "navigating" && (activeSavedRoute || selectedLoop) && (
           <NavigationScreen
-            key={activeSavedRoute ? `saved-${activeSavedRoute.datasetVersionId}-${activeSavedRoute.nodeSequence[0]}` : (startLocation?.logicalNodeId ?? "navigation")}
+            key={
+              activeSavedRoute
+                ? `saved-${activeSavedRoute.datasetVersionId}-${activeSavedRoute.nodeSequence[0]}`
+                : `${startLocation?.logicalNodeId ?? "navigation"}-${selectedLoop?.route.edges.join(",") ?? ""}`
+            }
             edges={activeSavedRoute ? activeSavedRoute.edges : selectedLoop!.resolvedEdges}
             nodeSequence={activeSavedRoute ? activeSavedRoute.nodeSequence : selectedLoop!.route.nodes}
             nodeDisplayNumbers={activeSavedRoute ? activeSavedRoute.nodeDisplayNumbers : selectedLoop!.nodeDisplayNumbers}
@@ -671,6 +675,11 @@ export default function Home() {
                 setStep("detail");
               }
             }}
+            onReverseDirection={
+              activeSavedRoute || !selectedLoop
+                ? undefined
+                : () => setSelectedLoop(reverseLoopCandidate(selectedLoop))
+            }
           />
         )}
           </div>

@@ -118,9 +118,25 @@ export type NavigationScreenProps = {
   datasetVersionId: string;
   /** Aangeroepen wanneer de gebruiker de navigatie expliciet verlaat/stopt. */
   onExit?: () => void;
+  /**
+   * Aangeroepen als de gebruiker vanuit Start Guidance (fase B, bij het
+   * startpunt) de rijrichting wil omkeren -- de aanroeper (app/page.tsx)
+   * keert de route om (`reverseLoopCandidate`) en de nieuwe `edges`/
+   * `nodeSequence`-props zorgen (via de `key`-gebaseerde remount in
+   * app/page.tsx) voor een schone herstart van deze sessie. Alleen getoond
+   * als deze prop is meegegeven (niet op de debugpagina).
+   */
+  onReverseDirection?: () => void;
 };
 
-export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbers, datasetVersionId, onExit }: NavigationScreenProps) {
+export default function NavigationScreen({
+  edges,
+  nodeSequence,
+  nodeDisplayNumbers,
+  datasetVersionId,
+  onExit,
+  onReverseDirection,
+}: NavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
@@ -516,7 +532,25 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
           zIndex: 10,
         }}
       >
-        {(phase === "TO_START" ? startInfo : nextNode) && (
+        {navState === "ARRIVED" ? (
+          <div
+            style={{
+              background: "#085041",
+              borderRadius: 20,
+              padding: "22px 20px",
+              width: "100%",
+              maxWidth: 340,
+              textAlign: "center",
+              boxShadow: "0 4px 20px rgba(0,0,0,0.28)",
+              boxSizing: "border-box",
+            }}
+          >
+            <div style={{ fontSize: 34, lineHeight: 1, marginBottom: 8 }}>🏁</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#FFFFFF" }}>Aangekomen!</div>
+            <div style={{ fontSize: 13, color: "#9FE1CB", marginTop: 4 }}>Deze rit is onthouden voor toekomstige routevoorstellen.</div>
+          </div>
+        ) : (
+          (phase === "TO_START" ? startInfo : nextNode) && (
           <div
             style={{
               background: "#085041",
@@ -590,6 +624,23 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
                     Knooppunt {nextNode.nodeId} · {Math.round(nextNode.distanceM)} m
                   </div>
                 )}
+                {onReverseDirection && (
+                  <button
+                    onClick={onReverseDirection}
+                    style={{
+                      marginTop: 12,
+                      background: "rgba(255,255,255,0.14)",
+                      color: "#FFFFFF",
+                      border: "none",
+                      borderRadius: 10,
+                      padding: "8px 14px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                    }}
+                  >
+                    ↻ Andere kant op rijden
+                  </button>
+                )}
               </div>
             )}
 
@@ -632,6 +683,7 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
               </div>
             )}
           </div>
+          )
         )}
 
         {/* Statuspaneel: alleen in debugmodus (geen onExit meegegeven), niet in de echte app --
