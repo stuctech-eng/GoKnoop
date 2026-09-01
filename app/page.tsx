@@ -255,11 +255,11 @@ export default function Home() {
             <h1 style={{ fontSize: 26, color: "white" }}>GoKnoop</h1>
           </header>
 
-          <div style={{ flex: 1, position: "relative", paddingBottom: 56 }}>
+          <div style={{ flex: 1, position: "relative" }}>
             {activeTab === "kaart" && <LiveLocationScreen embedded onConfirm={resolveFromConfirmedCoords} />}
 
             {activeTab === "zoeken" && (
-              <section style={{ padding: "1.5rem 1.25rem" }}>
+              <section style={{ padding: "1.5rem 1.25rem 4.5rem" }}>
                 <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Zoek een plaats</h2>
                 <input
                   value={placeName}
@@ -298,7 +298,7 @@ export default function Home() {
             )}
 
             {activeTab === "mijnroutes" && (
-              <section style={{ padding: "1.5rem 1.25rem" }}>
+              <section style={{ padding: "1.5rem 1.25rem 4.5rem" }}>
                 <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Mijn routes</h2>
                 {getSavedRoutes().length === 0 ? (
                   <p style={{ fontSize: 15, opacity: 0.6, textAlign: "center" }}>Je hebt nog geen routes opgeslagen.</p>
@@ -349,7 +349,7 @@ export default function Home() {
             )}
 
             {activeTab === "profiel" && (
-              <section style={{ padding: "1.5rem 1.25rem", textAlign: "center" }}>
+              <section style={{ padding: "1.5rem 1.25rem 4.5rem", textAlign: "center" }}>
                 <h2 style={{ fontSize: 24, marginBottom: "0.75rem" }}>Profiel</h2>
                 <p style={{ fontSize: 15, opacity: 0.6 }}>Binnenkort beschikbaar.</p>
               </section>
