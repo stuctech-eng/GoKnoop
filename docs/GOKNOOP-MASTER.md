@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+bugfix+live-locatiekaart+tabbalk+gereden-routes ✅; Fase 3 (Mijn routes) ✅ gebouwd, 329/329 tests, tsc schoon — alle drie geplande fasen van de app-structuurherziening nu compleet
+Phase 4   — Navigation UI                ⬜ stap 12 — alle 3 app-structuurfasen ✅; fase A (aanrijden) uitgebreid met live positiemarker + richtingpijl naar startpunt ✅ gebouwd, 329/329 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -423,6 +423,26 @@ Expliciete, door de gebruiker gekozen opslag ("♡ Opslaan in Mijn routes" op he
 - **UI**: detailscherm kreeg een "♡ Opslaan in Mijn routes"-knop met inline naam-prompt (optioneel, "Annuleren" mogelijk). "Mijn routes"-tab toont de lijst (naam/datum, afstand, knooppuntaantal, "Start route"/"Verwijder"). Een herstarte opgeslagen route deelt hetzelfde `NavigationScreen`-component als de normale flow (geen tweede navigatie-implementatie) via een kleine `activeSavedRoute`-state naast het bestaande `selectedLoop`; de exit-knop keert terug naar de Mijn-routes-tab i.p.v. het detailscherm van de normale flow.
 
 **329/329 tests, `tsc` schoon.** Nog geen echte iPhone-validatie. Hiermee zijn alle drie geplande fasen van de app-structuurherziening (tabbalk/Home=kaart, gereden-routes-tracking, Mijn routes) gebouwd.
+
+**Twee layoutbugs gevonden en gefixt tijdens de eerste echte iPhone-tests van de tabbalk/Kaart-hometab (29-8-2026):**
+1. De "Gebruik deze locatie"-knop werd afgesneden door de tabbalk. Root cause: `LiveLocationScreen` had zowel `inset:0` als een expliciete `height:"100%"` -- in CSS wint `height` het stilzwijgend van `bottom` als beide samen met `top` overconstrained zijn, waardoor de bedoelde `bottom:56`-marge genegeerd werd. Fix: geen expliciete `height` meer, `top`/`bottom` bepalen de hoogte volledig.
+2. Tabbalk vergroot (iconen 20→28px, labels altijd zichtbaar i.p.v. alleen bij het actieve tabblad, meer padding) -- "moeilijk te zien tijdens het fietsen".
+
+**Onopgeloste, eenmalige rendering-glitch (29-8-2026, niet reproduceerbaar):** bij één test verscheen het navigatiescherm zonder ENKEL overlay-element (geen kruisje, geen Start/Stop, geen richtingkaart) -- alleen de kale kaart+route. Grondige codereview vond geen aanwijsbare oorzaak (de topbalk is nooit voorwaardelijk). Een directe herhaling ("Opnieuw gestart, vanuit zoeken") werkte meteen correct. Vastgelegd als bekend, niet-reproduceerbaar incident -- niet als opgeloste bug, voor het geval het terugkeert.
+
+---
+
+## 6G. FASE A UITGEBREID: LIVE POSITIE + RICHTING TIJDENS HET AANRIJDEN (🆕 NIEUW, 29-8-2026)
+
+**Aanleiding:** de eerste echte test met een nabije, straatvolgende route (niet de eerdere 24-45km-testgevallen) liet zien dat fase A ("Rijd naar het startpunt") aanvoelde als een statische overzichtskaart met een aftellende afstand, niet als navigeren -- geen eigen positie zichtbaar, geen richting.
+
+**Gebouwd:** tijdens fase A wordt nu, naast de bestaande afstandsberekening, ook:
+- de **ruwe GPS-positie** (geen matching -- die begint pas bij sessiestart) als kaartmarker getoond, hergebruikt dezelfde `goknoop-position`-bron als fase B/C.
+- een **richtingpijl naar het startpunt** berekend en getoond (`bearingDegrees`, stap 4 -- dezelfde, al bestaande functie, geen nieuwe geometrieberekening), op dezelfde manier gevisualiseerd als de bestaande richtingpijl in fase C.
+
+Bewust NIET toegevoegd: automatisch camera-volgen van de live positie (de kaart blijft, net als in fase B/C, vrij pan-/zoombaar door de gebruiker -- consistent met het "geen Google Maps-achtig gedwongen volgen"-uitgangspunt).
+
+329/329 tests, `tsc` schoon (geen nieuwe testbare pure logica -- hergebruikt uitsluitend bestaande, al geteste bouwstenen).
 
 ---
 

@@ -43,7 +43,7 @@ import { DeviationDetector } from "@/lib/navigation/deviation/deviation-detector
 import { NavigationSessionController } from "@/lib/navigation/lifecycle/navigation-session-controller";
 import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-geolocation-source";
 import { buildRouteProgressModel, calculateProgress, calculateNextNodeInfo } from "@/lib/navigation/progress/route-progress-model";
-import { distanceBetween } from "@/lib/navigation/matching/geometry";
+import { distanceBetween, bearingDegrees } from "@/lib/navigation/matching/geometry";
 import { determinePreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
 import type { PreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
 import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
@@ -126,7 +126,7 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
   const [nextNode, setNextNode] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
   const [progressInfo, setProgressInfo] = useState<{ ratio: number; distanceAlongM: number; totalM: number } | null>(null);
   const [phase, setPhase] = useState<PreNavigationPhase>("TO_START");
-  const [startInfo, setStartInfo] = useState<{ nodeId: string; distanceM: number } | null>(null);
+  const [startInfo, setStartInfo] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
   const [navState, setNavState] = useState<NavigationState>("NOT_STARTED");
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -286,7 +286,21 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
       setPhase(currentPhase);
 
       if (currentPhase === "TO_START") {
-        setStartInfo({ nodeId: nodeDisplayNumbers[0], distanceM: distanceToStartM });
+        const bearingToStartDeg = bearingDegrees(rdPosition, model.geometry[0]);
+        setStartInfo({ nodeId: nodeDisplayNumbers[0], distanceM: distanceToStartM, bearingDeg: bearingToStartDeg });
+
+        // Positiemarker + kaart ook al tijdens fase A bijwerken -- de ruwe GPS-positie zelf
+        // (geen matching, die begint pas bij sessiestart), zodat het aanrijden ook echt als
+        // navigeren aanvoelt i.p.v. een statische afstandsteller op een overzichtskaart.
+        const map = mapRef.current;
+        if (map) {
+          const src = map.getSource("goknoop-position") as maplibregl.GeoJSONSource | undefined;
+          src?.setData({
+            type: "FeatureCollection",
+            features: [{ type: "Feature", geometry: { type: "Point", coordinates: [sample.lon, sample.lat] }, properties: {} }],
+          });
+        }
+
         appendLog(`onderweg naar startpunt, nog ${Math.round(distanceToStartM)}m`);
         return; // nog geen matching/navigatie -- sessie is bewust nog niet gestart
       }
@@ -486,6 +500,17 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
                     {Math.round(startInfo.distanceM)} m
                   </div>
                   <div style={{ fontSize: 13, color: "#9FE1CB" }}>Knooppunt {startInfo.nodeId}</div>
+                </div>
+                <div
+                  style={{
+                    flexShrink: 0,
+                    transform: `rotate(${startInfo.bearingDeg}deg)`,
+                    transition: "transform 0.3s ease",
+                  }}
+                >
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L12 22M12 2L5 9M12 2L19 9" stroke="#FFFFFF" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
                 </div>
               </div>
             )}
