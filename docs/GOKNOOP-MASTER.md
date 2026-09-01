@@ -546,6 +546,14 @@ Op verzoek, optie B van de eerder gestelde vraag: fase A ("Rijd naar het startpu
 
 ---
 
+## 6O. TWEE VERDUIDELIJKINGEN, GEEN CODE (29-8-2026)
+
+**Navigeren-naar-startpunt gebruikt uitsluitend het knooppuntennetwerk, niet per se de objectief kortste weg.** Bevestigd n.a.v. een vraag: `computeRoute()` (sectie 6N) draait op dezelfde `GraphProvider` als de hoofdroute -- dat is uitsluitend het fietsknooppuntennetwerk (Phase 1: 11.003 knooppunten/16.345 edges), geen bredere, algemene stratengraaf. Als de werkelijk kortste weg via een straat loopt die geen deel is van dat netwerk, vindt GoKnoop die niet. Dit geldt voor de hele app, niet alleen deze nieuwe feature -- een inherente eigenschap van de architectuurkeuze (knooppuntennetwerk i.p.v. algemene stratenkaart). Een aparte, algemene stratengraaf (bijv. OSM) zou dit oplossen, maar is substantieel nieuw werk -- BEWUST NIET nu gebouwd, geen actie ondernomen.
+
+**Portrait-modus-vergrendeling: bewust NIET gebouwd, op verzoek van de gebruiker.** Onderzocht en bevestigd (webzoekopdracht, 2026-bronnen): iOS/Safari ondersteunt de Screen Orientation Lock-API niet, ook niet als geïnstalleerde PWA -- een daadwerkelijke schermvergrendeling is op iPhone technisch niet haalbaar, punt. Het enige betrouwbare alternatief (een eigen "draai terug naar staand"-melding bij landscape-detectie, die rotatie niet voorkomt maar wel de kapotte layout verbergt) is voorgesteld en door de gebruiker afgewezen. Geen wijziging aangebracht -- expliciet vastgelegd als bewuste keuze, niet als vergeten actiepunt.
+
+---
+
 ## 7. IMPLEMENTATIEVOLGORDE VOOR STAP 12 (definitief — 29-8-2026)
 
 Zelfde discipline als Phase 4's engine-opbouw (stap 1-11): eerst een klein, geïsoleerd stuk bewijzen, dan uitbreiden — niet in één keer een compleet scherm bouwen. Geen productiecode vóórdat de informatiehiërarchie (12.1) akkoord is.
