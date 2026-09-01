@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — alle 3 app-structuurfasen ✅; fase A (aanrijden) uitgebreid met live positiemarker + richtingpijl naar startpunt ✅ gebouwd, 329/329 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — fase A live positie/richting ✅; fitBounds-marge gefixt ✅; HEADING-UP-NAVIGATIE (6C stap 2) ✅ gebouwd: kaart draait mee + zoomt in tijdens NAVIGATING, terug naar noord bij terugval naar Start Guidance; 329/329 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -443,6 +443,25 @@ Expliciete, door de gebruiker gekozen opslag ("♡ Opslaan in Mijn routes" op he
 Bewust NIET toegevoegd: automatisch camera-volgen van de live positie (de kaart blijft, net als in fase B/C, vrij pan-/zoombaar door de gebruiker -- consistent met het "geen Google Maps-achtig gedwongen volgen"-uitgangspunt).
 
 329/329 tests, `tsc` schoon (geen nieuwe testbare pure logica -- hergebruikt uitsluitend bestaande, al geteste bouwstenen).
+
+---
+
+## 6H. AUTO-FIT-MARGE GEFIXT + HEADING-UP-NAVIGATIE AANGESLOTEN (🆕 NIEUW, 29-8-2026)
+
+**Auto-fit-fix:** de route paste bij een echte iPhone-test niet volledig in beeld -- `fitBounds()` gebruikte overal dezelfde marge (60px), terwijl de richtingkaart bovenin veel hoger is dan dat. Nu asymmetrisch: `padding: { top: 180, bottom: 140, left: 40, right: 40 }`, zodat de volledige route zichtbaar blijft ónder de overlay-UI.
+
+**Heading-up-navigatie (stap 2 van sectie 6C, eindelijk daadwerkelijk aan de kaart gekoppeld):**
+
+Naar aanleiding van een echte test ("ik wil dat er ingezoomd wordt en het knooppunt naar het noorden gebracht wordt, zodat ik kan zien of ik links of rechts moet") is de al eerder gebouwde, apart geteste reken-laag (`lib/navigation/direction/relative-direction.ts`, stap 1 van 6C) nu voor het eerst gekoppeld aan de daadwerkelijke MapLibre-kaart:
+
+- **Uitsluitend tijdens fase NAVIGATING** (niet A/B, die blijven bewust noordgericht, sectie 5.3/10): `selectHeadingDeg()` (GPS-bewegingsrichting bij voldoende snelheid, anders laatst bekende stabiele richting) + `smoothHeadingDeg()` (circulaire smoothing, voorkomt nerveuze rotatie) bepalen een gesmoothede rijrichting, hergebruikt de bestaande `MOVEMENT_SPEED_THRESHOLD_MPS`-drempel (geen tweede, afwijkende snelheidsbeslissing).
+- `map.easeTo({ center, bearing: gesmoothedeRichting, zoom: 17.5, duration: 500 })` -- kaart draait mee EN zoomt automatisch dichterbij tijdens het navigeren (bewust een uitzondering op de eerder vastgelegde "geen gedwongen camera-volgen"-regel voor fase A/B -- expliciet zo gevraagd voor de actieve navigatiefase).
+- **Richtingpijl wordt RELATIEF** (`relativeAngleDeg(bearingToNextNode, huidigeRichting)`) i.p.v. absoluut zodra de kaart zelf heading-up gedraaid is -- anders zou de pijl dubbel roteren. Fase B (Start Guidance) blijft de absolute bearing gebruiken, want daar blijft de kaart noordgericht.
+- **Terugval naar noordgericht**: als de fase van NAVIGATING terugvalt naar START_GUIDANCE (bijv. gestopt met bewegen), draait de kaart expliciet terug naar `bearing: 0` -- geen "vastzittende" rotatie. Ook gereset bij `stop()`.
+
+**Bewust nog niet gebouwd:** links/rechts/rechtdoor-classificatie (`classifyDirection()`, ook al gebouwd en getest) wordt nog niet visueel getoond als tekst/icoon naast de pijl -- de pijlrotatie zelf is voor nu de eerste, geteste stap.
+
+329/329 tests, `tsc` schoon (hergebruikt uitsluitend de 26 al bestaande tests van stap 1 -- deze stap is zelf UI-wiring, geen nieuwe pure logica). Nog geen echte iPhone-validatie van de daadwerkelijke rotatie/zoom-tijdens-het-fietsen.
 
 ---
 

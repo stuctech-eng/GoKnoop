@@ -45,6 +45,7 @@ import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-g
 import { buildRouteProgressModel, calculateProgress, calculateNextNodeInfo } from "@/lib/navigation/progress/route-progress-model";
 import { distanceBetween, bearingDegrees } from "@/lib/navigation/matching/geometry";
 import { determinePreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
+import { selectHeadingDeg, smoothHeadingDeg, relativeAngleDeg } from "@/lib/navigation/direction/relative-direction";
 import type { PreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
 import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
 import { buildRouteGeoJson } from "@/lib/map/route-geometry-adapter";
@@ -72,6 +73,11 @@ const MOVEMENT_SPEED_THRESHOLD_MPS = 0.5;
 // Fase 2 (gereden-routes-tracking, 29-8-2026): aankomstdrempel voor het EINDE van de route --
 // zelfde uitgangspunt/orde-grootte als de startdrempel, ook nog niet definitief vastgezet.
 const ARRIVAL_AT_END_THRESHOLD_M = 25;
+// Heading-up navigatie (sectie 6C/6G, 29-8-2026): kaart draait mee met de rijrichting en
+// zoomt dichterbij, UITSLUITEND tijdens fase NAVIGATING -- fase A/B blijven bewust
+// noordgericht (sectie 5.3/10), heading-up is specifiek voor het actief navigeren.
+const NAVIGATION_ZOOM = 17.5;
+const HEADING_SMOOTHING_ALPHA = 0.35; // uitgangspunt, nog niet definitief (zelfde discipline als sectie 3.7)
 
 // Statusweergave per NavigationState (stap 12.6) -- puur weergave, geen nieuwe
 // navigatielogica. Beknopte, niet-alarmistische labels (ontwerpregel: afwijking
@@ -120,6 +126,7 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const hasRecordedArrivalRef = useRef(false);
+  const smoothedHeadingRef = useRef<number | null>(null);
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
@@ -332,7 +339,44 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
         // nieuwe matching/positiebepaling -- alleen afgeleide weergave-informatie.
         const progress = calculateProgress(model, outcome.matchedPosition);
         const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, nodeDisplayNumbers);
-        setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: info.bearingToNextNodeDeg });
+
+        // Heading-up navigatie (sectie 6C/6G): UITSLUITEND tijdens NAVIGATING draait de kaart
+        // mee met de rijrichting en zoomt dichterbij -- fase A/B blijven noordgericht.
+        // Hergebruikt de al bestaande, apart geteste pure functies (stap 1 van 6C), hier voor
+        // het eerst daadwerkelijk aan de kaart gekoppeld.
+        if (currentPhase === "NAVIGATING") {
+          const selectedHeading = selectHeadingDeg(
+            { gpsHeadingDeg: sample.headingDeg, speedMps: sample.speedMps, previousStableHeadingDeg: smoothedHeadingRef.current },
+            { speedThresholdMps: MOVEMENT_SPEED_THRESHOLD_MPS }
+          );
+          if (selectedHeading !== null) {
+            smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
+          }
+          const map = mapRef.current;
+          if (map && smoothedHeadingRef.current !== null) {
+            map.easeTo({
+              center: [sample.lon, sample.lat],
+              bearing: smoothedHeadingRef.current,
+              zoom: NAVIGATION_ZOOM,
+              duration: 500,
+            });
+          }
+          // Richtingpijl RELATIEF t.o.v. de rijrichting (0° = rechtdoor/boven) -- de kaart zelf
+          // is nu al heading-up gedraaid, dus een absolute bearing zou dubbel roteren.
+          const arrowDeg =
+            smoothedHeadingRef.current !== null ? relativeAngleDeg(info.bearingToNextNodeDeg, smoothedHeadingRef.current) : 0;
+          setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: arrowDeg });
+        } else {
+          // Fase B (Start Guidance): kaart blijft noordgericht, absolute bearing blijft correct.
+          // Val terug naar noordgericht als de kaart nog gedraaid stond (bijv. gestopt met bewegen
+          // ná eerder daadwerkelijk genavigeerd te hebben) -- geen "vastzittende" rotatie.
+          if (smoothedHeadingRef.current !== null) {
+            mapRef.current?.easeTo({ bearing: 0, duration: 500 });
+            smoothedHeadingRef.current = null;
+          }
+          setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: info.bearingToNextNodeDeg });
+        }
+
         setProgressInfo({ ratio: progress.progressRatio, distanceAlongM: progress.distanceAlongRouteM, totalM: model.totalDistanceM });
 
         // Fase 2 (gereden-routes-tracking, 29-8-2026): checkArrival() bestond al in de
@@ -373,6 +417,8 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
     sourceRef.current = null;
     unsubscribeRef.current = null;
     hasRecordedArrivalRef.current = false;
+    smoothedHeadingRef.current = null;
+    mapRef.current?.easeTo({ bearing: 0, duration: 500 });
     setRunning(false);
     setPhase("TO_START");
     setStartInfo(null);
