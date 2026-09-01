@@ -73,6 +73,9 @@ const MOVEMENT_SPEED_THRESHOLD_MPS = 0.5;
 // Fase 2 (gereden-routes-tracking, 29-8-2026): aankomstdrempel voor het EINDE van de route --
 // zelfde uitgangspunt/orde-grootte als de startdrempel, ook nog niet definitief vastgezet.
 const ARRIVAL_AT_END_THRESHOLD_M = 25;
+// Backlog-item 8B (29-8-2026): stabiliteitsvenster tegen te vroeg "aangekomen"-melden --
+// zelfde soort waarde als CONFIRM_MS (afwijkingsdetectie), nog niet definitief.
+const ARRIVAL_CONFIRM_DURATION_MS = 3000;
 // Heading-up navigatie (sectie 6C/6G, 29-8-2026): kaart draait mee met de rijrichting en
 // zoomt dichterbij, UITSLUITEND tijdens fase NAVIGATING -- fase A/B blijven bewust
 // noordgericht (sectie 5.3/10), heading-up is specifiek voor het actief navigeren.
@@ -273,7 +276,7 @@ export default function NavigationScreen({
       gpsTimeoutMs: 10000,
       matchOptions: { baseWindowM: 100, windowMarginPerMps: 10, weights: { distance: 1, heading: 0.1, continuity: 0.5 } },
     });
-    const controller = new NavigationSessionController(detector, stateMachine);
+    const controller = new NavigationSessionController(detector, stateMachine, clock, ARRIVAL_CONFIRM_DURATION_MS);
 
     let sessionStarted = false;
 

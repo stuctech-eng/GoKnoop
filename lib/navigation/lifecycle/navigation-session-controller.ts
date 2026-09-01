@@ -1,6 +1,7 @@
 import { GpsSample } from "../types";
 import { DeviationDetector, DeviationOutcome } from "../deviation/deviation-detector";
 import { NavigationStateMachine, InvalidNavigationTransitionError } from "../session/navigation-state-machine";
+import { NavigationClock } from "../clock/navigation-clock";
 
 /**
  * Operationele levenscyclus-afhandeling (ontwerp sectie 12/14/19) --
@@ -23,9 +24,13 @@ import { NavigationStateMachine, InvalidNavigationTransitionError } from "../ses
  *     grantPermission()), nooit afgeleid uit GPS-signaalverlies.
  */
 export class NavigationSessionController {
+  private possibleArrivalSince: number | null = null;
+
   constructor(
     private readonly detector: DeviationDetector,
-    private readonly stateMachine: NavigationStateMachine
+    private readonly stateMachine: NavigationStateMachine,
+    private readonly clock?: NavigationClock,
+    private readonly arrivalConfirmDurationMs: number = 0
   ) {}
 
   /**
@@ -78,10 +83,43 @@ export class NavigationSessionController {
    * calculateProgress, stap 5) -- deze module berekent zelf geen progress,
    * om matching niet te dupliceren. Geen effect als de state niet ON_ROUTE
    * is, of de drempel nog niet gehaald is.
+   *
+   * STABILITEITSLAAG (backlog-item 8B, 29-8-2026): één toevallig te dichtbij
+   * GPS-punt kan zonder deze laag een voortijdige/foutieve aankomstmelding
+   * veroorzaken (spec sectie 13, "niet te vroeg springen"). Als `clock` en
+   * `arrivalConfirmDurationMs` zijn meegegeven, moet de gebruiker CONTINU
+   * binnen de aankomstradius blijven gedurende dat venster vóórdat de
+   * aankomst daadwerkelijk bevestigd wordt -- exact hetzelfde patroon als
+   * `deviationConfirmDurationMs` al gebruikt voor afwijkingsdetectie (stap 6),
+   * geen nieuw/afwijkend mechanisme.
+   *
+   * Achterwaarts compatibel: zonder `clock`/`arrivalConfirmDurationMs`
+   * (ongewijzigde 2-argumenten-aanroep) blijft het gedrag exact zoals
+   * voorheen -- directe, eenmalige bevestiging, geen stabiliteitsvenster.
    */
   checkArrival(remainingDistanceM: number, arrivalThresholdM: number): boolean {
-    if (this.stateMachine.getState() !== "ON_ROUTE") return false;
-    if (remainingDistanceM > arrivalThresholdM) return false;
+    if (this.stateMachine.getState() !== "ON_ROUTE") {
+      this.possibleArrivalSince = null;
+      return false;
+    }
+    if (remainingDistanceM > arrivalThresholdM) {
+      this.possibleArrivalSince = null; // buiten de radius -- eventuele lopende bevestiging vervalt
+      return false;
+    }
+
+    if (!this.clock || this.arrivalConfirmDurationMs <= 0) {
+      this.stateMachine.arrive();
+      return true;
+    }
+
+    const now = this.clock.now();
+    if (this.possibleArrivalSince === null) {
+      this.possibleArrivalSince = now;
+    }
+    if (now - this.possibleArrivalSince < this.arrivalConfirmDurationMs) {
+      return false; // binnen de radius, maar het bevestigingsvenster is nog niet voorbij
+    }
+
     this.stateMachine.arrive();
     return true;
   }

@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — logpaneel-bug gefixt ✅; NAVIGEREN NAAR HET STARTPUNT (fase A) ✅ gebouwd: echte, straatvolgende route i.p.v. hemelsbrede pijl, met dezelfde fallback-architectuur als de rondje-generator; 336/336 tests, tsc schoon; nog geen echte iPhone-validatie
+Phase 4   — Navigation UI                ⬜ stap 12 — logpaneel-bug gefixt ✅; route-naar-startpunt ✅; BACKLOG 8B+8C GEBOUWD: aankomst-stabiliteitslaag (achterwaarts compatibel) ✅, slimmere start-node-score (afstand+beschikbaarheid+kwaliteit, vervangt simpele fallback in /api/route/loop) ✅; 345/345 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -872,27 +872,34 @@ reagerend, valse afwijkingsmeldingen, hortende richtingaanwijzingen, etc.):
 | `HEADING_SMOOTHING_ALPHA` | 0,35 | Hoe snel de kaartrotatie een nieuwe richting volgt |
 | `classifyDirection`-grenzen | 15° / 45° / 135° | Rechtdoor/licht-links-rechts/links-rechts/achteruit |
 
-### 8B. Stabiliteitslagen (ontbreken nog, kunnen tot "flikkerend" gedrag leiden)
+### 8B. Stabiliteitslagen
 
-- **Te vroeg "aangekomen bij knooppunt" wisselen**: `hasArrivedAtNode()`/`checkArrival()`
-  zijn nu simpele, eenmalige afstandschecks (spec-sectie 13 noemde dit expliciet als risico:
-  één toevallig te dichtbij GPS-punt kan een voortijdige/foutieve knooppuntwissel
-  veroorzaken). Ontbrekend: een bevestigingsvenster/hysterese, vergelijkbaar met hoe
-  `deviationConfirmDurationMs` dat al doet voor afwijkingsdetectie (stap 6) -- dezelfde
-  aanpak zou hier hergebruikt kunnen worden, geen nieuw patroon nodig.
-- **Richtingclassificatie kan rond een grenswaarde heen-en-weer springen** (bijv. exact op
-  de grens tussen "licht rechts" en "rechts") -- `classifyDirection()` zelf is stateless/puur,
-  er is nog geen dempingslaag die dit voorkomt.
+- **✅ GEBOUWD (29-8-2026): te vroeg "aangekomen"-melden.** `NavigationSessionController.checkArrival()` kreeg een optioneel bevestigingsvenster (`clock`/`arrivalConfirmDurationMs`-parameters, `ARRIVAL_CONFIRM_DURATION_MS = 3000` in `NavigationScreen.tsx`) -- exact hetzelfde patroon als `deviationConfirmDurationMs` (stap 6): de gebruiker moet CONTINU binnen de aankomstradius blijven gedurende het venster, en elke uitstap buiten de radius reset de timer. Volledig achterwaarts compatibel: zonder de nieuwe parameters (bestaande 2-argumenten-aanroep) blijft het gedrag exact zoals voorheen -- alle 14 bestaande tests bleven ongewijzigd slagen, plus 4 nieuwe tests voor het nieuwe gedrag.
+- **⬜ Nog open: richtingclassificatie-flikkeren.** `classifyDirection()` kan nog rond een grenswaarde heen-en-weer springen (bijv. exact op de grens tussen "licht rechts" en "rechts") -- geen dempingslaag hiervoor, apart van de aankomst-stabiliteit hierboven.
 
-### 8C. Slimmere startknooppunt-keuze
+### 8C. Slimmere startknooppunt-keuze — ✅ GEBOUWD (29-8-2026)
 
-De huidige fallback (`generateLoopRoutesWithFallback`/`computeRouteWithFallback`, sectie 6B)
-probeert kandidaten simpelweg in afstandsvolgorde en stopt bij de EERSTE bruikbare. Genoemd
-als mogelijke verfijning: een echte score die afstand + routebeschikbaarheid + routekwaliteit
-combineert, zodat bijv. een kandidaat die net iets verder ligt maar een significant betere
-route oplevert, verkozen kan worden boven "de eerste die toevallig werkt". Bewust uitgesteld
-tot de simpele fallback voldoende in de praktijk bewezen is (Volendam + Edam + een normale
-situatie).
+`lib/route-engine/start-node-scoring.ts` (`generateLoopRoutesWithScoring`) VERVANGT de simpele
+"eerste-die-werkt"-fallback in `/api/route/loop`. Evalueert ALLE meegegeven kandidaten (niet
+stoppen bij de eerste succesvolle) en combineert drie factoren tot één score (lager = beter):
+- **afstand** (`distancePenaltyPerMeter`, uitgangspunt 1 punt/meter)
+- **beschikbaarheid** (`availabilityBonusPerRoute`, uitgangspunt 500 punten per gevonden route)
+- **kwaliteit** (`qualityPenaltyPerPercent`, uitgangspunt 20 punten per procentpunt afwijking
+  van de doelafstand -- hergebruikt de al bestaande `deviationPercent`, geen nieuwe berekening)
+
+Een kandidaat zonder ENKELE gevonden route krijgt score `Infinity` (nooit bruikbaar, harde
+uitsluiting, ongeacht afstand). **Bewezen met een specifiek daarvoor gebouwde test**: twee
+volledig gescheiden testnetwerken, één klein en dichtbij (lage kwaliteit voor de gevraagde
+afstand), één groter en verder weg (hoge kwaliteit) -- de score kiest aantoonbaar de VERDERE,
+betere kandidaat, niet de dichtstbijzijnde. De oude, simpele fallback
+(`generateLoopRoutesWithFallback`) blijft gewoon bestaan in de codebase (niet verwijderd),
+alleen niet meer de actieve keuze in `/api/route/loop`.
+
+Response-veldnamen (`selectedStartNodeId`/`selectedCandidateRank`/`selectedStartNodeDistanceM`)
+bewust ONGEWIJZIGD gehouden t.o.v. de oude fallback, zodat de bestaande UI ("Beste startpunt
+gevonden"-banner, `app/page.tsx`) zonder enige codewijziging blijft werken.
+
+345/345 tests, `tsc` schoon.
 
 ### 8D. Uit de GPT-mockup, nog niet gebouwd
 

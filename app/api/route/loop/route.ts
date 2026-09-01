@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
-import { generateLoopRoutesWithFallback } from "@/lib/route-engine/loop-route-generator";
+import { generateLoopRoutesWithScoring } from "@/lib/route-engine/start-node-scoring";
 import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
 export const maxDuration = 60;
@@ -10,22 +10,20 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/route/loop
  * Body: { startLogicalNodeId?, candidateNodeIds?, candidateDistancesM?, targetDistanceM, count? }
- * Response: LoopGenerationWithFallbackResult (zie loop-route-generator.ts) op succes,
- *           of { error, reason, attempts, ... } (404) als geen kandidaat werkte.
+ * Response: LoopGenerationWithScoringResult (zie start-node-scoring.ts) op succes,
+ *           of { error, reason, candidatesAttempted, candidateScores } (404) als geen kandidaat werkte.
  *
  * Concrete invulling van Master Plan sectie 74/90: "Hoe ver? -> 20/30/40/50km
  * -> meerdere routevoorstellen" -- geen bekend eindpunt vooraf.
  *
- * UITGEBREID (Volendam-onderzoek 29-8-2026, additief -- `startLogicalNodeId`
- * blijft werken als vóór deze wijziging, geen breaking change): de
- * dichtstbijzijnde knooppunt-kandidaat is niet altijd een BRUIKBAAR
- * startpunt (bijv. een knooppunt op een dijk/doorgang zonder terugweg-optie
- * die de heenweg-edges vermijdt). De aanroeper kan nu `candidateNodeIds`
- * (in afstandsvolgorde, typisch de volledige `/api/location/resolve`-
- * kandidatenlijst) meegeven; deze endpoint probeert ze in die volgorde en
- * rapporteert transparant welk knooppunt daadwerkelijk gebruikt is
- * (`selectedStartNodeId`/`selectedCandidateRank`) -- nooit een stille
- * wissel zonder dat de aanroeper het kan zien.
+ * GESCHIEDENIS: eerst `generateLoopRoutesWithFallback` (Volendam-onderzoek, sectie 6B --
+ * probeert kandidaten op volgorde, stopt bij de eerste die iets oplevert). Op verzoek
+ * (backlog-item 8C, 29-8-2026) VERVANGEN door `generateLoopRoutesWithScoring`: evalueert
+ * ALLE kandidaten en kiest de beste op basis van afstand + beschikbaarheid + routekwaliteit
+ * (`deviationPercent`), niet zomaar de eerste bruikbare. `startLogicalNodeId` blijft werken
+ * als vóór deze wijziging, geen breaking change -- en `selectedStartNodeId`/
+ * `selectedCandidateRank` blijven dezelfde veldnamen, dus de bestaande UI ("Beste startpunt
+ * gevonden"-banner) werkt ongewijzigd door.
  */
 
 export async function POST(req: NextRequest) {
@@ -74,7 +72,7 @@ export async function POST(req: NextRequest) {
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
 
-    const result = generateLoopRoutesWithFallback(provider, datasetVersionId, candidates, targetDistanceM, {
+    const result = generateLoopRoutesWithScoring(provider, datasetVersionId, candidates, targetDistanceM, {
       count,
       avoidRouteEdgeSets,
     });
@@ -85,7 +83,7 @@ export async function POST(req: NextRequest) {
           error: result.message,
           reason: result.reason,
           candidatesAttempted: result.candidatesAttempted,
-          attempts: result.attempts,
+          candidateScores: result.candidateScores,
         },
         { status: 404 }
       );
