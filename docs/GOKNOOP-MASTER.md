@@ -924,3 +924,180 @@ gevonden"-banner, `app/page.tsx`) zonder enige codewijziging blijft werken.
   werkende alternatief (een "draai terug"-melding bij landscape) is voorgesteld en door de
   gebruiker afgewezen (sectie 6O) -- blijft bewust ongebouwd
 
+---
+
+## 9. PARKEERPLAATS → STARTKNOOPPUNT → ROUTE → BACK TO START (voorbereid 29-8-2026, BOUWEN IN EEN VERSE SESSIE)
+
+**Status: volledig doordacht en vastgelegd, NOG NIET GEBOUWD.** Expliciete keuze: dit is een
+echte nieuwe architectuurlaag met een externe afhankelijkheid (API-key, adapter, nieuw
+datamodel) -- verdient een verse sessie, niet nog bovenop een toch al lange dag. Begin een
+volgende sessie hiermee door dit hele hoofdstuk te lezen, dan is er geen nieuwe audit nodig.
+
+### 9.1 Het kernprobleem
+
+GoKnoop denkt nu alleen in "eerste knooppunt → knooppuntenroute". In werkelijkheid fietst een
+gebruiker een complete tocht: auto naar een parkeerplaats, fietsen vanaf die parkeerplaats naar
+het eerste knooppunt, de knooppuntenroute rijden, en aan het eind weer terug naar **dezelfde
+auto** -- niet naar "knooppunt 24". Die twee concepten (fysiek vertrekpunt vs. route-
+startpunt) zijn nu identiek (`route.nodes[0]` is het enige begrip van "start"), en moeten
+technisch gescheiden worden.
+
+### 9.2 Audit-bevindingen (al gedaan, hoeft niet opnieuw)
+
+1. **Geen formeel `NavigationSession`-object.** `NavigationStateMachine`/`DeviationDetector`/
+   `NavigationSessionController` worden vers, puur in-memory aangemaakt binnen
+   `NavigationScreen.tsx`'s `start()`-functie. Niets wordt over de sessie als geheel bewaard.
+2. **Startpunt = `route.nodes[0]`/`nodeSequence[0]`**, overal, zonder onderscheid tussen fysiek
+   vertrekpunt en route-startpunt.
+3. **"Navigeren naar startpunt" bestaat al** (sectie 6N, vandaag gebouwd) en is al bijna wat
+   nodig is: een échte, straatvolgende(-ish) route van de live positie naar `nodeSequence[0]`,
+   via `computeRouteWithFallback`. Beperking: routeert nu nog via het knooppuntennetwerk zelf,
+   niet via algemene straten (zie 9.3), en er wordt nergens een vaste "parkeerplaats" bewaard
+   voor later (Back to Start).
+4. **Route Engine/GraphProvider kent uitsluitend het fietsknooppuntennetwerk**, geen
+   algemene stratengraaf.
+5. **Vrijwel alles verwacht dat het startpunt een knooppunt is**: `buildRouteProgressModel`
+   (richtingscorrectie o.b.v. `nodeSequence[0]`), `NavigationScreen`-props, `SavedRoute`/
+   `RiddenRoute` (slaan `startNodeId` op als knooppunt-ID).
+
+### 9.3 Architectuurbeslissing: twee strikt gescheiden routinglagen
+
+```
+Layer A -- GoKnoop Knot Routing (knooppunt ↔ knooppunt)
+  Bestaande GraphProvider/Route Engine/Dijkstra. ONGEWIJZIGD.
+  Mag NOOIT afhankelijk worden van een externe routing-API.
+  Blijft ook gebruikt zodra GoKnoop ooit zelf routes laat samenstellen.
+
+Layer B -- First/Last Mile Routing (parkeerplaats ↔ knooppunt, algemene straten)
+  Voor: parkeerplaats → eerste knooppunt, laatste knooppunt → parkeerplaats,
+        huidige GPS → parkeerplaats (Back to Start, zie 9.5).
+  Externe, gratis fietsrouting-API (OpenRouteService, zie 9.4) -- UITSLUITEND voor dit
+  korte, incidentele stukje. Geen eigen algemene stratengraaf bouwen (zou neerkomen op
+  Phase 1 overdoen voor heel Nederland).
+```
+
+Harde grens, expliciet zo gekozen door de gebruiker: **"Ik wil het stratenmodel alleen voor
+parkeerplaatsen naar startknooppunt. De knooppuntenroute navigeert alleen met de
+knooppunten."**
+
+### 9.4 OpenRouteService -- geverifieerd, geen aanname
+
+Webzoekopdracht bevestigt (officiële ORS-documentatie): directions-endpoint, standaard
+**2000 aanvragen/dag, 40/minuut** (een secundaire bron noemt 2500/dag, 40.000/maand -- in
+beide gevallen ruim voldoende voor dit lage-volume-gebruik: hooguit 1-2 aanvragen per
+gebruikerssessie, niet per GPS-update). **Bewaar dit in de gaten voor later, niet nu
+blokkerend**: het quotum geldt per API-key, dus voor de HELE app samen, niet per gebruiker --
+bij veel gelijktijdige gebruikers kan dit ooit een aandachtspunt worden.
+
+Niet rechtstreeks hardcoden. Abstractielaag, zelfde patroon als `GraphProvider` al gebruikt in
+deze codebase (interface + concrete implementatie):
+
+```
+FirstMileRouter (interface)
+      ↓
+OpenRouteServiceAdapter (concrete implementatie)
+      ↓
+ORS
+```
+
+Zodat een andere provider later mogelijk is zonder de navigatie-architectuur opnieuw te
+bouwen.
+
+### 9.5 Belangrijke vereenvoudiging, gevonden tijdens het doordenken (29-8-2026)
+
+**"Back to Start" vanuit het MIDDEN van de route hoeft niet meteen naar Layer B te schakelen.**
+Omdat een rondje altijd start én eindigt bij hetzelfde knooppunt, kan "Back to Start" vanaf
+elk punt in de route eerst gewoon via de BESTAANDE Layer A (knooppunt-naar-knooppunt, met de
+al bestaande fallback) teruggeroute worden naar het startknooppunt. **Layer B is dus alleen
+nodig voor de allereerste/laatste korte stukjes** (parkeerplaats ↔ eerste/laatste knooppunt),
+nooit voor "terug door de route heen". Dit maakt de bouw eenvoudiger dan aanvankelijk gedacht.
+
+```
+Back to Start, halverwege de route:
+huidige positie → (Layer A, bestaande knooppunt-navigatie) → startknooppunt
+                → (Layer B, alleen dit laatste stukje) → parkeerplaats
+```
+
+### 9.6 Auto naar parkeerplaats: GEEN eigen routing, gewoon een link
+
+Bewust GEEN Google Maps Directions API (kost geld, botst met de €0-eis) en GEEN eigen
+autonavigatie bouwen (zou een concurrerende navigatie-app binnen GoKnoop betekenen, volledig
+buiten scope). In plaats daarvan: een simpele link die Apple Maps/Google Maps opent met de
+parkeerplaats-coördinaten als bestemming (`https://maps.apple.com/?daddr=lat,lon` of het
+Google Maps-equivalent) -- geen API-key, geen kosten, geen onderhoud.
+
+**Detectie van aankomst bij de parkeerplaats vereist ook geen koppeling met Google Maps.**
+Zodra de gebruiker terug in GoKnoop is en zijn GPS-positie dicht bij de opgeslagen
+parkeerplaats-coördinaten komt, kan het BESTAANDE fase-A-mechanisme ("Rijd naar het
+startpunt") gewoon hergebruikt worden -- zelfde patroon, nu toegepast op de parkeerplaats i.p.v.
+een knooppunt.
+
+### 9.7 Datamodel (conceptueel, aan te passen aan bestaande naming conventions)
+
+```
+PhysicalAnchor
+├── type: "parking"
+├── latitude / longitude
+├── name?
+└── externalId?
+
+NavigationSession (nieuw, minimaal, geen onnodige persistente laag)
+├── routeId
+├── physicalStart: PhysicalAnchor
+├── routeStartNodeId   -- BLIJFT apart van physicalStart, nooit door elkaar halen
+├── phase
+├── currentPosition
+└── ...
+```
+
+`route.nodes[0]` blijft het eerste knooppunt -- wordt NIET de parkeerpositie. **Cruciale regel**:
+`physicalStart` mag tijdens een sessie NOOIT overschreven worden, ook niet bij afwijken/
+rerouten/tijdelijk elders rijden. Dit is essentieel voor Back to Start.
+
+### 9.8 Wat NIET opnieuw gebouwd hoeft te worden (al af, vandaag gedaan)
+
+De oorspronkelijke GPT-opdracht beschreef ook onderstaande punten -- die zijn AL GEBOUWD
+vandaag (secties 6F/Fase 2/Fase 3 van dit document), dus GEEN nieuw werk, alleen hergebruiken:
+- Gereden routes automatisch onthouden + dedup in de rondje-generator (`ridden-routes-store.ts`,
+  `avoidRouteEdgeSets`)
+- "Mijn routes" met optionele naam (`saved-routes-store.ts`, opslaan/verwijderen/starten)
+- Tabbalk + Home=live kaart, "Waar wil je fietsen?"-knoppenlijst al verwijderd
+
+Een volgende sessie hoeft deze dus niet opnieuw te specificeren of te bouwen -- alleen
+`PhysicalAnchor` eraan koppelen waar relevant (bijv. `SavedRoute`/`RiddenRoute` een optioneel
+`physicalAnchor`-veld erbij, additief).
+
+### 9.9 Implementatievolgorde voor de volgende sessie
+
+```
+Fase 1  Audit -- AL GEDAAN (sectie 9.2), niet herhalen.
+Fase 2  Datamodel -- PhysicalAnchor + minimale NavigationSession (sectie 9.7).
+Fase 3  FirstMileRouter-abstractie + OpenRouteServiceAdapter (sectie 9.4).
+        Bestaande Layer A (Knot Route Engine) blijft volledig onaangeroerd.
+Fase 4  Parkeerplaats → eerste knooppunt, via FirstMileRouter.
+        Bestaande fallback-logica (sectie 6B) hergebruiken waar relevant.
+Fase 5  Back to Start -- met de vereenvoudiging uit 9.5 (Layer A voor het grootste deel,
+        Layer B alleen voor het laatste stukje). Bestemming = physicalStart, NOOIT
+        route.nodes[0]/laatste knooppunt/huidige route-start.
+Fase 6  Tests, minimaal:
+        - Parkeerplaats → eerste knooppunt → volledige route → parkeerplaats
+        - Back to Start halverwege de route (bewijst 9.5's Layer-A-eerst-aanpak)
+        - Afwijken → reroute → Back to Start (physicalStart blijft ongewijzigd)
+        - GPS niet exact op de parkeerpositie
+        - Parkeerplaats buiten het knooppuntennetwerk
+        - Dichtstbijzijnde knooppunt heeft geen bruikbare route (bestaande fallback moet
+          blijven werken)
+Fase 7  Google Maps/Apple Maps-link voor de autorit (sectie 9.6) -- simpel, geen API.
+```
+
+### 9.10 Harde grenzen (niet doen)
+
+- Bestaande Knot Route Engine (Layer A) niet vervangen of aanpassen
+- Geen algemene wegenrouting IN de knooppuntengraaf stoppen
+- Geen Google Maps API voor fietsrouting (kost geld)
+- Geen continue GPS-data naar een externe router sturen (alleen bij daadwerkelijke
+  routebehoefte: naar startpunt, of Back to Start-activatie -- niet per sample)
+- Geen betaalde infrastructuur
+- Geen volledige Nederlandse OSM-stratengraaf bouwen in deze fase
+- `route.nodes[0]` niet vervangen door een parkeerpositie
+- `physicalStart` nooit overschrijven tijdens rerouting
