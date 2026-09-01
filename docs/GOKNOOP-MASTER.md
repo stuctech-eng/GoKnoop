@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+heading-up-stap1 ✅; ECHTE BUG GEVONDEN+GEFIXT: edge-richtingscorrectie ontbrak in buildRouteProgressModel (Naarden-onderzoek); 306/306 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — engine+UI+fallback+direction-bugfix ✅ (306/306); live-locatiekaart (nieuw, na "Mijn locatie") ✅ gebouwd, 310/310 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -360,6 +360,24 @@ Knooppunt 96 heeft 9 edges (niet geïsoleerd) maar is een **chokepoint**: `outbo
    **Fix:** `buildRouteProgressModel(edges, nodeSequence)` — `nodeSequence` (nieuw, verplicht parameter) toegevoegd, exact dezelfde, al bewezen richtingslogica hergebruikt als `route-builder.ts`'s `concatenateGeometry()` (geen nieuwe, afwijkende implementatie). Bijkomend: `NavigationScreen`'s `nodeIds`-prop bleek zelf ook een tweede, gerelateerd probleem te verbergen — die werd zowel voor de ECHTE interne knooppunt-ID's (nodig voor deze richtingscorrectie) als voor mensleesbare weergavenummers gebruikt. Nu netjes gesplitst in twee aparte props: `nodeSequence` (echte ID's, structureel) en `nodeDisplayNumbers` (weergave, cosmetisch) — dezelfde soort verwarring als de eerdere "9CHmIH3BmYvDp7wmARBq i.p.v. 96"-bug, nu definitief voorkomen door het onderscheid expliciet in het type-systeem vast te leggen.
 
    Een nieuwe test bewijst de fix direct: een edge die in de brondata omgekeerd is opgeslagen t.o.v. de routevolgorde, levert nu de juiste (niet-springende) samengevoegde geometrie op. **306/306 tests, `tsc` schoon.**
+
+---
+
+## 6E. LIVE-LOCATIEKAART (🆕 NIEUW, 29-8-2026)
+
+Op verzoek: de bestaande "Mijn locatie"-knop (locatiestap, `app/page.tsx`) leidt niet meer direct naar de afstandskeuze, maar eerst naar een nieuwe bevestigingsstap: een live MapLibre/Liberty-kaart met de actuele GPS-positie (blauwe stip + rustige "gloed", zelfde blauw als de live-positiemarker op het navigatiescherm) en rijrichting (kompasletter + graden, bijv. "NW · 315°"), met een "Gebruik deze locatie"-knop om door te gaan.
+
+**Bewust géén route, géén matching, géén NavigationSession** — er is op dit punt nog geen route gekozen, dus de volledige navigatie-engine is hier niet van toepassing. Puur "waar ben ik nu", vergelijkbaar met hoe een kaart-app een blauwe stip toont.
+
+**Hergebruik, geen nieuwe infrastructuur:**
+- Dezelfde worker-URL-fix, dezelfde Liberty-stijl-URL, dezelfde `BrowserGeolocationSource` (stap 11) als het navigatiescherm.
+- `compassAbbreviation()` (nieuw, `lib/navigation/direction/relative-direction.ts`, 5 tests) — Nederlandse 8-punts kompas-afkorting (N/NO/O/ZO/Z/ZW/W/NW), puur weergaveformattering.
+
+**Component:** `components/location/LiveLocationScreen.tsx` — nieuwe `Step`-waarde `"confirmLocation"` in `app/page.tsx` (zelfde bestaande state-machine-aanpak als eerder bij `"navigating"`, geen nieuwe architectuur). De oude, directe `resolveByGps()` (riep zelf `getCurrentPosition` aan en resolvede meteen) is opgesplitst in `showLocationConfirmation()` (navigeert naar de nieuwe stap) en `resolveFromConfirmedCoords(lat, lon)` (de eigenlijke `/api/location/resolve`-aanroep, nu gevoed door de bevestigde coördinaten uit het live scherm in plaats van een eenmalige `getCurrentPosition`-call).
+
+**Bewust NIET meegenomen (expliciete keuze, niet vergeten):** de onderste tabbalk (Kaart/Zoeken/Mijn routes/Profiel) uit de bijbehorende mockup. Die blijft een aparte, latere beslissing (raakt de hele app-navigatiestructuur) — de gebruiker gaf aan dat dit ook later kan.
+
+**310/310 tests, `tsc` schoon.** Nog geen echte iPhone-validatie van dit specifieke scherm.
 
 ---
 

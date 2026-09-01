@@ -4,6 +4,7 @@ import { useState } from "react";
 import { KnoopBadge } from "@/components/KnoopBadge";
 import { RoutePreview } from "@/components/RoutePreview";
 import NavigationScreen from "@/components/navigation/NavigationScreen";
+import LiveLocationScreen from "@/components/location/LiveLocationScreen";
 import type { GraphEdge } from "@/lib/route-engine/types";
 
 type Point = { x: number; y: number };
@@ -34,7 +35,7 @@ type LocationCandidate = {
   distanceM: number;
 };
 
-type Step = "location" | "distance" | "loading" | "results" | "detail" | "navigating" | "error";
+type Step = "location" | "confirmLocation" | "distance" | "loading" | "results" | "detail" | "navigating" | "error";
 
 const DISTANCE_OPTIONS = [20, 30, 40, 50];
 
@@ -95,40 +96,36 @@ export default function Home() {
     }
   }
 
-  async function resolveByGps() {
-    setStep("loading");
+  function showLocationConfirmation() {
     if (!navigator.geolocation) {
       setErrorMessage("Dit toestel ondersteunt geen locatiebepaling. Zoek op plaatsnaam.");
       setStep("error");
       return;
     }
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        try {
-          const res = await fetch("/api/location/resolve", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lat: position.coords.latitude, lon: position.coords.longitude }),
-          });
-          const data = await res.json();
-          if (!res.ok || !data.candidates?.[0]) {
-            setErrorMessage("Geen knooppunten gevonden bij je locatie.");
-            setStep("error");
-            return;
-          }
-          setStartLocation(data.candidates[0]);
-          setLocationCandidates(data.candidates);
-          setStep("distance");
-        } catch {
-          setErrorMessage("Er ging iets mis bij het bepalen van je locatie. Probeer het opnieuw.");
-          setStep("error");
-        }
-      },
-      () => {
-        setErrorMessage("We konden je locatie niet gebruiken. Zoek op plaatsnaam, of geef locatietoegang in je instellingen.");
+    setStep("confirmLocation");
+  }
+
+  async function resolveFromConfirmedCoords(lat: number, lon: number) {
+    setStep("loading");
+    try {
+      const res = await fetch("/api/location/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat, lon }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.candidates?.[0]) {
+        setErrorMessage("Geen knooppunten gevonden bij je locatie.");
         setStep("error");
+        return;
       }
-    );
+      setStartLocation(data.candidates[0]);
+      setLocationCandidates(data.candidates);
+      setStep("distance");
+    } catch {
+      setErrorMessage("Er ging iets mis bij het bepalen van je locatie. Probeer het opnieuw.");
+      setStep("error");
+    }
   }
 
   async function searchRoutes(km: number) {
@@ -229,7 +226,7 @@ export default function Home() {
             <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Waar wil je fietsen?</h2>
 
             <button
-              onClick={resolveByGps}
+              onClick={showLocationConfirmation}
               style={{
                 width: "100%",
                 minHeight: 52,
@@ -468,6 +465,10 @@ export default function Home() {
               Start
             </button>
           </section>
+        )}
+
+        {step === "confirmLocation" && (
+          <LiveLocationScreen onConfirm={resolveFromConfirmedCoords} onCancel={() => setStep("location")} />
         )}
 
         {step === "navigating" && selectedLoop && (

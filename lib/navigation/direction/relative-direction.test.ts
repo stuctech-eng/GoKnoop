@@ -6,6 +6,7 @@ import {
   smoothHeadingDeg,
   selectHeadingDeg,
   hasArrivedAtNode,
+  compassAbbreviation,
   DEFAULT_DIRECTION_THRESHOLDS,
 } from "./relative-direction";
 
@@ -127,5 +128,27 @@ describe("hasArrivedAtNode", () => {
   });
   it("false buiten de aankomstradius", () => {
     expect(hasArrivedAtNode(30, 25)).toBe(false);
+  });
+});
+
+describe("compassAbbreviation", () => {
+  it("geeft de juiste hoofdwindrichtingen", () => {
+    expect(compassAbbreviation(0)).toBe("N");
+    expect(compassAbbreviation(90)).toBe("O");
+    expect(compassAbbreviation(180)).toBe("Z");
+    expect(compassAbbreviation(270)).toBe("W");
+  });
+  it("geeft de juiste tussenrichtingen", () => {
+    expect(compassAbbreviation(45)).toBe("NO");
+    expect(compassAbbreviation(315)).toBe("NW");
+  });
+  it("normaliseert hoeken buiten [0,360)", () => {
+    expect(compassAbbreviation(360)).toBe("N");
+    expect(compassAbbreviation(-45)).toBe("NW");
+    expect(compassAbbreviation(405)).toBe("NO");
+  });
+  it("rondt correct af naar de dichtstbijzijnde richting", () => {
+    expect(compassAbbreviation(10)).toBe("N"); // dichter bij 0 dan bij 45
+    expect(compassAbbreviation(40)).toBe("NO"); // dichter bij 45 dan bij 0
   });
 });

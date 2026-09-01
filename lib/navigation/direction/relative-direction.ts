@@ -140,3 +140,17 @@ export function selectHeadingDeg(
 export function hasArrivedAtNode(distanceToNextNodeM: number, arrivalRadiusM: number): boolean {
   return distanceToNextNodeM <= arrivalRadiusM;
 }
+
+const COMPASS_ABBREVIATIONS = ["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"] as const;
+
+/**
+ * Zet een kompasrichting (graden) om naar een Nederlandse 8-punts kompas-
+ * afkorting (N/NO/O/ZO/Z/ZW/W/NW) -- puur weergaveformattering, geen
+ * navigatiebeslissing. Gebruikt voor de "Richting NW · 315°"-weergave op
+ * de live-locatiekaart.
+ */
+export function compassAbbreviation(headingDeg: number): string {
+  const normalized = ((headingDeg % 360) + 360) % 360;
+  const index = Math.round(normalized / 45) % 8;
+  return COMPASS_ABBREVIATIONS[index];
+}
