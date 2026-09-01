@@ -17,7 +17,7 @@ Phase 0/1 — Data Foundation              ✅ COMPLETE
 Phase 2   — Graph + Route Engine         ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3   — Core GoKnoop UX (MVP)        ✅ VALIDATED op echte productiedata
 Phase 4   — Navigation ENGINE            ✅ COMPLETE + GEVALIDEERD (stap 1-11B, incl. echte iPhone-test)
-Phase 4   — Navigation UI                ⬜ stap 12 — remount-key-bug gefixt ✅; ECHTE BUG 2: omkeerknop gaf geen zichtbare feedback (identieke lijnvorm bij omkering) — "Linksom"/"Rechtsom"-label toegevoegd, berekend uit echte geometrie; 333/333 tests, tsc schoon
+Phase 4   — Navigation UI                ⬜ stap 12 — omkeerknop-feedback ✅; HEADING-UP OOK OP HOME-SCHERM ✅ gebouwd (alleen rotatie, geen auto-zoom, bewust bevestigd vóór bouwen); knooppunten-op-Home bewust NIET gebouwd (nieuwe databehoefte, apart traject); 333/333 tests, tsc schoon
 ```
 
 **Live app:** https://go-knoop.vercel.app
@@ -501,6 +501,18 @@ Ná de remount-key-fix (sectie 6J) werkte de omkeerfunctie zelf wel correct, maa
 Het detailscherm toont nu "Rijdrichting: linksom/rechtsom" direct onder de omkeerknop, die bij elke druk meteen (zichtbaar) verandert.
 
 333/333 tests, `tsc` schoon.
+
+---
+
+## 6L. HEADING-UP OOK OP HET HOME-SCHERM (🆕 NIEUW, 29-8-2026)
+
+Op verzoek: de live-locatiekaart op de Kaart-hometab (`LiveLocationScreen`, sectie 6E) draait nu ook mee met de rijrichting -- hergebruikt EXACT dezelfde, al geteste functies als het navigatiescherm (`selectHeadingDeg`/`smoothHeadingDeg`, sectie 6C/6H).
+
+**Bewust bevestigd met de gebruiker vóór het bouwen, twee expliciete grenzen:**
+- **Alleen rotatie, GEEN automatisch inzoomen** ("we navigeren niet, dus het scherm blijft groot") -- dat hoort specifiek bij actieve navigatie (sectie 6H), niet bij dit rustige overzicht.
+- **Knooppunten-op-Home bewust NIET gebouwd** -- de gebruiker vroeg er ook naar, maar dit vereist een geheel nieuwe databehoefte ("welke knooppunten liggen er rond deze kaartuitsnede", los van een gekozen route) die nog niet bestaat. Expliciet als apart, later traject afgesproken, niet stilzwijgend meegenomen of vergeten.
+
+Geen nieuwe pure logica (volledig hergebruik), dus geen nieuwe tests nodig -- 333/333 ongewijzigd, `tsc` schoon.
 
 ---
 

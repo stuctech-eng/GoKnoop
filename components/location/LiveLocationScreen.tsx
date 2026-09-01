@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-geolocation-source";
+import { selectHeadingDeg, smoothHeadingDeg } from "@/lib/navigation/direction/relative-direction";
 import { compassAbbreviation } from "@/lib/navigation/direction/relative-direction";
 
 let workerUrlConfigured = false;
@@ -32,6 +33,11 @@ function ensureWorkerUrlConfigured() {
 
 const LIBERTY_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 const POSITION_COLOR = "#3B82F6"; // zelfde blauw als de live-positiemarker op het navigatiescherm
+// Heading-up op het Home-scherm (op verzoek, 29-8-2026) -- ALLEEN rotatie, GEEN automatisch
+// inzoomen (dat hoort bij actieve navigatie, sectie 6H, niet bij dit rustige overzicht --
+// bewust bevestigd met de gebruiker vóór het bouwen).
+const HEADING_SMOOTHING_ALPHA = 0.35;
+const MOVEMENT_SPEED_THRESHOLD_MPS = 0.5;
 
 export type LiveLocationScreenProps = {
   /** Aangeroepen zodra de gebruiker deze locatie bevestigt om door te gaan naar afstandskeuze. */
@@ -57,6 +63,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
   const mapRef = useRef<maplibregl.Map | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const hasCenteredRef = useRef(false);
+  const smoothedHeadingRef = useRef<number | null>(null);
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
@@ -142,6 +149,19 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
         if (!hasCenteredRef.current) {
           map.jumpTo({ center: [sample.lon, sample.lat], zoom: 16 });
           hasCenteredRef.current = true;
+        }
+
+        // Heading-up (op verzoek, 29-8-2026): hergebruikt exact dezelfde, al geteste functies
+        // als het navigatiescherm (sectie 6H) -- ALLEEN de bearing, bewust GEEN zoom-wijziging
+        // en GEEN gedwongen camera-volgen (dit is geen actieve navigatie, gewoon het rustige
+        // overzicht -- de gebruiker bevestigde expliciet: "het scherm blijft groot").
+        const selectedHeading = selectHeadingDeg(
+          { gpsHeadingDeg: sample.headingDeg, speedMps: sample.speedMps, previousStableHeadingDeg: smoothedHeadingRef.current },
+          { speedThresholdMps: MOVEMENT_SPEED_THRESHOLD_MPS }
+        );
+        if (selectedHeading !== null) {
+          smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
+          map.easeTo({ bearing: smoothedHeadingRef.current, duration: 500 });
         }
       }
     });
