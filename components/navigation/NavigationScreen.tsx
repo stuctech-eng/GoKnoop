@@ -207,7 +207,9 @@ export default function NavigationScreen({ edges, nodeSequence, nodeDisplayNumbe
         },
       });
 
-      map.fitBounds(geoJson.bounds, { padding: 60, animate: false });
+      // Asymmetrische marge: bovenin is de richtingkaart veel hoger dan 60px, onderin staan de
+      // voortgangsbalk + het logpaneel -- een uniforme marge liet de route daaronder wegvallen.
+      map.fitBounds(geoJson.bounds, { padding: { top: 180, bottom: 140, left: 40, right: 40 }, animate: false });
       setMapStatus("loaded");
     });
 
