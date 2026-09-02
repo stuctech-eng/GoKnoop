@@ -172,8 +172,12 @@ export default function NavigationScreen({
   const [progressInfo, setProgressInfo] = useState<{ ratio: number; distanceAlongM: number; totalM: number } | null>(null);
   const [phase, setPhase] = useState<PreNavigationPhase>("TO_START");
   const [startInfo, setStartInfo] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
-  // Sectie 6N: echte, straatvolgende afstand naar het startpunt (via de Route Engine), zodra
-  // bekend -- vervangt de hemelsbrede afstand in de weergave. null = nog niet opgehaald/mislukt.
+  // Sectie 6N/9.17-BUGFIX: de EENMALIG opgehaalde totale lengte van de LocalBikeRouter-route
+  // naar het startpunt. Bewust NIET meer gebruikt voor de live afstandsweergave/aankomstcheck
+  // (dat gaf een echte bug: dit getal update nooit terwijl je dichterbij komt, dus het bleef
+  // een oud, te hoog getal tonen terwijl de aankomstdrempel al op de LEVENDE hemelsbrede
+  // afstand reageerde -- twee inconsistente maten door elkaar). Nu puur informatief (bijv. voor
+  // logging), de live `distanceToStartM` is de enige bron voor wat de gebruiker ziet.
   const [routeToStartDistanceM, setRouteToStartDistanceM] = useState<number | null>(null);
   const [navState, setNavState] = useState<NavigationState>("NOT_STARTED");
   const [error, setError] = useState<string | null>(null);
@@ -435,7 +439,7 @@ export default function NavigationScreen({
 
       if (currentPhase === "TO_START") {
         const bearingToStartDeg = bearingDegrees(rdPosition, model.geometry[0]);
-        setStartInfo({ nodeId: nodeDisplayNumbers[0], distanceM: routeToStartDistanceRef.current ?? distanceToStartM, bearingDeg: bearingToStartDeg });
+        setStartInfo({ nodeId: nodeDisplayNumbers[0], distanceM: distanceToStartM, bearingDeg: bearingToStartDeg });
 
         if (!hasRequestedRouteToStartRef.current) {
           hasRequestedRouteToStartRef.current = true;
@@ -454,7 +458,7 @@ export default function NavigationScreen({
           });
         }
 
-        appendLog(`onderweg naar startpunt, nog ${Math.round(routeToStartDistanceRef.current ?? distanceToStartM)}m`);
+        appendLog(`onderweg naar startpunt, nog ${Math.round(distanceToStartM)}m`);
         return; // nog geen matching/navigatie -- sessie is bewust nog niet gestart
       }
 
@@ -470,6 +474,24 @@ export default function NavigationScreen({
 
       const outcome = controller.processGpsSample(sample);
       setNavState(stateMachine.getState());
+
+      // BUGFIX (30-8-2026, "blijft locatie staan bij verlaten route"): OFF_ROUTE accepteert
+      // uitsluitend startReroute() als geldige overgang (state machine, stap 2/7) -- zonder
+      // die aanroep werd ELKE volgende sample afgewezen ("abstained: state_not_accepting_
+      // signal"), waardoor de marker voor altijd bevroor, ook als je weer terug naar de route
+      // reed. Dit is BEWUST NOG GEEN volledige reroute-feature (die zou een echte nieuwe
+      // Route Engine-aanroep + RerouteContextTracker/RECENT_ROUTE_MEMORY-dedup vereisen --
+      // apart, groter werk, sectie 7/8-machinerie bestaat al maar is nog niet aangesloten).
+      // Dit is een minimale, eerlijke stopgap: cyclet direct door REROUTING->REROUTED heen
+      // ZONDER een nieuwe route te berekenen (dezelfde `model`/geometrie blijft gelden), puur
+      // om matching te laten hervatten. De bestaande `rerouteCooldownMs`-bescherming in de
+      // state machine zelf voorkomt dat dit meteen weer naar OFF_ROUTE terugflipt.
+      if (outcome.action === "abstained" && outcome.reason === "state_not_accepting_signal" && stateMachine.getState() === "OFF_ROUTE") {
+        stateMachine.startReroute();
+        stateMachine.completeReroute(clock.now());
+        setNavState(stateMachine.getState());
+        appendLog("matching hervat (geen nieuwe route berekend -- zelfde route, stopgap-fix)");
+      }
 
       // KERNPUNT: de marker wordt UITSLUITEND bijgewerkt op basis van een geaccepteerde
       // DeviationOutcome (dus ná matching + een geldige state-machine-transitie) -- nooit

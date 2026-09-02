@@ -1347,3 +1347,40 @@ naar noordgericht bij stoppen/terugvallen naar Start Guidance) bewust ONGEWIJZIG
 
 Geen wijziging aan `lib/route-engine/`. 373/373 tests ongewijzigd (pure UI-tuning, geen
 nieuwe testbare pure logica).
+
+### 9.17 Twee echte bugs uit een echte testrit (30-8-2026)
+
+**Bug 1: bevroren afstandsweergave bij aankomst.** De "afstand naar startpunt"-teller
+gebruikte, zodra beschikbaar, de EENMALIG opgehaalde LocalBikeRouter-totaalafstand
+(`routeToStartDistanceRef.current`) i.p.v. de live, continu bijgewerkte hemelsbrede afstand
+-- maar die statische waarde update nooit terwijl je dichterbij komt. Resultaat: de teller
+bleef een oud, te hoog getal tonen (bijv. "150m") terwijl de aankomstdrempel (fase A→B) wél
+op de LEVENDE afstand reageerde -- twee inconsistente maten door elkaar. **Fix**: de teller
+en de aankomstcheck gebruiken nu allebei uitsluitend `distanceToStartM` (live, hemelsbreed).
+De statische LocalBikeRouter-afstand blijft bestaan als informatieve state, niet meer
+gebruikt voor de weergave.
+
+**Bug 2 (belangrijker): positie bevroor volledig bij het verlaten van de route.** Root cause,
+bevestigd in de code zelf (niet gegokt): `OFF_ROUTE` accepteert in de state machine
+UITSLUITEND `startReroute()` als geldige overgang -- maar die werd nergens in
+`NavigationScreen.tsx` aangeroepen. Elke sample ná het bereiken van OFF_ROUTE werd dus
+afgewezen (`abstained: state_not_accepting_signal`), en omdat de positiemarker/voortgang
+uitsluitend bij een GEACCEPTEERDE uitkomst wordt bijgewerkt, bevroor alles -- ook bij
+terugkeer naar de route, want de state machine bleef voor altijd in OFF_ROUTE steken.
+
+**Fix, expliciet een MINIMALE, eerlijke stopgap, GEEN volledige reroute-feature**: zodra dit
+patroon gedetecteerd wordt, cyclet de code direct door `startReroute()` → `completeReroute()`
+heen, ZONDER een daadwerkelijk nieuwe route te berekenen (dezelfde geometrie/model blijft
+gelden) -- puur om matching te laten hervatten. Dit hergebruikt uitsluitend bestaande, al
+uitgebreid geteste state-machine-methoden (18 verwijzingen in de bestaande tests) inclusief
+de ingebouwde `rerouteCooldownMs`-bescherming, die voorkomt dat dit meteen weer terugflipt
+naar OFF_ROUTE.
+
+**Nog steeds ontbrekend, bewust niet nu gebouwd**: een ECHTE reroute-berekening (een nieuwe
+route via de Route Engine, met `RerouteContextTracker`/`RECENT_ROUTE_MEMORY`-dedup) --
+die machinerie bestaat al (stap 7/8) maar is nooit aan `NavigationScreen.tsx` gekoppeld. Deze
+stopgap laat je gewoon tegen de OORSPRONKELIJKE route blijven matchen zodra je terugkeert;
+als je een blijvend andere weg neemt, biedt de app nog geen alternatieve route aan.
+
+373/373 tests ongewijzigd (geen wijziging aan de al geteste state machine zelf), `tsc`
+schoon.
