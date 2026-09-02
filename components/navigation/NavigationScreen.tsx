@@ -150,6 +150,18 @@ export type NavigationScreenProps = {
    * in-app-navigatie, zelfde bewuste keuze als "auto naar parkeerplaats", sectie 9.6).
    */
   lastMileInfo?: { distanceM: number; destinationLat: number; destinationLon: number; destinationLabel?: string };
+  /**
+   * Pauzeknop (sectie 9.19, 30-8-2026): aangeroepen met alles wat nodig is voor een
+   * snapshot -- de aanroeper (app/page.tsx) bewaart 'm en toont het aparte PauseScreen.
+   * Dit component bevat zelf GEEN pauzelogica, puur een knop + doorgeven van de huidige
+   * ritgegevens ("blijft het overzichtelijk, staat niet alles in het navigatiescherm").
+   */
+  onPause?: (snapshot: {
+    lastKnownPosition: { lat: number; lon: number } | null;
+    distanceTraveledM: number;
+    rideTimeS: number;
+    physicalStart: PhysicalAnchor | null;
+  }) => void;
 };
 
 export default function NavigationScreen({
@@ -161,6 +173,7 @@ export default function NavigationScreen({
   onReverseDirection,
   onBackToStart,
   lastMileInfo,
+  onPause,
 }: NavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -184,6 +197,8 @@ export default function NavigationScreen({
   const hasFitBoundsToStartRef = useRef(false);
   /** Meest recente live positie -- gebruikt door de Back to Start-knop (sectie 9.18). */
   const lastSampleRef = useRef<{ lat: number; lon: number } | null>(null);
+  /** Wanneer de sessie daadwerkelijk startte (device-tijd) -- voor rijtijd bij pauzeren (sectie 9.19). */
+  const sessionStartedAtMsRef = useRef<number | null>(null);
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
@@ -486,6 +501,7 @@ export default function NavigationScreen({
         try {
           stateMachine.start();
           sessionStarted = true;
+          sessionStartedAtMsRef.current = Date.now();
           appendLog("startpunt bereikt, sessie gestart");
         } catch {
           return;
@@ -604,6 +620,7 @@ export default function NavigationScreen({
     unsubscribeRef.current = null;
     hasRecordedArrivalRef.current = false;
     hasRequestedRouteToStartRef.current = false;
+    sessionStartedAtMsRef.current = null;
     routeToStartDistanceRef.current = null;
     physicalStartRef.current = null; // alleen bij een volledige sessie-stop, nooit tussentijds
     hasFitBoundsToStartRef.current = false;
@@ -900,31 +917,58 @@ export default function NavigationScreen({
           )
         )}
 
-        {phase === "NAVIGATING" && onBackToStart && physicalStartRef.current && !lastMileInfo && (
-          <button
-            onClick={() => {
-              if (lastSampleRef.current && physicalStartRef.current) {
-                onBackToStart({
-                  currentLat: lastSampleRef.current.lat,
-                  currentLon: lastSampleRef.current.lon,
-                  physicalStart: physicalStartRef.current,
-                  routeStartNodeId: nodeSequence[0],
-                });
-              }
-            }}
-            style={{
-              marginTop: 10,
-              background: "rgba(0,0,0,0.55)",
-              color: "#FFFFFF",
-              border: "none",
-              borderRadius: 20,
-              padding: "10px 18px",
-              fontSize: 14,
-              fontWeight: 700,
-            }}
-          >
-            ↩️ Back to Start
-          </button>
+        {phase === "NAVIGATING" && ((onBackToStart && physicalStartRef.current && !lastMileInfo) || onPause) && (
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            {onBackToStart && physicalStartRef.current && !lastMileInfo && (
+              <button
+                onClick={() => {
+                  if (lastSampleRef.current && physicalStartRef.current) {
+                    onBackToStart({
+                      currentLat: lastSampleRef.current.lat,
+                      currentLon: lastSampleRef.current.lon,
+                      physicalStart: physicalStartRef.current,
+                      routeStartNodeId: nodeSequence[0],
+                    });
+                  }
+                }}
+                style={{
+                  background: "rgba(0,0,0,0.55)",
+                  color: "#FFFFFF",
+                  border: "none",
+                  borderRadius: 20,
+                  padding: "10px 18px",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}
+              >
+                ↩️ Back to Start
+              </button>
+            )}
+            {onPause && (
+              <button
+                onClick={() => {
+                  const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
+                  onPause({
+                    lastKnownPosition: lastSampleRef.current,
+                    distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
+                    rideTimeS,
+                    physicalStart: physicalStartRef.current,
+                  });
+                }}
+                style={{
+                  background: "rgba(0,0,0,0.55)",
+                  color: "#FFFFFF",
+                  border: "none",
+                  borderRadius: 20,
+                  padding: "10px 18px",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}
+              >
+                ⏸ Pauze
+              </button>
+            )}
+          </div>
         )}
 
         {/* Statuspaneel: alleen in debugmodus (geen onExit meegegeven), niet in de echte app --

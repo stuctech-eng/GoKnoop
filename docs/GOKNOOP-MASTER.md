@@ -1452,3 +1452,63 @@ grotere feature.
 in-app-navigatie. Dat zou, mocht het ooit gewenst zijn, dezelfde `fetchRouteToStart`-stijl
 polylijn-weergave kunnen hergebruiken die fase A al heeft -- bewust nu niet gebouwd om de
 scope van Fase 5 behapbaar te houden.
+
+---
+
+## 9.19 Pauzeknop met echte snapshot/hervatten — ✅ GEBOUWD (30-8-2026)
+
+Naar aanleiding van een GPT-opdracht die veel verder ging (pauze + fietsdagboek: foto's,
+notities, restaurants/terrassen) is bewust een SMALLERE scope vastgesteld: het fietsdagboek
+is een apart, later product-idee, geen onderdeel van deze wijziging. De pauzefunctie zelf
+werd wél als terecht en goed doordacht beoordeeld -- het kernprobleem was namelijk al door de
+eigen audit blootgelegd: er bestaat geen enkele persistente sessie-state, alles leeft alleen
+in het geheugen.
+
+**Architectuurkeuze, expliciet zo gekozen**: het pauzescherm is een EIGEN, apart component
+(`PauseScreen.tsx`), NIET binnen `NavigationScreen.tsx` gebouwd -- "blijft het
+overzichtelijk, staat niet alles in het navigatiescherm". `NavigationScreen` bevat zelf geen
+pauzelogica, alleen een knop + een callback die de huidige ritgegevens doorgeeft.
+
+**Definitieve scope, bevestigd:**
+- **Bij pauzeren opgeslagen**: route-nodes/edges (licht, zelfde patroon als `SavedRoute` --
+  geometrie vers opgehaald bij hervatten via het bestaande `/api/route/resolve`, geen dubbele
+  opslag), `physicalStart`, laatst bekende positie, gereden afstand, fietstijd, dataset-versie,
+  pauze-tijdstip.
+- **Pauzescherm-acties**: Rit hervatten / Naar startpunt / Kaart bekijken / Rit beëindigen
+  (MET verplichte bevestiging, nooit één tik).
+- **Pauze ≠ beëindigen**: de opgeslagen snapshot blijft simpelweg in localStorage staan totdat
+  er expliciet hervat of beëindigd wordt -- geen aparte "PAUSED"-status in de bestaande
+  `NavigationState`/`PreNavigationPhase` nodig (bewust geen derde, overlappende state-enum
+  toegevoegd, zelfde afweging als bij Fase 2's `physicalStart`).
+- **Detectie bij heropenen**: een banner op de Kaart-hometab ("⏸ Gepauzeerde rit -- X km,
+  Bekijken") zodra er een snapshot in opslag staat -- werkt ook na het volledig sluiten van de
+  app of een telefoon-herstart, want de snapshot staat gewoon in `localStorage`, niet
+  afhankelijk van een actieve sessie.
+
+**Gebouwd:**
+- `lib/navigation/paused-ride-store.ts` (`getPausedRide`/`savePausedRide`/`clearPausedRide`)
+  -- zelfde architectuur als `ridden-routes-store.ts`/`saved-routes-store.ts` (localStorage,
+  SSR-veilig, best-effort). Eén actieve gepauzeerde rit tegelijk (geen lijst) -- een nieuwe
+  pauze overschrijft een eventuele vorige. 8 tests.
+- `components/navigation/PauseScreen.tsx` -- puur presentatie, geen navigatielogica. Bewaakt
+  zelf de "Rit beëindigen?"-bevestigingsstap (geen losse actie kan per ongeluk ritdata
+  wegvegen).
+- `NavigationScreen.tsx`: nieuwe `onPause`-prop + "⏸ Pauze"-knop (naast de al bestaande
+  "↩️ Back to Start"-knop, tijdens NAVIGATING), plus een `sessionStartedAtMsRef` om de
+  daadwerkelijke rijtijd te kunnen berekenen (bestond nog niet).
+- `app/page.tsx`: `pausedRide`-state (geladen bij mount -- de heropen-detectie),
+  `getActiveRouteForPause()` (haalt de nodes/edges/datasetVersionId op ongeacht welke van de
+  drie routebronnen -- normaal rondje, opgeslagen route, of Back to Start-been -- op dat
+  moment actief is), en de drie handlers (`resumePausedRide`/`backToStartFromPause`/
+  `endPausedRide`). Hervatten hergebruikt LETTERLIJK hetzelfde patroon als het al bestaande
+  `startSavedRoute()` (edges vers ophalen via `/api/route/resolve`, dan `activeSavedRoute`
+  vullen) -- geen nieuwe/afwijkende hervat-mechaniek. "Rit beëindigen" roept de al bestaande
+  `recordRiddenRoute()` aan, zodat een voortijdig beëindigde rit toch meetelt voor
+  routevariatie (sectie 6F/Fase 2), precies zoals de gebruiker vroeg.
+
+**Geen wijziging aan `lib/route-engine/`.** 381/381 tests (373 + 8 nieuw), `tsc` schoon.
+
+**Bewust NIET meegenomen, expliciet uitgesteld naar een later "Ritdagboek"-traject**: foto's,
+notities, restaurants/terrassen-zoeken. Die vereisen een eigen opslaglaag (foto's passen niet
+in localStorage) en een derde externe dienst (plaatsen-zoeken) -- een ander soort feature,
+niet vermengd met deze wijziging.

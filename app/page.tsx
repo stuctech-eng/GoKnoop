@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { KnoopBadge } from "@/components/KnoopBadge";
 import { RoutePreview } from "@/components/RoutePreview";
 import NavigationScreen from "@/components/navigation/NavigationScreen";
 import LiveLocationScreen from "@/components/location/LiveLocationScreen";
 import TabBar, { type TabId } from "@/components/layout/TabBar";
-import { getRiddenRoutes } from "@/lib/history/ridden-routes-store";
+import { getRiddenRoutes, recordRiddenRoute } from "@/lib/history/ridden-routes-store";
 import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
+import { getPausedRide, savePausedRide, clearPausedRide, type PausedRideSnapshot } from "@/lib/navigation/paused-ride-store";
+import PauseScreen from "@/components/navigation/PauseScreen";
 import type { GraphEdge } from "@/lib/route-engine/types";
 import type { PhysicalAnchor } from "@/lib/navigation/physical-anchor";
 import { loopOrientation } from "@/lib/route-engine/loop-orientation";
@@ -40,7 +42,7 @@ type LocationCandidate = {
   distanceM: number;
 };
 
-type Step = "distance" | "loading" | "results" | "detail" | "navigating" | "error";
+type Step = "distance" | "loading" | "results" | "detail" | "navigating" | "paused" | "error";
 
 const DISTANCE_OPTIONS = [20, 30, 40, 50];
 
@@ -101,6 +103,12 @@ export default function Home() {
     datasetVersionId: string;
     lastMileInfo: { distanceM: number; destinationLat: number; destinationLon: number; destinationLabel?: string };
   } | null>(null);
+  /** Pauzeknop (sectie 9.19): bij mount gecheckt op een bestaande gepauzeerde rit (app opnieuw
+   *  geopend/telefoon herstart). */
+  const [pausedRide, setPausedRide] = useState<PausedRideSnapshot | null>(null);
+  useEffect(() => {
+    setPausedRide(getPausedRide());
+  }, []);
   const [savedRoutesVersion, setSavedRoutesVersion] = useState(0); // bumpen om de Mijn-routes-lijst opnieuw te lezen
   const [showSaveNamePrompt, setShowSaveNamePrompt] = useState(false);
   const [routeNameInput, setRouteNameInput] = useState("");
@@ -312,6 +320,116 @@ export default function Home() {
     }
   }
 
+  /**
+   * Geeft de nodes/edges/datasetVersionId van de HUIDIG actieve route terug, ongeacht welke
+   * van de drie bronnen (Back to Start-been, opgeslagen route, of normaal gekozen rondje) op
+   * dit moment NavigationScreen aandrijft -- nodig om een pauze-snapshot samen te stellen.
+   */
+  function getActiveRouteForPause(): { nodes: string[]; edges: string[]; datasetVersionId: string } | null {
+    if (activeBackToStartRoute) {
+      return {
+        nodes: activeBackToStartRoute.nodeSequence,
+        edges: activeBackToStartRoute.edges.map((e) => e.id),
+        datasetVersionId: activeBackToStartRoute.datasetVersionId,
+      };
+    }
+    if (activeSavedRoute) {
+      return {
+        nodes: activeSavedRoute.nodeSequence,
+        edges: activeSavedRoute.edges.map((e) => e.id),
+        datasetVersionId: activeSavedRoute.datasetVersionId,
+      };
+    }
+    if (selectedLoop) {
+      return { nodes: selectedLoop.route.nodes, edges: selectedLoop.route.edges, datasetVersionId: selectedLoop.route.datasetVersionId };
+    }
+    return null;
+  }
+
+  /** Pauzeknop (sectie 9.19): legt een snapshot vast en toont het aparte PauseScreen. */
+  function handlePause(data: {
+    lastKnownPosition: { lat: number; lon: number } | null;
+    distanceTraveledM: number;
+    rideTimeS: number;
+    physicalStart: PhysicalAnchor | null;
+  }) {
+    const activeRoute = getActiveRouteForPause();
+    if (!activeRoute) return;
+    savePausedRide({
+      routeNodes: activeRoute.nodes,
+      routeEdges: activeRoute.edges,
+      datasetVersionId: activeRoute.datasetVersionId,
+      physicalStart: data.physicalStart,
+      lastKnownPosition: data.lastKnownPosition,
+      distanceTraveledM: data.distanceTraveledM,
+      rideTimeS: data.rideTimeS,
+    });
+    setPausedRide(getPausedRide());
+    setStep("paused");
+  }
+
+  /** Hervatten (sectie 9.19): zelfde patroon als startSavedRoute -- edges vers ophalen via /api/route/resolve. */
+  async function resumePausedRide() {
+    if (!pausedRide) return;
+    setStep("loading");
+    try {
+      const res = await fetch("/api/route/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          datasetVersionId: pausedRide.datasetVersionId,
+          edgeIds: pausedRide.routeEdges,
+          nodeIds: pausedRide.routeNodes,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.error ?? "Deze gepauzeerde rit kon niet worden hervat.");
+        setStep("error");
+        return;
+      }
+      setActiveSavedRoute({
+        edges: data.resolvedEdges,
+        nodeSequence: pausedRide.routeNodes,
+        nodeDisplayNumbers: data.nodeDisplayNumbers,
+        datasetVersionId: pausedRide.datasetVersionId,
+      });
+      clearPausedRide();
+      setPausedRide(null);
+      setStep("navigating");
+    } catch {
+      setErrorMessage("Er ging iets mis bij het hervatten van deze rit.");
+      setStep("error");
+    }
+  }
+
+  /** Naar startpunt, vanuit het pauzescherm (sectie 9.19/9.22: altijd naar physicalStart, nooit iets anders). */
+  function backToStartFromPause() {
+    if (!pausedRide || !pausedRide.physicalStart || !pausedRide.lastKnownPosition) return;
+    clearPausedRide();
+    setPausedRide(null);
+    startBackToStart({
+      currentLat: pausedRide.lastKnownPosition.lat,
+      currentLon: pausedRide.lastKnownPosition.lon,
+      physicalStart: pausedRide.physicalStart,
+      routeStartNodeId: pausedRide.routeNodes[0],
+    });
+  }
+
+  /** Rit beëindigen vanuit pauze (sectie 9.19/9.23): voortgang tot nu toe onthouden, net als een normaal voltooide rit. */
+  function endPausedRide() {
+    if (!pausedRide) return;
+    recordRiddenRoute({
+      edgeIds: pausedRide.routeEdges,
+      nodeIds: pausedRide.routeNodes,
+      startNodeId: pausedRide.routeNodes[0],
+      distanceM: pausedRide.distanceTraveledM,
+    });
+    clearPausedRide();
+    setPausedRide(null);
+    reset();
+  }
+
   function reset() {
     setStep(null);
     setActiveTab("kaart");
@@ -350,6 +468,37 @@ export default function Home() {
 
           <div style={{ flex: 1, position: "relative" }}>
             {activeTab === "kaart" && <LiveLocationScreen embedded onConfirm={resolveFromConfirmedCoords} />}
+
+            {activeTab === "kaart" && pausedRide && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 12,
+                  left: 12,
+                  right: 12,
+                  zIndex: 5,
+                  background: "#085041",
+                  color: "white",
+                  borderRadius: 14,
+                  padding: "12px 16px",
+                  boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                }}
+              >
+                <div style={{ fontSize: 13 }}>
+                  ⏸ Gepauzeerde rit — {(pausedRide.distanceTraveledM / 1000).toFixed(1)} km
+                </div>
+                <button
+                  onClick={() => setStep("paused")}
+                  style={{ background: "white", color: "#085041", border: "none", borderRadius: 10, padding: "6px 12px", fontSize: 13, fontWeight: 700 }}
+                >
+                  Bekijken
+                </button>
+              </div>
+            )}
 
             {activeTab === "zoeken" && (
               <section style={{ padding: "1.5rem 1.25rem 4.5rem" }}>
@@ -771,6 +920,20 @@ export default function Home() {
                 : () => setSelectedLoop(reverseLoopCandidate(selectedLoop))
             }
             onBackToStart={activeBackToStartRoute ? undefined : startBackToStart}
+            onPause={handlePause}
+          />
+        )}
+
+        {step === "paused" && pausedRide && (
+          <PauseScreen
+            snapshot={pausedRide}
+            onResume={resumePausedRide}
+            onBackToStart={backToStartFromPause}
+            onViewMap={() => {
+              setStep(null);
+              setActiveTab("kaart");
+            }}
+            onEndRide={endPausedRide}
           />
         )}
           </div>
