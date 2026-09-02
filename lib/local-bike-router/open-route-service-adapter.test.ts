@@ -45,7 +45,7 @@ describe("OpenRouteServiceAdapter", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://api.openrouteservice.org/v2/directions/cycling-regular/geojson");
+    expect(url).toBe("https://api.heigit.org/openrouteservice/v2/directions/cycling-regular/geojson");
     expect(options.method).toBe("POST");
     expect(options.headers["Authorization"]).toBe("test-key");
     const body = JSON.parse(options.body);
@@ -60,7 +60,7 @@ describe("OpenRouteServiceAdapter", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const adapter = new OpenRouteServiceAdapter("test-key");
     await adapter.route(ORIGIN, DESTINATION, "foot");
-    expect(fetchMock.mock.calls[0][0]).toBe("https://api.openrouteservice.org/v2/directions/foot-walking/geojson");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.heigit.org/openrouteservice/v2/directions/foot-walking/geojson");
   });
 
   it("zet een geslaagde GeoJSON-respons correct om naar LocalBikeRouteResult (lon/lat teruggedraaid naar lat/lon)", async () => {

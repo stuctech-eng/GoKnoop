@@ -13,6 +13,14 @@ import type { LatLon, LocalBikeRoutingProfile, LocalBikeRouteResult, LocalBikeRo
  * de respons-parsing nodig zijn; expliciet zo vermeld, niet stilzwijgend
  * als "af" behandeld.
  *
+ * ENDPOINT-MIGRATIE (bevestigd 30-8-2026, officiële HeiGIT-forumaankondiging):
+ * `api.openrouteservice.org` is gedeprecieerd t.g.v. `api.heigit.org`, met
+ * uitschakeling van de oude URL op 24 augustus 2026 -- dus AL VERLOPEN op
+ * het moment van bouwen. Dit bestand gebruikt daarom uitsluitend de nieuwe
+ * URL. LET OP: geen simpele domeinvervanging -- de nieuwe structuur bevat
+ * een extra servicenaam-segment: `api.heigit.org/openrouteservice/v2/...`
+ * (niet `api.heigit.org/v2/...`).
+ *
  * Endpoint: POST /v2/directions/{profile}/geojson (GeoJSON-variant, geen
  * polyline-decoder nodig). LET OP: ORS verwacht coördinaten in
  * [longitude, latitude]-volgorde (GeoJSON-conventie) -- omgekeerd t.o.v. de
@@ -33,7 +41,7 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
    * environment variable, zelfde patroon als `lib/firebase-admin.ts`
    * (nooit hardcoded, credentials uit Vercel env vars).
    */
-  constructor(apiKey?: string, baseUrl = "https://api.openrouteservice.org/v2/directions") {
+  constructor(apiKey?: string, baseUrl = "https://api.heigit.org/openrouteservice/v2/directions") {
     const key = apiKey ?? process.env.OPENROUTESERVICE_API_KEY;
     if (!key) {
       throw new Error(

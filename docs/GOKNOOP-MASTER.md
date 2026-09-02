@@ -1261,3 +1261,36 @@ strikt nodig was.
 aanvragen en één integratietest doen -- niet alleen de adapter los, maar de VOLLEDIGE keten
 `parkeerplaats → LocalBikeRouter → eerste knooppunt → KnotRouteEngine`. Dat is nu voor het
 eerst een zinvolle test, want de keten staat er nu daadwerkelijk.
+
+### 9.14 KRITIEKE FIX: ORS-endpoint gemigreerd naar api.heigit.org — ✅ GEDAAN (30-8-2026)
+
+**Bevestigd door de gebruiker (met een echte HeiGIT-accountscreenshot: actieve Basic Key,
+Directions V2 2000/2000 quotum beschikbaar) en geverifieerd via webzoekopdracht tegen de
+officiële HeiGIT-forumaankondiging:**
+
+`api.openrouteservice.org` is gedeprecieerd t.g.v. `api.heigit.org`. **De officiële
+aankondiging noemt 24 augustus 2026 als definitieve uitschakeldatum van de oude URL** --
+dus op het moment van bouwen (2 september 2026) al ruim verlopen. Dit was dus geen
+"nice to have"-correctie, maar noodzakelijk om de integratie sowieso te laten werken.
+
+**Belangrijk detail, niet een simpele domeinvervanging:** de officiële mapping is:
+```
+api.openrouteservice.org/v2/directions  →  api.heigit.org/openrouteservice/v2/directions
+```
+Er zit een extra `/openrouteservice/`-servicenaam-segment in -- `api.heigit.org/v2/...`
+(zonder dat segment) zou NIET werken. Algemene nieuwe structuur voor alle HeiGIT-API's:
+`api.heigit.org/<servicenaam>/<versie>/`.
+
+**Gefixt:** `OpenRouteServiceAdapter`'s standaard `baseUrl` bijgewerkt naar
+`https://api.heigit.org/openrouteservice/v2/directions`, plus de bijbehorende
+testassertions. 19/19 tests in `lib/local-bike-router/` opnieuw bevestigd correct,
+373/373 totaal, `tsc` schoon.
+
+**API-key zelf**: bewust NIET in code/GitHub/zip gezet (beveiligingsafspraak, expliciet
+bevestigd) -- gaat als `OPENROUTESERVICE_API_KEY` in Vercel's environment variables, buiten
+deze zip om. `OpenRouteServiceAdapter`'s constructor las dit al zo (sectie 9.11), geen
+wijziging nodig aan dat deel.
+
+**Volgende stap, ongewijzigd**: één echte integratietest van de volledige keten
+`parkeerplaats → LocalBikeRouter → api.heigit.org → eerste knooppunt → KnotRouteEngine`,
+zodra de key in Vercel staat.
