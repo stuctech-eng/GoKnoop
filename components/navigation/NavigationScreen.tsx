@@ -158,6 +158,10 @@ export default function NavigationScreen({
    * (routeStartNodeId) -- twee aparte concepten, nooit door elkaar gehaald.
    */
   const physicalStartRef = useRef<PhysicalAnchor | null>(null);
+  /** Fase A (sectie 9.15): markeert of de eenmalige fitBounds op de LocalBikeRouter-route
+   *  al gebeurd is -- voorkomt dat een toekomstige wijziging aan fetchRouteToStart per
+   *  ongeluk de camera herhaaldelijk laat springen. */
+  const hasFitBoundsToStartRef = useRef(false);
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
@@ -357,6 +361,24 @@ export default function NavigationScreen({
           } else {
             (map.getSource("goknoop-route-to-start") as maplibregl.GeoJSONSource).setData(lineGeoJson);
           }
+
+          // Fase A (sectie 9.15): EENMALIG inzoomen op uitsluitend deze parkeerplaats→
+          // startknooppunt-verbinding, niet de volledige (mogelijk 20-30km) gekozen route die
+          // bij sessiestart al gefit was. Daarna laat GoKnoop de camera met rust -- GEEN
+          // doorlopend camera-volgen hier (dat is bewust exclusief voor fase C, sectie 6H,
+          // twee verantwoordelijkheden die niet door elkaar mogen lopen).
+          if (!hasFitBoundsToStartRef.current) {
+            const lons = toStartData.geometry.map((p: { lon: number }) => p.lon);
+            const lats = toStartData.geometry.map((p: { lat: number }) => p.lat);
+            map.fitBounds(
+              [
+                [Math.min(...lons), Math.min(...lats)],
+                [Math.max(...lons), Math.max(...lats)],
+              ],
+              { padding: 70, animate: true }
+            );
+            hasFitBoundsToStartRef.current = true;
+          }
         }
 
         routeToStartDistanceRef.current = toStartData.distanceM;
@@ -536,6 +558,7 @@ export default function NavigationScreen({
     hasRequestedRouteToStartRef.current = false;
     routeToStartDistanceRef.current = null;
     physicalStartRef.current = null; // alleen bij een volledige sessie-stop, nooit tussentijds
+    hasFitBoundsToStartRef.current = false;
     setRouteToStartDistanceM(null);
     smoothedHeadingRef.current = null;
     mapRef.current?.easeTo({ bearing: 0, duration: 500 });

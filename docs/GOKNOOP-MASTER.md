@@ -1294,3 +1294,26 @@ wijziging nodig aan dat deel.
 **Volgende stap, ongewijzigd**: één echte integratietest van de volledige keten
 `parkeerplaats → LocalBikeRouter → api.heigit.org → eerste knooppunt → KnotRouteEngine`,
 zodra de key in Vercel staat.
+
+### 9.15 Fase A: eenmalig inzoomen op de LocalBikeRouter-route zelf — ✅ GEBOUWD (30-8-2026)
+
+Na de eerste succesvolle live-validatie (Edam, 1372m, echte straatvolgende route) bleek de
+kaart tijdens fase A nog steeds uitgezoomd op de VOLLEDIGE gekozen route (soms 20-30km) --
+de bestaande `fitBounds` bij sessiestart, ongewijzigd sinds vóór Fase 3/4. Dat maakte het
+korte parkeerplaats→startpunt-stukje nauwelijks zichtbaar.
+
+**Harde UX-regel, expliciet zo vastgelegd:**
+1. Zodra de LocalBikeRouter-route (parking → routeStartNodeId) beschikbaar komt: teken 'm.
+2. Voer daarna EENMALIG `fitBounds` uit, uitsluitend op de geometrie van DEZE verbinding
+   (niet de volledige route).
+3. Padding zodat de lijn niet tegen de randen ligt (70px).
+4. Markeer dat deze fitBounds gebeurd is (`hasFitBoundsToStartRef`) -- GPS-updates,
+   reroutes of state-updates mogen de camera daarna niet opnieuw automatisch aanpassen.
+
+**Belangrijk onderscheid, bewust gescheiden gehouden:** dit is GEEN doorlopend camera-
+volgen -- dat blijft exclusief voor fase C (sectie 6H). Fase A doet precies één gerichte
+inzoom-actie en laat de camera daarna met rust; twee verantwoordelijkheden (eenmalig
+oriënteren vs. continu volgen tijdens actieve navigatie) blijven gescheiden, niet vermengd.
+
+Geen wijziging aan `lib/route-engine/`. 373/373 tests ongewijzigd (pure UI-wiring, geen
+nieuwe testbare pure logica).
