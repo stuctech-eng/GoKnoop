@@ -1116,7 +1116,7 @@ Een volgende sessie hoeft deze dus niet opnieuw te specificeren of te bouwen -- 
 ```
 Fase 1  Audit -- AL GEDAAN (sectie 9.2), niet herhalen.
 Fase 2  ✅ GEBOUWD (30-8-2026) -- PhysicalAnchor + minimale NavigationSessionInfo (sectie 9.7).
-Fase 3  LocalBikeRouter-abstractie + OpenRouteServiceAdapter (sectie 9.4).
+Fase 3  ✅ GEBOUWD (30-8-2026) -- LocalBikeRouter + RoutingProvider + OpenRouteServiceAdapter (sectie 9.4/9.11).
         Bestaande Layer A (Knot Route Engine) blijft volledig onaangeroerd.
 Fase 4  Parkeerplaats → eerste knooppunt, via LocalBikeRouter.
         Bestaande fallback-logica (sectie 6B) hergebruiken waar relevant.
@@ -1145,3 +1145,51 @@ Fase 7  Google Maps/Apple Maps-link voor de autorit (sectie 9.6) -- simpel, geen
 - Geen volledige Nederlandse OSM-stratengraaf bouwen in deze fase
 - `route.nodes[0]` niet vervangen door een parkeerpositie
 - `physicalStart` nooit overschrijven tijdens rerouting
+
+### 9.11 Fase 3 — LocalBikeRouter + RoutingProvider + OpenRouteServiceAdapter — ✅ GEBOUWD (30-8-2026)
+
+**Audit vóór het bouwen (zelfde discipline als Fase 2), bevindingen:**
+1. **Bestaand provider-patroon**: `GraphProvider` (interface, `lib/route-engine/types.ts`) +
+   concrete implementaties (`FirestoreGraphProvider`/`CachedGraphProvider`/
+   `InMemoryGraphProvider`) -- `RoutingProvider`/`OpenRouteServiceAdapter` volgen exact
+   hetzelfde patroon.
+2. **Bestaande coördinatentypes**: `Point = {x, y}` (RD New, `route-engine/types.ts`) +
+   `rdToWgs84`/`wgs84ToRd` (`coordinate-transform.ts`). `LocalBikeRouter` gebruikt BEWUST een
+   eigen `LatLon = {lat, lon}` (WGS84) i.p.v. `Point` -- dit werkt met ruwe GPS-coördinaten en
+   de native volgorde van externe API's, geen RD-omweg nodig voor deze laag.
+3. **Bestaand secrets-patroon**: `lib/firebase-admin.ts` -- credentials uit
+   `process.env.*`, nooit hardcoded, duidelijke foutmelding bij ontbrekende variabele.
+   `OpenRouteServiceAdapter` volgt dit exact (`OPENROUTESERVICE_API_KEY`).
+4. **Waar het logisch past**: nieuwe, aparte top-level map `lib/local-bike-router/` (naast
+   de al bestaande `lib/route-engine/`/`lib/navigation/`/`lib/map/`/`lib/history/`) --
+   geen vermenging met de knooppunten-engine.
+
+**Gebouwd:**
+- `lib/local-bike-router/types.ts` -- `LatLon`, `LocalBikeRoutingProfile`
+  (`"cycling" | "foot"`, alleen `"cycling"` nu geïmplementeerd), `LocalBikeRouteResult`,
+  `LocalBikeRoutingError`, `RoutingProvider`-interface.
+- `lib/local-bike-router/open-route-service-adapter.ts` -- `OpenRouteServiceAdapter
+  implements RoutingProvider`. Endpoint `POST /v2/directions/{profile}/geojson` (GeoJSON-
+  variant, geen polyline-decoder nodig) -- **geverifieerd tegen de officiële ORS-
+  documentatie (webzoekopdracht), NIET live getest met een echte API-key** (die is er nu
+  niet -- expliciet zo vermeld, geen aanname dat de parsing al perfect klopt). Coördinaten
+  in `[lon, lat]`-volgorde (GeoJSON-conventie). 10 tests met een gemockte `fetch`, incl. alle
+  foutpaden (netwerkfout, non-ok status, lege/onverwachte respons).
+- `lib/local-bike-router/local-bike-router.ts` -- `LocalBikeRouter`, de laag die de rest van
+  de app daadwerkelijk aanspreekt (nooit rechtstreeks een `RoutingProvider`-implementatie).
+  Simpele in-memory cache (sleutel: afgeronde coördinaten + profiel, ~1m precisie) --
+  voorkomt dubbele aanvragen voor dezelfde origin/destination/profiel binnen één sessie.
+  Foutresultaten worden NIET gecached. 6 tests, incl. bewijs dat GPS-ruis binnen ~1m
+  dezelfde cache-entry treft, en dat verschillende profielen/coördinaten apart gecached
+  worden.
+
+**Nog NIET gedaan (bewust, dit was uitsluitend Fase 3):**
+- Geen wiring in `NavigationScreen`/`app/page.tsx` (Fase 4/5)
+- Geen opslag van `PhysicalAnchor` (Fase 2's `physical-anchor.ts` bestaat, wordt hier nog
+  niet aan `LocalBikeRouter` gekoppeld)
+- Geen live test met een echte ORS-API-key (nog aan te vragen)
+- `profile: "foot"` blijft ongebruikt in de praktijk (het type staat er, geen bouwopdracht)
+
+**16 nieuwe tests (6 + 10), 367/367 totaal, `tsc` schoon.** `lib/route-engine/` (de
+Knot Route Engine) is dit hele Fase-3-traject NIET aangeraakt -- expliciet gecontroleerd.
+
