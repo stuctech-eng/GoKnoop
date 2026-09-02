@@ -9,6 +9,7 @@ import TabBar, { type TabId } from "@/components/layout/TabBar";
 import { getRiddenRoutes } from "@/lib/history/ridden-routes-store";
 import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
 import type { GraphEdge } from "@/lib/route-engine/types";
+import type { PhysicalAnchor } from "@/lib/navigation/physical-anchor";
 import { loopOrientation } from "@/lib/route-engine/loop-orientation";
 
 type Point = { x: number; y: number };
@@ -91,6 +92,14 @@ export default function Home() {
     nodeSequence: string[];
     nodeDisplayNumbers: string[];
     datasetVersionId: string;
+  } | null>(null);
+  /** Fase 5 (sectie 9.18): het "terug naar het startknooppunt"-been van een Back to Start-rit. */
+  const [activeBackToStartRoute, setActiveBackToStartRoute] = useState<{
+    edges: GraphEdge[];
+    nodeSequence: string[];
+    nodeDisplayNumbers: string[];
+    datasetVersionId: string;
+    lastMileInfo: { distanceM: number; destinationLat: number; destinationLon: number; destinationLabel?: string };
   } | null>(null);
   const [savedRoutesVersion, setSavedRoutesVersion] = useState(0); // bumpen om de Mijn-routes-lijst opnieuw te lezen
   const [showSaveNamePrompt, setShowSaveNamePrompt] = useState(false);
@@ -244,10 +253,70 @@ export default function Home() {
     }
   }
 
+  /**
+   * FASE 5 (sectie 9.18): berekent beide benen van "terug naar de parkeerplaats" in één
+   * serveraanroep (`/api/route/back-to-start`) en remount NavigationScreen met het eerste been
+   * (terug naar het startknooppunt, via de bestaande knooppunten-navigatie) als nieuwe actieve
+   * route. Het tweede been (startknooppunt → parkeerplaats) wordt NIET als nieuwe in-app-
+   * navigatie opgestart -- alleen de afstand + een Kaarten-link, getoond zodra het eerste been
+   * "Aangekomen" bereikt (zelfde bewuste keuze als "auto naar parkeerplaats", sectie 9.6).
+   */
+  async function startBackToStart(payload: { currentLat: number; currentLon: number; physicalStart: PhysicalAnchor; routeStartNodeId: string }) {
+    setStep("loading");
+    try {
+      const resolveRes = await fetch("/api/location/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: payload.currentLat, lon: payload.currentLon, limit: 5 }),
+      });
+      const resolveData = await resolveRes.json();
+      if (!resolveRes.ok || !resolveData.candidates?.length) {
+        setErrorMessage("Kon je huidige locatie niet bepalen voor Back to Start.");
+        setStep("error");
+        return;
+      }
+
+      const backRes = await fetch("/api/route/back-to-start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateNodeIds: resolveData.candidates.map((c: { logicalNodeId: string }) => c.logicalNodeId),
+          candidateDistancesM: resolveData.candidates.map((c: { distanceM: number }) => c.distanceM),
+          routeStartNodeId: payload.routeStartNodeId,
+          physicalStart: { lat: payload.physicalStart.lat, lon: payload.physicalStart.lon },
+        }),
+      });
+      const backData = await backRes.json();
+      if (!backRes.ok) {
+        setErrorMessage(backData.error ?? "Back to Start kon niet berekend worden.");
+        setStep("error");
+        return;
+      }
+
+      setActiveBackToStartRoute({
+        edges: backData.knotLeg.resolvedEdges,
+        nodeSequence: backData.knotLeg.route.nodes,
+        nodeDisplayNumbers: backData.knotLeg.nodeDisplayNumbers,
+        datasetVersionId: backData.knotLeg.route.datasetVersionId,
+        lastMileInfo: {
+          distanceM: backData.lastMileLeg.distanceM,
+          destinationLat: payload.physicalStart.lat,
+          destinationLon: payload.physicalStart.lon,
+          destinationLabel: payload.physicalStart.name,
+        },
+      });
+      setStep("navigating");
+    } catch {
+      setErrorMessage("Er ging iets mis bij het berekenen van Back to Start.");
+      setStep("error");
+    }
+  }
+
   function reset() {
     setStep(null);
     setActiveTab("kaart");
     setActiveSavedRoute(null);
+    setActiveBackToStartRoute(null);
     setPlaceName("");
     setStartLocation(null);
     setLocationCandidates([]);
@@ -659,19 +728,36 @@ export default function Home() {
           </section>
         )}
 
-        {step === "navigating" && (activeSavedRoute || selectedLoop) && (
+        {step === "navigating" && (activeBackToStartRoute || activeSavedRoute || selectedLoop) && (
           <NavigationScreen
             key={
-              activeSavedRoute
-                ? `saved-${activeSavedRoute.datasetVersionId}-${activeSavedRoute.nodeSequence[0]}`
-                : `${startLocation?.logicalNodeId ?? "navigation"}-${selectedLoop?.route.edges.join(",") ?? ""}`
+              activeBackToStartRoute
+                ? `backtostart-${activeBackToStartRoute.datasetVersionId}-${activeBackToStartRoute.nodeSequence[0]}-${activeBackToStartRoute.nodeSequence[activeBackToStartRoute.nodeSequence.length - 1]}`
+                : activeSavedRoute
+                  ? `saved-${activeSavedRoute.datasetVersionId}-${activeSavedRoute.nodeSequence[0]}`
+                  : `${startLocation?.logicalNodeId ?? "navigation"}-${selectedLoop?.route.edges.join(",") ?? ""}`
             }
-            edges={activeSavedRoute ? activeSavedRoute.edges : selectedLoop!.resolvedEdges}
-            nodeSequence={activeSavedRoute ? activeSavedRoute.nodeSequence : selectedLoop!.route.nodes}
-            nodeDisplayNumbers={activeSavedRoute ? activeSavedRoute.nodeDisplayNumbers : selectedLoop!.nodeDisplayNumbers}
-            datasetVersionId={activeSavedRoute ? activeSavedRoute.datasetVersionId : selectedLoop!.route.datasetVersionId}
+            edges={activeBackToStartRoute ? activeBackToStartRoute.edges : activeSavedRoute ? activeSavedRoute.edges : selectedLoop!.resolvedEdges}
+            nodeSequence={
+              activeBackToStartRoute ? activeBackToStartRoute.nodeSequence : activeSavedRoute ? activeSavedRoute.nodeSequence : selectedLoop!.route.nodes
+            }
+            nodeDisplayNumbers={
+              activeBackToStartRoute
+                ? activeBackToStartRoute.nodeDisplayNumbers
+                : activeSavedRoute
+                  ? activeSavedRoute.nodeDisplayNumbers
+                  : selectedLoop!.nodeDisplayNumbers
+            }
+            datasetVersionId={
+              activeBackToStartRoute ? activeBackToStartRoute.datasetVersionId : activeSavedRoute ? activeSavedRoute.datasetVersionId : selectedLoop!.route.datasetVersionId
+            }
+            lastMileInfo={activeBackToStartRoute?.lastMileInfo}
             onExit={() => {
-              if (activeSavedRoute) {
+              if (activeBackToStartRoute) {
+                setActiveBackToStartRoute(null);
+                setStep(null);
+                setActiveTab("kaart");
+              } else if (activeSavedRoute) {
                 setActiveSavedRoute(null);
                 setStep(null);
                 setActiveTab("mijnroutes");
@@ -680,10 +766,11 @@ export default function Home() {
               }
             }}
             onReverseDirection={
-              activeSavedRoute || !selectedLoop
+              activeBackToStartRoute || activeSavedRoute || !selectedLoop
                 ? undefined
                 : () => setSelectedLoop(reverseLoopCandidate(selectedLoop))
             }
+            onBackToStart={activeBackToStartRoute ? undefined : startBackToStart}
           />
         )}
           </div>

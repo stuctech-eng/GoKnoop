@@ -135,6 +135,21 @@ export type NavigationScreenProps = {
    * als deze prop is meegegeven (niet op de debugpagina).
    */
   onReverseDirection?: () => void;
+  /**
+   * FASE 5 (sectie 9.18): aangeroepen als de gebruiker "↩️ Back to Start" indrukt tijdens
+   * NAVIGATING. De aanroeper (app/page.tsx) berekent beide benen (knooppunten-terugweg +
+   * laatste-stukje-naar-parkeerplaats) en remount dit component met het eerste been als
+   * nieuwe actieve route (zelfde `key`-gebaseerde mechanisme als `onReverseDirection`).
+   * Alleen getoond als zowel deze prop als een vastgelegd `physicalStart` beschikbaar zijn.
+   */
+  onBackToStart?: (payload: { currentLat: number; currentLon: number; physicalStart: PhysicalAnchor; routeStartNodeId: string }) => void;
+  /**
+   * Aanwezig wanneer DIT is de "terug naar het startknooppunt"-been van een Back to Start-rit
+   * (sectie 9.18) -- bij ARRIVED wordt dan een aangepaste kaart getoond met het laatste,
+   * al vooraf berekende stukje naar de parkeerplaats (link naar Kaarten i.p.v. nieuwe
+   * in-app-navigatie, zelfde bewuste keuze als "auto naar parkeerplaats", sectie 9.6).
+   */
+  lastMileInfo?: { distanceM: number; destinationLat: number; destinationLon: number; destinationLabel?: string };
 };
 
 export default function NavigationScreen({
@@ -144,6 +159,8 @@ export default function NavigationScreen({
   datasetVersionId,
   onExit,
   onReverseDirection,
+  onBackToStart,
+  lastMileInfo,
 }: NavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -165,6 +182,8 @@ export default function NavigationScreen({
    *  al gebeurd is -- voorkomt dat een toekomstige wijziging aan fetchRouteToStart per
    *  ongeluk de camera herhaaldelijk laat springen. */
   const hasFitBoundsToStartRef = useRef(false);
+  /** Meest recente live positie -- gebruikt door de Back to Start-knop (sectie 9.18). */
+  const lastSampleRef = useRef<{ lat: number; lon: number } | null>(null);
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
@@ -423,6 +442,7 @@ export default function NavigationScreen({
     }
 
     const unsubscribe = source.subscribe((sample) => {
+      lastSampleRef.current = { lat: sample.lat, lon: sample.lon };
       // Fase A/B/C bepalen (stap 12.7) -- vóór sessiestart: alleen de afstand tot het
       // startknooppunt is relevant, geen matching (er is nog geen actieve navigatie).
       const rdPosition = wgs84ToRd(sample.lat, sample.lon);
@@ -688,6 +708,44 @@ export default function NavigationScreen({
         }}
       >
         {navState === "ARRIVED" ? (
+          lastMileInfo ? (
+            <div
+              style={{
+                background: "#085041",
+                borderRadius: 20,
+                padding: "22px 20px",
+                width: "100%",
+                maxWidth: 340,
+                textAlign: "center",
+                boxShadow: "0 4px 20px rgba(0,0,0,0.28)",
+                boxSizing: "border-box",
+              }}
+            >
+              <div style={{ fontSize: 34, lineHeight: 1, marginBottom: 8 }}>🅿️</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#FFFFFF" }}>Bijna bij je auto</div>
+              <div style={{ fontSize: 15, color: "#FFFFFF", marginTop: 4 }}>
+                Nog {Math.round(lastMileInfo.distanceM)} m naar {lastMileInfo.destinationLabel ?? "je parkeerplaats"}
+              </div>
+              <a
+                href={`https://maps.apple.com/?daddr=${lastMileInfo.destinationLat},${lastMileInfo.destinationLon}&dirflg=b`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: "inline-block",
+                  marginTop: 14,
+                  background: "rgba(255,255,255,0.14)",
+                  color: "#FFFFFF",
+                  borderRadius: 10,
+                  padding: "10px 18px",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  textDecoration: "none",
+                }}
+              >
+                Open in Kaarten
+              </a>
+            </div>
+          ) : (
           <div
             style={{
               background: "#085041",
@@ -704,6 +762,7 @@ export default function NavigationScreen({
             <div style={{ fontSize: 20, fontWeight: 800, color: "#FFFFFF" }}>Aangekomen!</div>
             <div style={{ fontSize: 13, color: "#9FE1CB", marginTop: 4 }}>Deze rit is onthouden voor toekomstige routevoorstellen.</div>
           </div>
+          )
         ) : (
           (phase === "TO_START" ? startInfo : nextNode) && (
           <div
@@ -839,6 +898,33 @@ export default function NavigationScreen({
             )}
           </div>
           )
+        )}
+
+        {phase === "NAVIGATING" && onBackToStart && physicalStartRef.current && !lastMileInfo && (
+          <button
+            onClick={() => {
+              if (lastSampleRef.current && physicalStartRef.current) {
+                onBackToStart({
+                  currentLat: lastSampleRef.current.lat,
+                  currentLon: lastSampleRef.current.lon,
+                  physicalStart: physicalStartRef.current,
+                  routeStartNodeId: nodeSequence[0],
+                });
+              }
+            }}
+            style={{
+              marginTop: 10,
+              background: "rgba(0,0,0,0.55)",
+              color: "#FFFFFF",
+              border: "none",
+              borderRadius: 20,
+              padding: "10px 18px",
+              fontSize: 14,
+              fontWeight: 700,
+            }}
+          >
+            ↩️ Back to Start
+          </button>
         )}
 
         {/* Statuspaneel: alleen in debugmodus (geen onExit meegegeven), niet in de echte app --

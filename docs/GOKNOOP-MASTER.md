@@ -1135,9 +1135,7 @@ Fase 2  ✅ GEBOUWD (30-8-2026) -- PhysicalAnchor + minimale NavigationSessionIn
 Fase 3  ✅ GEBOUWD (30-8-2026) -- LocalBikeRouter + RoutingProvider + OpenRouteServiceAdapter (sectie 9.4/9.11).
         Bestaande Layer A (Knot Route Engine) blijft volledig onaangeroerd.
 Fase 4  ✅ GEBOUWD (30-8-2026) -- Parkeerplaats → eerste knooppunt, via LocalBikeRouter (sectie 9.13).
-Fase 5  Back to Start -- met de vereenvoudiging uit 9.5 (Layer A voor het grootste deel,
-        Layer B alleen voor het laatste stukje). Bestemming = physicalStart, NOOIT
-        route.nodes[0]/laatste knooppunt/huidige route-start.
+Fase 5  ✅ GEBOUWD (30-8-2026) -- Back to Start (sectie 9.18), met de vereenvoudiging uit 9.5.
 Fase 6  Tests, minimaal:
         - Parkeerplaats → eerste knooppunt → volledige route → parkeerplaats
         - Back to Start halverwege de route (bewijst 9.5's Layer-A-eerst-aanpak)
@@ -1400,3 +1398,57 @@ als je een blijvend andere weg neemt, biedt de app nog geen alternatieve route a
 
 373/373 tests ongewijzigd (geen wijziging aan de al geteste state machine zelf), `tsc`
 schoon.
+
+---
+
+## 9.18 Fase 5 — Back to Start — ✅ GEBOUWD (30-8-2026)
+
+**Kernvereenvoudiging, al eerder doordacht (sectie 9.5), nu daadwerkelijk zo gebouwd:**
+Back to Start gebruikt vanuit het MIDDEN van de route eerst Layer A (de bestaande
+knooppunten-navigatie, hergebruikt `computeRouteWithFallback` -- exact dezelfde fallback als
+Fase 4 vóór de LocalBikeRouter-vervanging al gebruikte) om terug naar het startknooppunt te
+komen. Layer B (`LocalBikeRouter`) is uitsluitend nodig voor het allerlaatste stukje:
+startknooppunt → parkeerplaats.
+
+**Tweede vereenvoudiging, bewust zo gekozen om de scope behapbaar te houden:** voor dat
+laatste stukje wordt GEEN nieuwe in-app-navigatie-ervaring gebouwd -- in plaats daarvan
+dezelfde, al eerder genomen beslissing als "auto naar parkeerplaats" (sectie 9.6): een link
+naar Apple/Google Kaarten met de parkeerplaats-coördinaten. Geen nieuwe turn-by-turn-UI
+nodig voor een kort, laatste stukje.
+
+**Server**: nieuw endpoint `POST /api/route/back-to-start` -- berekent BEIDE benen in ÉÉN
+serveraanroep (`candidateNodeIds`/`candidateDistancesM`/`routeStartNodeId`/`physicalStart` in,
+`{knotLeg, lastMileLeg}` uit). Been 1 (`computeRouteWithFallback`, Layer A) en been 2
+(`LocalBikeRouter`+`OpenRouteServiceAdapter`, Layer B) zijn beide al bestaande, al geteste
+bouwstenen -- dit endpoint is puur compositie, geen nieuwe pure logica.
+
+**Client (`NavigationScreen.tsx`)**:
+- Nieuwe props: `onBackToStart` (callback, aanroeper berekent beide benen en remount met
+  been 1 als nieuwe actieve route) en `lastMileInfo` (aanwezig wanneer DIT been 1 van een
+  Back to Start-rit is).
+- Nieuwe `lastSampleRef` -- houdt de meest recente live positie bij, nodig voor de knop.
+- "↩️ Back to Start"-knop, zichtbaar tijdens NAVIGATING, alleen als zowel `onBackToStart` als
+  een vastgelegd `physicalStart` beschikbaar zijn (dus nooit voordat fase A daadwerkelijk
+  heeft plaatsgevonden).
+- Aangepaste ARRIVED-kaart: als `lastMileInfo` aanwezig is, toont "🅿️ Bijna bij je auto" met
+  de afstand + een "Open in Kaarten"-link, IN PLAATS VAN de generieke "🏁 Aangekomen!"-kaart.
+
+**`app/page.tsx`**: nieuwe `activeBackToStartRoute`-state, hoogste prioriteit in dezelfde
+ternary-keten als `activeSavedRoute`/`selectedLoop` (zelfde, al bewezen remount-via-key-
+patroon als bij route-omkering en opgeslagen routes). Nieuwe `startBackToStart()`-functie:
+resolvet de huidige positie naar kandidaten (hergebruikt `/api/location/resolve`), roept het
+nieuwe endpoint aan, en zet de nieuwe state.
+
+**Geen wijziging aan `lib/route-engine/`** -- het nieuwe endpoint importeert er wel uit
+(`computeRouteWithFallback`, `CachedGraphProvider`), maar wijzigt niets, puur hergebruik.
+
+**373/373 tests ongewijzigd** -- het nieuwe endpoint is pure compositie van al geteste
+functies (`computeRouteWithFallback` + `LocalBikeRouter`), geen nieuwe pure logica die apart
+getest moest worden. `tsc` schoon. Nog geen echte iPhone-validatie van deze specifieke,
+grotere feature.
+
+**Nog niet gebouwd, bewust**: live matching/turn-by-turn voor het laatste stukje
+(startknooppunt → parkeerplaats) -- alleen afstand + Kaarten-link, geen gedetailleerde
+in-app-navigatie. Dat zou, mocht het ooit gewenst zijn, dezelfde `fetchRouteToStart`-stijl
+polylijn-weergave kunnen hergebruiken die fase A al heeft -- bewust nu niet gebouwd om de
+scope van Fase 5 behapbaar te houden.
