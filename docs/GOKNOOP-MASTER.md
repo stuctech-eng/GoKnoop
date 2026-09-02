@@ -1060,27 +1060,43 @@ parkeerplaats-coördinaten komt, kan het BESTAANDE fase-A-mechanisme ("Rijd naar
 startpunt") gewoon hergebruikt worden -- zelfde patroon, nu toegepast op de parkeerplaats i.p.v.
 een knooppunt.
 
-### 9.7 Datamodel (conceptueel, aan te passen aan bestaande naming conventions)
+### 9.7 Datamodel — ✅ FASE 2 GEBOUWD (30-8-2026)
 
+`lib/navigation/physical-anchor.ts` -- puur datamodel, geen opslag, geen `LocalBikeRouter`-
+aanroep (dat blijft Fase 3+, hierna nog te doen):
+
+```typescript
+export type PhysicalAnchor = {
+  type: "parking";
+  lat: number;
+  lon: number;
+  name?: string;
+};
+
+export function isPhysicalAnchor(value: unknown): value is PhysicalAnchor { ... } // runtime-guard,
+  // zelfde patroon als isSavedRoute/isRiddenRoute (sectie 6F/8) -- nodig zodra Fase 3+ dit uit
+  // opslag/een API-respons parst.
+
+export type NavigationSessionInfo = {
+  routeId: string;
+  physicalStart: PhysicalAnchor | null; // null zolang er geen fysiek vertrekpunt gekoppeld is
+  routeStartNodeId: string; // Route.nodes[0] -- BLIJFT apart van physicalStart
+};
 ```
-PhysicalAnchor
-├── type: "parking"
-├── latitude / longitude
-├── name?
-└── externalId?
 
-NavigationSession (nieuw, minimaal, geen onnodige persistente laag)
-├── routeId
-├── physicalStart: PhysicalAnchor
-├── routeStartNodeId   -- BLIJFT apart van physicalStart, nooit door elkaar halen
-├── phase
-├── currentPosition
-└── ...
-```
+**Bewust NOG NIET ingevuld: `phase`/`currentPosition`** (wel genoemd in het oorspronkelijke
+conceptuele model). Reden: dat vereist een beslissing over hoe dit zich verhoudt tot de
+BESTAANDE `NavigationState` (stap 2) en `PreNavigationPhase` (sectie 6C) -- een derde,
+ongerelateerde "fase"-enum zou verwarring riskeren. Die beslissing hoort bij Fase 3/4
+(`LocalBikeRouter`-wiring), waar pas duidelijk wordt hoe "op weg naar de parkeerplaats/het
+knooppunt" zich verhoudt tot de bestaande matching-state-machine -- hier niet vooruitgelopen.
 
-`route.nodes[0]` blijft het eerste knooppunt -- wordt NIET de parkeerpositie. **Cruciale regel**:
-`physicalStart` mag tijdens een sessie NOOIT overschreven worden, ook niet bij afwijken/
-rerouten/tijdelijk elders rijden. Dit is essentieel voor Back to Start.
+`route.nodes[0]` blijft het eerste knooppunt -- wordt NIET de parkeerpositie. **Cruciale regel**
+(nog te bewaken in Fase 4/5, dit type dwingt het zelf niet af): `physicalStart` mag tijdens een
+sessie NOOIT overschreven worden, ook niet bij afwijken/rerouten/tijdelijk elders rijden. Dit
+is essentieel voor Back to Start.
+
+6 tests (de runtime-guard), `tsc` schoon. 351/351 tests totaal.
 
 ### 9.8 Wat NIET opnieuw gebouwd hoeft te worden (al af, vandaag gedaan)
 
@@ -1099,7 +1115,7 @@ Een volgende sessie hoeft deze dus niet opnieuw te specificeren of te bouwen -- 
 
 ```
 Fase 1  Audit -- AL GEDAAN (sectie 9.2), niet herhalen.
-Fase 2  Datamodel -- PhysicalAnchor + minimale NavigationSession (sectie 9.7).
+Fase 2  ✅ GEBOUWD (30-8-2026) -- PhysicalAnchor + minimale NavigationSessionInfo (sectie 9.7).
 Fase 3  LocalBikeRouter-abstractie + OpenRouteServiceAdapter (sectie 9.4).
         Bestaande Layer A (Knot Route Engine) blijft volledig onaangeroerd.
 Fase 4  Parkeerplaats → eerste knooppunt, via LocalBikeRouter.
