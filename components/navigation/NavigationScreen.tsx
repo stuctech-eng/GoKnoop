@@ -142,7 +142,13 @@ export type NavigationScreenProps = {
    * nieuwe actieve route (zelfde `key`-gebaseerde mechanisme als `onReverseDirection`).
    * Alleen getoond als zowel deze prop als een vastgelegd `physicalStart` beschikbaar zijn.
    */
-  onBackToStart?: (payload: { currentLat: number; currentLon: number; physicalStart: PhysicalAnchor; routeStartNodeId: string }) => void;
+  /**
+   * FASE 5 (sectie 9.18): "Back to Start" verhuisde volledig naar het pauzemenu
+   * (`PauseScreen.tsx`, via `backToStartFromPause` in app/page.tsx) -- op verzoek: "alles in
+   * het pauzemenu, is tevens controlekamer". Deze prop bestaat daarom niet meer; de
+   * app/page.tsx-logica die de daadwerkelijke berekening doet (`startBackToStart`) bestaat
+   * nog gewoon, alleen niet meer via een directe knop in dit component aangeroepen.
+   */
   /**
    * Aanwezig wanneer DIT is de "terug naar het startknooppunt"-been van een Back to Start-rit
    * (sectie 9.18) -- bij ARRIVED wordt dan een aangepaste kaart getoond met het laatste,
@@ -171,7 +177,6 @@ export default function NavigationScreen({
   datasetVersionId,
   onExit,
   onReverseDirection,
-  onBackToStart,
   lastMileInfo,
   onPause,
 }: NavigationScreenProps) {
@@ -244,6 +249,10 @@ export default function NavigationScreen({
       dragRotate: false,
       pitchWithRotate: false,
       touchPitch: false,
+      // Compacte attributie i.p.v. een permanente balk -- de attributie zelf blijft staan
+      // (waarschijnlijk vereist door OpenStreetMap/OpenFreeMap se licentie, geen decoratie),
+      // maar wordt nu een klein, onopvallend "i"-icoontje i.p.v. een balk die ruimte inneemt.
+      attributionControl: { compact: true },
     });
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
@@ -917,58 +926,38 @@ export default function NavigationScreen({
           )
         )}
 
-        {phase === "NAVIGATING" && ((onBackToStart && physicalStartRef.current && !lastMileInfo) || onPause) && (
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            {onBackToStart && physicalStartRef.current && !lastMileInfo && (
-              <button
-                onClick={() => {
-                  if (lastSampleRef.current && physicalStartRef.current) {
-                    onBackToStart({
-                      currentLat: lastSampleRef.current.lat,
-                      currentLon: lastSampleRef.current.lon,
-                      physicalStart: physicalStartRef.current,
-                      routeStartNodeId: nodeSequence[0],
-                    });
-                  }
-                }}
-                style={{
-                  background: "rgba(0,0,0,0.55)",
-                  color: "#FFFFFF",
-                  border: "none",
-                  borderRadius: 20,
-                  padding: "10px 18px",
-                  fontSize: 14,
-                  fontWeight: 700,
-                }}
-              >
-                ↩️ Back to Start
-              </button>
-            )}
-            {onPause && (
-              <button
-                onClick={() => {
-                  const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
-                  onPause({
-                    lastKnownPosition: lastSampleRef.current,
-                    distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
-                    rideTimeS,
-                    physicalStart: physicalStartRef.current,
-                  });
-                }}
-                style={{
-                  background: "rgba(0,0,0,0.55)",
-                  color: "#FFFFFF",
-                  border: "none",
-                  borderRadius: 20,
-                  padding: "10px 18px",
-                  fontSize: 14,
-                  fontWeight: 700,
-                }}
-              >
-                ⏸ Pauze
-              </button>
-            )}
-          </div>
+        {phase === "NAVIGATING" && onPause && (
+          // Back to Start staat nu UITSLUITEND in het pauzemenu (op verzoek: "alles in het
+          // pauzemenu, is tevens controlekamer") -- hier alleen nog de Pauze-knop, nu als eigen,
+          // herkenbare ronde knop i.p.v. een klein pilletje naast een andere knop.
+          <button
+            onClick={() => {
+              const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
+              onPause({
+                lastKnownPosition: lastSampleRef.current,
+                distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
+                rideTimeS,
+                physicalStart: physicalStartRef.current,
+              });
+            }}
+            aria-label="Pauzeer navigatie"
+            style={{
+              marginTop: 12,
+              width: 60,
+              height: 60,
+              borderRadius: 30,
+              background: "#FFFFFF",
+              color: "#085041",
+              border: "none",
+              boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 26,
+            }}
+          >
+            ⏸
+          </button>
         )}
 
         {/* Statuspaneel: alleen in debugmodus (geen onExit meegegeven), niet in de echte app --

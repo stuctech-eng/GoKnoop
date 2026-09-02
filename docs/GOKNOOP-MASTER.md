@@ -1512,3 +1512,29 @@ pauzelogica, alleen een knop + een callback die de huidige ritgegevens doorgeeft
 notities, restaurants/terrassen-zoeken. Die vereisen een eigen opslaglaag (foto's passen niet
 in localStorage) en een derde externe dienst (plaatsen-zoeken) -- een ander soort feature,
 niet vermengd met deze wijziging.
+
+### 9.20 Opruiming: Back to Start volledig naar het pauzemenu + compacte attributie (30-8-2026)
+
+**Op verzoek: "Pauze menu wil ik alles in zetten. Is tevens controlekamer."** De standalone
+"↩️ Back to Start"-knop tijdens NAVIGATING is verwijderd -- Back to Start is nu UITSLUITEND
+bereikbaar via het pauzemenu (`PauseScreen.tsx`, al aanwezig sinds sectie 9.19). De
+`onBackToStart`-prop is helemaal uit `NavigationScreen.tsx` verwijderd (dode plumbing na het
+weghalen van de knop) -- `startBackToStart()` in `app/page.tsx` zelf blijft gewoon bestaan,
+alleen niet meer via een directe knop in het navigatiescherm aangeroepen, uitsluitend via
+`backToStartFromPause()`.
+
+De overgebleven "⏸ Pauze"-knop kreeg een eigen, herkenbare vormgeving (ronde witte knop met
+schaduw, 60px, teal icoon) i.p.v. een klein donker pilletje naast een andere knop -- consistent
+met de al bestaande ronde-witte-knop-stijl (bijv. de "centreer op mijn locatie"-knop op de
+Kaart-hometab).
+
+**Kaartattributie compact gemaakt, NIET verwijderd.** De permanente "MapLibre | OpenFreeMap ©
+OpenMapTiles Data from OpenStreetMap"-balk onderaan is waarschijnlijk een licentievereiste
+(OpenStreetMap's ODbL-licentie vereist attributie) -- gewoon weghalen zou een compliance-
+risico zijn. In plaats daarvan: `attributionControl: { compact: true }` bij beide
+kaartinitialisaties (`NavigationScreen.tsx` en `LiveLocationScreen.tsx`) -- MapLibre's
+ingebouwde compacte modus, klapt samen tot een klein "i"-icoontje dat pas uitklapt bij een tik,
+in plaats van een permanente balk.
+
+Geen wijziging aan `lib/route-engine/`. 381/381 tests ongewijzigd (pure UI-opruiming/-tuning,
+geen nieuwe testbare pure logica).

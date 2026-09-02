@@ -919,7 +919,6 @@ export default function Home() {
                 ? undefined
                 : () => setSelectedLoop(reverseLoopCandidate(selectedLoop))
             }
-            onBackToStart={activeBackToStartRoute ? undefined : startBackToStart}
             onPause={handlePause}
           />
         )}
