@@ -962,43 +962,71 @@ technisch gescheiden worden.
 
 ### 9.3 Architectuurbeslissing: twee strikt gescheiden routinglagen
 
+**Bijgewerkt (30-8-2026): `FirstMileRouter` hernoemd naar `LocalBikeRouter`.** Niet omdat de
+scope groter wordt, maar omdat de onderliggende capaciteit (een kort fietsstukje naar een
+willekeurig punt berekenen) sowieso als ÉÉN ding gebouwd wordt en gewoon vanuit meerdere
+plekken in de UI aangeroepen wordt -- "First/Last Mile" dekte die volle lading niet.
+
 ```
-Layer A -- GoKnoop Knot Routing (knooppunt ↔ knooppunt)
+Layer A -- KnotRouteEngine (knooppunt ↔ knooppunt)
   Bestaande GraphProvider/Route Engine/Dijkstra. ONGEWIJZIGD.
   Mag NOOIT afhankelijk worden van een externe routing-API.
   Blijft ook gebruikt zodra GoKnoop ooit zelf routes laat samenstellen.
 
-Layer B -- First/Last Mile Routing (parkeerplaats ↔ knooppunt, algemene straten)
-  Voor: parkeerplaats → eerste knooppunt, laatste knooppunt → parkeerplaats,
-        huidige GPS → parkeerplaats (Back to Start, zie 9.5).
+Layer B -- LocalBikeRouter (korte fietsverbindingen buiten het knooppuntennetwerk,
+           via gewone wegen/fietspaden)
+  Scenario's die deze laag bedient:
+    - 🅿️ Parkeerplaats → eerste knooppunt
+    - 📍 Huidige locatie → een gekozen knooppunt (bijv. "ik wil eerst naar knooppunt 18")
+    - 🔵 Laatste knooppunt → parkeerplaats
+    - ↩️ Back to Start (grotendeels Layer A, zie 9.5 -- Layer B alleen het laatste stukje)
   Externe, gratis fietsrouting-API (OpenRouteService, zie 9.4) -- UITSLUITEND voor dit
-  korte, incidentele stukje. Geen eigen algemene stratengraaf bouwen (zou neerkomen op
-  Phase 1 overdoen voor heel Nederland).
+  soort korte, incidentele stukjes. GEEN algemene routeplanner voor heel Nederland, geen
+  eigen algemene stratengraaf bouwen (zou neerkomen op Phase 1 overdoen voor heel
+  Nederland).
+```
+
+Voorbeeldflow:
+```
+Parkeerplaats
+  ↓ LocalBikeRouter
+Knooppunt 24
+  ↓ KnotRouteEngine
+24 → 31 → 36 → 42
+  ↓ LocalBikeRouter
+Parkeerplaats
 ```
 
 Harde grens, expliciet zo gekozen door de gebruiker: **"Ik wil het stratenmodel alleen voor
-parkeerplaatsen naar startknooppunt. De knooppuntenroute navigeert alleen met de
-knooppunten."**
+[korte stukjes buiten het netwerk]. De knooppuntenroute navigeert alleen met de
+knooppunten."** De scope blijft klein: geen algemene routeplanner, alleen korte
+verbindingen waarbij GoKnoop van A naar B moet buiten de knooppuntenroute om.
 
 ### 9.4 OpenRouteService -- geverifieerd, geen aanname
 
 Webzoekopdracht bevestigt (officiële ORS-documentatie): directions-endpoint, standaard
 **2000 aanvragen/dag, 40/minuut** (een secundaire bron noemt 2500/dag, 40.000/maand -- in
-beide gevallen ruim voldoende voor dit lage-volume-gebruik: hooguit 1-2 aanvragen per
-gebruikerssessie, niet per GPS-update). **Bewaar dit in de gaten voor later, niet nu
-blokkerend**: het quotum geldt per API-key, dus voor de HELE app samen, niet per gebruiker --
-bij veel gelijktijdige gebruikers kan dit ooit een aandachtspunt worden.
+beide gevallen ruim voldoende voor dit lage-volume-gebruik: bij de bredere scope uit 9.3
+(parkeerplaats↔knooppunt, GPS↔gekozen knooppunt, Back to Start) typisch enkele aanvragen per
+rit, niet per GPS-update). **Bewaar dit in de gaten voor later, niet nu blokkerend**: het
+quotum geldt per API-key, dus voor de HELE app samen, niet per gebruiker -- bij veel
+gelijktijdige gebruikers kan dit ooit een aandachtspunt worden.
 
 Niet rechtstreeks hardcoden. Abstractielaag, zelfde patroon als `GraphProvider` al gebruikt in
 deze codebase (interface + concrete implementatie):
 
 ```
-FirstMileRouter (interface)
+LocalBikeRouter (interface)
+  route(origin, destination, profile: "cycling" | "foot")
       ↓
 OpenRouteServiceAdapter (concrete implementatie)
       ↓
 ORS
 ```
+
+**Bouw eerst uitsluitend `profile: "cycling"`.** Het type staat er zo breed bij zodat een
+wandel-scenario later, als daar een concrete behoefte voor ontstaat, zonder herontwerp kan --
+dat is nu GEEN bouwopdracht, alleen een bewust opengehouden deur in de interface.
 
 Zodat een andere provider later mogelijk is zonder de navigatie-architectuur opnieuw te
 bouwen.
@@ -1072,9 +1100,9 @@ Een volgende sessie hoeft deze dus niet opnieuw te specificeren of te bouwen -- 
 ```
 Fase 1  Audit -- AL GEDAAN (sectie 9.2), niet herhalen.
 Fase 2  Datamodel -- PhysicalAnchor + minimale NavigationSession (sectie 9.7).
-Fase 3  FirstMileRouter-abstractie + OpenRouteServiceAdapter (sectie 9.4).
+Fase 3  LocalBikeRouter-abstractie + OpenRouteServiceAdapter (sectie 9.4).
         Bestaande Layer A (Knot Route Engine) blijft volledig onaangeroerd.
-Fase 4  Parkeerplaats → eerste knooppunt, via FirstMileRouter.
+Fase 4  Parkeerplaats → eerste knooppunt, via LocalBikeRouter.
         Bestaande fallback-logica (sectie 6B) hergebruiken waar relevant.
 Fase 5  Back to Start -- met de vereenvoudiging uit 9.5 (Layer A voor het grootste deel,
         Layer B alleen voor het laatste stukje). Bestemming = physicalStart, NOOIT
