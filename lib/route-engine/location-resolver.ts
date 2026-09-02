@@ -74,14 +74,24 @@ export function resolveFromWgs84(
   return resolveNearestNodes(provider, rd, limit);
 }
 
-/** Plaatsnaam -> geocoding -> dichtstbijzijnde nodes. */
+/**
+ * Plaatsnaam -> geocoding -> dichtstbijzijnde nodes.
+ *
+ * UITGEBREID (30-8-2026, "route naar een adres"-feature): geeft nu ook het
+ * geocodede punt zelf terug (`geocodedLat`/`geocodedLon`), niet alleen de
+ * dichtstbijzijnde knooppunt-kandidaten. Eerder werd dit punt intern wel
+ * berekend maar weggegooid -- nodig voor het laatste stukje (aankomst-
+ * knooppunt -> exact adres, via LocalBikeRouter). Puur additief, bestaande
+ * aanroepers die alleen `candidates`/`geocodedAs` lezen blijven ongewijzigd
+ * werken.
+ */
 export async function resolveFromPlaceName(
   provider: GraphProvider,
   placeName: string,
   limit = 5
-): Promise<{ candidates: LocationCandidate[]; geocodedAs: string | null }> {
+): Promise<{ candidates: LocationCandidate[]; geocodedAs: string | null; geocodedLat: number | null; geocodedLon: number | null }> {
   const geo = await geocodePlaceName(placeName);
-  if (!geo) return { candidates: [], geocodedAs: null };
+  if (!geo) return { candidates: [], geocodedAs: null, geocodedLat: null, geocodedLon: null };
   const rd = wgs84ToRd(geo.lat, geo.lon);
-  return { candidates: resolveNearestNodes(provider, rd, limit), geocodedAs: geo.displayName };
+  return { candidates: resolveNearestNodes(provider, rd, limit), geocodedAs: geo.displayName, geocodedLat: geo.lat, geocodedLon: geo.lon };
 }

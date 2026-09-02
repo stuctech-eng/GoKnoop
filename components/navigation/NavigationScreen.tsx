@@ -155,7 +155,14 @@ export type NavigationScreenProps = {
    * al vooraf berekende stukje naar de parkeerplaats (link naar Kaarten i.p.v. nieuwe
    * in-app-navigatie, zelfde bewuste keuze als "auto naar parkeerplaats", sectie 9.6).
    */
-  lastMileInfo?: { distanceM: number; destinationLat: number; destinationLon: number; destinationLabel?: string };
+  lastMileInfo?: {
+    distanceM: number;
+    destinationLat: number;
+    destinationLon: number;
+    destinationLabel?: string;
+    /** "parking" (Back to Start, sectie 9.18) of "destination" (route naar een adres, sectie 9.21) -- bepaalt titel/icoon van de aankomstkaart. Standaard "parking". */
+    kind?: "parking" | "destination";
+  };
   /**
    * Pauzeknop (sectie 9.19, 30-8-2026): aangeroepen met alles wat nodig is voor een
    * snapshot -- de aanroeper (app/page.tsx) bewaart 'm en toont het aparte PauseScreen.
@@ -747,8 +754,10 @@ export default function NavigationScreen({
                 boxSizing: "border-box",
               }}
             >
-              <div style={{ fontSize: 34, lineHeight: 1, marginBottom: 8 }}>🅿️</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: "#FFFFFF" }}>Bijna bij je auto</div>
+              <div style={{ fontSize: 34, lineHeight: 1, marginBottom: 8 }}>{lastMileInfo.kind === "destination" ? "🎯" : "🅿️"}</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#FFFFFF" }}>
+                {lastMileInfo.kind === "destination" ? "Bijna bij je bestemming" : "Bijna bij je auto"}
+              </div>
               <div style={{ fontSize: 15, color: "#FFFFFF", marginTop: 4 }}>
                 Nog {Math.round(lastMileInfo.distanceM)} m naar {lastMileInfo.destinationLabel ?? "je parkeerplaats"}
               </div>

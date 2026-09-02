@@ -1538,3 +1538,58 @@ in plaats van een permanente balk.
 
 Geen wijziging aan `lib/route-engine/`. 381/381 tests ongewijzigd (pure UI-opruiming/-tuning,
 geen nieuwe testbare pure logica).
+
+---
+
+## 9.21 "Route naar een adres" — ✅ GEBOUWD (30-8-2026)
+
+Nieuwe functie: van de huidige locatie naar een willekeurig adres/plaats (bijv. "Hilversum,
+Kerkstraat 5"), niet alleen rondjes of Back to Start. **Bevestigd tijdens het ontwerpgesprek:
+géén nieuwe motor nodig** -- exact dezelfde drie-lagen-architectuur als Fase 4/5, nu op een
+willekeurige bestemming toegepast:
+
+```
+herkomst (GPS)   -- LocalBikeRouter -- automatisch via fase A, GEEN nieuwe code nodig
+  ↓ dichtstbijzijnde knooppunt bij herkomst
+KnotRouteEngine, MET fallback aan BEIDE kanten (nieuw)
+  ↓ dichtstbijzijnde knooppunt bij bestemming
+LocalBikeRouter -- laatste stukje naar het exacte adres (hergebruik van Back to Start's
+                   lastMileInfo-mechanisme, nu gegeneraliseerd)
+```
+
+**UI-beslissing, bewust zo gekozen (i.p.v. een centraal "Overzicht"-menu):** de eerder
+vastgelegde keuze "Home = rustige, dominante kaart, geen knoppenlijst" bleef staan. In plaats
+daarvan: een NIEUW, apart blok op de bestaande Zoeken-tab, met een eigen invoerveld -- niet
+vermengd met de bestaande plaatsnaam-zoekfunctie (die gaat naar de "hoeveel km wil je
+fietsen"-rondje-flow, functioneel iets anders).
+
+**Nieuw, genuine engine-stuk**: `lib/route-engine/route-between-candidates.ts`
+(`computeRouteBetweenCandidatesWithFallback`) -- de ENIGE echt nieuwe berekening. Herkomst-
+fallback (`computeRouteWithFallback`, al bestaand) werkte al aan de vertrekkant; nu ook de
+BESTEMMING kan een onbruikbare dichtstbijzijnde kandidaat hebben (zelfde Volendam-patroon,
+sectie 6B, aan de andere kant van de route) -- dit probeert bestemmingskandidaten op volgorde,
+gebruikt voor elk de volledige, al bestaande herkomst-fallback. 4 tests, incl. een test die
+per ongeluk "van een node naar zichzelf" als fixture had (triviaal altijd geslaagd, geen
+goede test) -- gecorrigeerd naar twee daadwerkelijk gescheiden, onbereikbare nodes.
+
+**Kleine, additieve uitbreiding elders, nodig voor het laatste stukje**:
+`resolveFromPlaceName()` (`location-resolver.ts`) gaf het geocodede punt zelf nooit terug
+(alleen de dichtstbijzijnde knooppunt-kandidaten) -- het punt werd intern al berekend maar
+weggegooid. Nu `geocodedLat`/`geocodedLon` ook in de respons, puur additief (bestaande
+aanroepers die alleen `candidates`/`geocodedAs` lezen ongewijzigd).
+
+**Nieuw endpoint** `POST /api/route/to-destination` -- zelfde structuur als
+`/api/route/back-to-start` (sectie 9.18), nu met fallback aan BEIDE kanten i.p.v. een vast
+doelknooppunt.
+
+**Client**: `NavigationScreen`'s `lastMileInfo` kreeg een `kind?: "parking" | "destination"`-
+veld, zodat de aankomstkaart "🅿️ Bijna bij je auto" (Back to Start) of "🎯 Bijna bij je
+bestemming" (dit) toont, afhankelijk van de context -- zelfde kaart, gegeneraliseerd i.p.v.
+gedupliceerd. `app/page.tsx` hergebruikt LETTERLIJK de bestaande `activeBackToStartRoute`-
+state/render-pad (structureel identiek: knooppunten-been + laatste-stukje-info) -- geen
+nieuwe state, geen nieuwe NavigationScreen-koppeling nodig.
+
+Geen wijziging aan `lib/route-engine/`'s KERN (Dijkstra/GraphProvider zelf) -- alleen een
+nieuw, dun bestand eromheen + een additieve responsuitbreiding.
+
+**385/385 tests (381 + 4 nieuw), `tsc` schoon.** Nog geen echte iPhone-validatie.

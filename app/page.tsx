@@ -101,7 +101,7 @@ export default function Home() {
     nodeSequence: string[];
     nodeDisplayNumbers: string[];
     datasetVersionId: string;
-    lastMileInfo: { distanceM: number; destinationLat: number; destinationLon: number; destinationLabel?: string };
+    lastMileInfo: { distanceM: number; destinationLat: number; destinationLon: number; destinationLabel?: string; kind?: "parking" | "destination" };
   } | null>(null);
   /** Pauzeknop (sectie 9.19): bij mount gecheckt op een bestaande gepauzeerde rit (app opnieuw
    *  geopend/telefoon herstart). */
@@ -113,6 +113,9 @@ export default function Home() {
   const [showSaveNamePrompt, setShowSaveNamePrompt] = useState(false);
   const [routeNameInput, setRouteNameInput] = useState("");
   const [placeName, setPlaceName] = useState("");
+  /** Sectie 9.21 ("route naar een adres") -- eigen, apart veld/state van de bestaande plaatsnaam-zoekfunctie. */
+  const [destinationInput, setDestinationInput] = useState("");
+  const [routeToDestinationLoading, setRouteToDestinationLoading] = useState(false);
   const [startLocation, setStartLocation] = useState<LocationCandidate | null>(null);
   const [locationCandidates, setLocationCandidates] = useState<LocationCandidate[]>([]);
   const [resolvedStartNode, setResolvedStartNode] = useState<{
@@ -311,6 +314,7 @@ export default function Home() {
           destinationLat: payload.physicalStart.lat,
           destinationLon: payload.physicalStart.lon,
           destinationLabel: payload.physicalStart.name,
+          kind: "parking" as const,
         },
       });
       setStep("navigating");
@@ -318,6 +322,96 @@ export default function Home() {
       setErrorMessage("Er ging iets mis bij het berekenen van Back to Start.");
       setStep("error");
     }
+  }
+
+  /**
+   * "Route naar een adres" (sectie 9.21): resolvet zowel de herkomst (huidige GPS-positie,
+   * eenmalig opgevraagd) als de bestemming (plaatsnaam/adres, via het bestaande
+   * `/api/location/resolve` -- ondersteunt al plaatsnamen sinds eerder), en berekent dan de
+   * volledige route. Hergebruikt bewust dezelfde `activeBackToStartRoute`-state/render-pad als
+   * Back to Start (sectie 9.18) -- structureel identiek (knooppunten-been + laatste-stukje-info).
+   */
+  function startRouteToDestination() {
+    if (!destinationInput.trim()) return;
+    if (!navigator.geolocation) {
+      setErrorMessage("Dit toestel ondersteunt geen locatiebepaling.");
+      setStep("error");
+      return;
+    }
+    setRouteToDestinationLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const originRes = await fetch("/api/location/resolve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lat: position.coords.latitude, lon: position.coords.longitude, limit: 5 }),
+          });
+          const originData = await originRes.json();
+          if (!originRes.ok || !originData.candidates?.length) {
+            setErrorMessage("Kon je huidige locatie niet bepalen.");
+            setStep("error");
+            return;
+          }
+
+          const destRes = await fetch("/api/location/resolve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ placeName: destinationInput, limit: 5 }),
+          });
+          const destData = await destRes.json();
+          if (!destRes.ok || !destData.candidates?.length || destData.geocodedLat == null) {
+            setErrorMessage(`We konden '${destinationInput}' niet vinden.`);
+            setStep("error");
+            return;
+          }
+
+          const routeRes = await fetch("/api/route/to-destination", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              originCandidateNodeIds: originData.candidates.map((c: { logicalNodeId: string }) => c.logicalNodeId),
+              originCandidateDistancesM: originData.candidates.map((c: { distanceM: number }) => c.distanceM),
+              destinationCandidateNodeIds: destData.candidates.map((c: { logicalNodeId: string }) => c.logicalNodeId),
+              destinationCandidateDistancesM: destData.candidates.map((c: { distanceM: number }) => c.distanceM),
+              destinationLat: destData.geocodedLat,
+              destinationLon: destData.geocodedLon,
+            }),
+          });
+          const routeData = await routeRes.json();
+          if (!routeRes.ok) {
+            setErrorMessage(routeData.error ?? "Kon geen route naar dit adres vinden.");
+            setStep("error");
+            return;
+          }
+
+          setActiveBackToStartRoute({
+            edges: routeData.knotLeg.resolvedEdges,
+            nodeSequence: routeData.knotLeg.route.nodes,
+            nodeDisplayNumbers: routeData.knotLeg.nodeDisplayNumbers,
+            datasetVersionId: routeData.knotLeg.route.datasetVersionId,
+            lastMileInfo: {
+              distanceM: routeData.lastMileLeg.distanceM,
+              destinationLat: destData.geocodedLat,
+              destinationLon: destData.geocodedLon,
+              destinationLabel: destData.geocodedAs ?? destinationInput,
+              kind: "destination",
+            },
+          });
+          setStep("navigating");
+        } catch {
+          setErrorMessage("Er ging iets mis bij het berekenen van de route.");
+          setStep("error");
+        } finally {
+          setRouteToDestinationLoading(false);
+        }
+      },
+      () => {
+        setErrorMessage("Kon je locatie niet bepalen. Geef locatietoegang, of probeer het opnieuw.");
+        setStep("error");
+        setRouteToDestinationLoading(false);
+      }
+    );
   }
 
   /**
@@ -436,6 +530,7 @@ export default function Home() {
     setActiveSavedRoute(null);
     setActiveBackToStartRoute(null);
     setPlaceName("");
+    setDestinationInput("");
     setStartLocation(null);
     setLocationCandidates([]);
     setResolvedStartNode(null);
@@ -535,6 +630,47 @@ export default function Home() {
                   }}
                 >
                   Zoek plaats
+                </button>
+
+                <div style={{ borderTop: "1px solid #e5e5e0", margin: "2rem 0 1.5rem" }} />
+
+                <h2 style={{ fontSize: 20, marginBottom: 8 }}>Route naar een adres</h2>
+                <p style={{ fontSize: 13, opacity: 0.65, marginBottom: 12 }}>
+                  Bijv. "Hilversum, Kerkstraat 5" — GoKnoop brengt je er vanaf je huidige locatie, via het
+                  knooppuntennetwerk plus het laatste stukje straten.
+                </p>
+                <input
+                  value={destinationInput}
+                  onChange={(e) => setDestinationInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && startRouteToDestination()}
+                  placeholder="Plaats + straatnaam"
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    padding: "0 16px",
+                    fontSize: 17,
+                    border: "2px solid var(--color-sand)",
+                    borderRadius: "var(--radius-card)",
+                    background: "white",
+                  }}
+                />
+                <button
+                  onClick={startRouteToDestination}
+                  disabled={!destinationInput.trim() || routeToDestinationLoading}
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    marginTop: 12,
+                    background: destinationInput.trim() ? "var(--color-knoop-green)" : "var(--color-sand)",
+                    color: destinationInput.trim() ? "white" : "var(--color-ink)",
+                    opacity: destinationInput.trim() ? 1 : 0.5,
+                    border: "none",
+                    borderRadius: "var(--radius-card)",
+                    fontSize: 17,
+                    fontWeight: 600,
+                  }}
+                >
+                  {routeToDestinationLoading ? "Bezig..." : "🚴 Route hierheen vanaf mijn locatie"}
                 </button>
               </section>
             )}

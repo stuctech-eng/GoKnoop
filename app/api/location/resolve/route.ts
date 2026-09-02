@@ -9,7 +9,12 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/location/resolve
  * Body: { lat, lon } OF { placeName }, optioneel { limit }
- * Response: { candidates: LocationCandidate[], geocodedAs?: string }
+ * Response: { candidates: LocationCandidate[], geocodedAs?, geocodedLat?, geocodedLon? }
+ *
+ * UITGEBREID (30-8-2026, "route naar een adres"-feature, sectie 9.21): geeft bij
+ * plaatsnaam-resolutie nu ook het geocodede punt zelf terug (`geocodedLat`/`geocodedLon`),
+ * niet alleen de dichtstbijzijnde knooppunt-kandidaten -- nodig voor het laatste stukje
+ * (aankomst-knooppunt -> exact adres, via LocalBikeRouter). Puur additief.
  */
 
 export async function POST(req: NextRequest) {
@@ -37,11 +42,11 @@ export async function POST(req: NextRequest) {
     await provider.load();
 
     if (placeName) {
-      const { candidates, geocodedAs } = await resolveFromPlaceName(provider, placeName, limit);
+      const { candidates, geocodedAs, geocodedLat, geocodedLon } = await resolveFromPlaceName(provider, placeName, limit);
       if (!geocodedAs) {
         return NextResponse.json({ error: `Kon '${placeName}' niet vinden.` }, { status: 404 });
       }
-      return NextResponse.json({ candidates, geocodedAs, datasetVersionId });
+      return NextResponse.json({ candidates, geocodedAs, geocodedLat, geocodedLon, datasetVersionId });
     }
 
     const candidates = resolveFromWgs84(provider, lat!, lon!, limit);
