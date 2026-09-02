@@ -1317,3 +1317,10 @@ oriënteren vs. continu volgen tijdens actieve navigatie) blijven gescheiden, ni
 
 Geen wijziging aan `lib/route-engine/`. 373/373 tests ongewijzigd (pure UI-wiring, geen
 nieuwe testbare pure logica).
+
+**Correctie, zelfde dag**: de eerste versie gebruikte een uniforme marge (70px alle kanten) --
+bij een dicht ingezoomde weergave duwde de richtingkaart bovenin (die veel hoger is dan
+70px) een stuk van de net getekende route uit beeld, erachter verborgen. Exact dezelfde les
+als sectie 6H's fitBounds-fix voor het overzichtsscherm, nu opnieuw toegepast op déze,
+nieuwe fitBounds-aanroep: asymmetrische marge (`{ top: 200, bottom: 80, left: 60, right: 60
+}`). 373/373 tests ongewijzigd, `tsc` schoon.

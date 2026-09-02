@@ -375,7 +375,10 @@ export default function NavigationScreen({
                 [Math.min(...lons), Math.min(...lats)],
                 [Math.max(...lons), Math.max(...lats)],
               ],
-              { padding: 70, animate: true }
+              // Asymmetrische marge, zelfde les als sectie 6H: de richtingkaart bovenin is
+              // veel hoger dan een uniforme marge -- zonder dat duwt de kaart een stuk van
+              // de net getekende route uit beeld, achter de kaart.
+              { padding: { top: 200, bottom: 80, left: 60, right: 60 }, animate: true }
             );
             hasFitBoundsToStartRef.current = true;
           }
