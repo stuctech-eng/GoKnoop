@@ -60,3 +60,17 @@ export type NavigationSessionInfo = {
   /** Route.nodes[0] -- BLIJFT apart van physicalStart, nooit door elkaar halen. */
   routeStartNodeId: string;
 };
+
+/**
+ * Bepaalt het fysieke vertrekpunt voor een sessie -- Fase 4 (sectie 9.12,
+ * punt 5/6), voor het eerst daadwerkelijk gebruikt in `NavigationScreen.tsx`.
+ *
+ * CRUCIALE REGEL (sectie 9.7): eenmaal vastgelegd, NOOIT overschrijven
+ * tijdens de sessie -- ook niet als latere GPS-samples een licht andere
+ * (ruis) of zelfs sterk afwijkende positie geven. Puur, geen state --
+ * de aanroeper (React-component) bewaart het resultaat zelf in een ref.
+ */
+export function resolvePhysicalStart(current: PhysicalAnchor | null, sample: { lat: number; lon: number }): PhysicalAnchor {
+  if (current !== null) return current;
+  return { type: "parking", lat: sample.lat, lon: sample.lon };
+}

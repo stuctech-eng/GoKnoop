@@ -1118,8 +1118,7 @@ Fase 1  Audit -- AL GEDAAN (sectie 9.2), niet herhalen.
 Fase 2  ✅ GEBOUWD (30-8-2026) -- PhysicalAnchor + minimale NavigationSessionInfo (sectie 9.7).
 Fase 3  ✅ GEBOUWD (30-8-2026) -- LocalBikeRouter + RoutingProvider + OpenRouteServiceAdapter (sectie 9.4/9.11).
         Bestaande Layer A (Knot Route Engine) blijft volledig onaangeroerd.
-Fase 4  Parkeerplaats → eerste knooppunt, via LocalBikeRouter.
-        Bestaande fallback-logica (sectie 6B) hergebruiken waar relevant.
+Fase 4  ✅ GEBOUWD (30-8-2026) -- Parkeerplaats → eerste knooppunt, via LocalBikeRouter (sectie 9.13).
 Fase 5  Back to Start -- met de vereenvoudiging uit 9.5 (Layer A voor het grootste deel,
         Layer B alleen voor het laatste stukje). Bestemming = physicalStart, NOOIT
         route.nodes[0]/laatste knooppunt/huidige route-start.
@@ -1193,3 +1192,72 @@ Fase 7  Google Maps/Apple Maps-link voor de autorit (sectie 9.6) -- simpel, geen
 **16 nieuwe tests (6 + 10), 367/367 totaal, `tsc` schoon.** `lib/route-engine/` (de
 Knot Route Engine) is dit hele Fase-3-traject NIET aangeraakt -- expliciet gecontroleerd.
 
+### 9.13 Fase 4 — PhysicalAnchor + LocalBikeRouter geïntegreerd: parking → routeStartNode — ✅ GEBOUWD (30-8-2026)
+
+**Audit vóór het bouwen (zelfde discipline als Fase 2/3), bevindingen (concreet uit de code,
+niet aangenomen):**
+1. Navigatie naar `route.nodes[0]` startte exact in `NavigationScreen.tsx`'s
+   `fetchRouteToStart()`, getriggerd zodra `currentPhase === "TO_START"` (eenmalig, via
+   `hasRequestedRouteToStartRef`).
+2. GPS → eerste knooppunt liep tot nu toe via `computeRouteWithFallback()`
+   (`lib/route-engine/route-to-point-fallback.ts`) -- dus via het KNOOPPUNTENNETWERK zelf
+   (Layer A), niet via straten. Dat was precies het gat dat Fase 4 moest dichten.
+3. `route.nodes[0]`/`nodeSequence[0]` werd op twee plekken als fysiek vertrekpunt behandeld:
+   de `toLogicalNodeId` in de oude fetch-aanroep, en `bearingDegrees(rdPosition,
+   model.geometry[0])` voor de richtingpijl -- nergens bestond een apart `physicalStart`-
+   begrip.
+4. De bestaande candidate-fallback (`/api/location/resolve` → kandidaten) bleek bij nader
+   inzien NIET meer nodig voor de HERKOMST-kant: die was er alleen omdat de OUDE aanpak een
+   knooppunt-kandidaat nodig had om Dijkstra vanaf te starten. `LocalBikeRouter` routeert
+   rechtstreeks tussen twee willekeurige GPS-punten -- geen knooppunt-kandidaat nodig voor
+   de herkomst. De candidate-fallback zelf blijft gewoon bestaan en gebruikt op ANDERE
+   plekken (routezoeken, `/api/route/loop`) -- hier alleen niet meer nodig.
+
+**Gebouwd:**
+- **`POST /api/route/to-start` herschreven** (niet additief, de oude knooppunt-gebaseerde
+  aanpak was zelf al een noodgreep): nieuw contract `{origin: {lat,lon}, destination:
+  {lat,lon}} → {geometry, distanceM, durationS} | {error, reason}`. Roept `LocalBikeRouter`
+  + `OpenRouteServiceAdapter` aan. Geen Firestore/GraphProvider-toegang meer nodig voor dit
+  endpoint (de client bepaalt `destination` zelf, zie hieronder) -- **`lib/route-engine/`
+  wordt door dit bestand zelfs niet meer geïmporteerd.**
+- **`resolvePhysicalStart()`** (nieuw, `lib/navigation/physical-anchor.ts`) -- de "nooit
+  overschrijven"-regel (sectie 9.7) als pure, apart geteste functie i.p.v. inline
+  React-logica: `current !== null ? current : nieuw PhysicalAnchor van de sample`. 3 nieuwe
+  tests (9 totaal in dit bestand), incl. een expliciete GPS-ruis-simulatie (drie licht
+  verschillende samples na elkaar, bevestigt dat alleen de EERSTE telt).
+- **`NavigationScreen.tsx`**: `physicalStartRef` toegevoegd, gevuld via
+  `resolvePhysicalStart()` bij de eerste `fetchRouteToStart()`-aanroep, gereset bij `stop()`
+  (tussen sessies, nooit tussentijds). `destination` wordt nu client-side bepaald
+  (`rdToWgs84(model.geometry[0].x, model.geometry[0].y)` -- al lokaal bekend, geen
+  serveraanroep nodig). De getekende "route naar startpunt"-lijn is nu een simpele
+  GeoJSON `LineString` rechtstreeks uit `LocalBikeRouter`'s polylijn -- BEWUST GEEN
+  `buildRouteProgressModel`/`buildRouteGeoJson` meer (die zijn specifiek voor het
+  edge-gebaseerde knooppuntenmodel, dat past hier niet meer -- Layer B levert geen
+  edges/nodes, alleen een puntenreeks + totaalafstand).
+
+**De 8 verplichte tests, expliciet gedekt:**
+1. parking → eerste node -- `local-bike-router.test.ts`, "[verplichte test 1]"
+2. parking buiten het knooppuntennetwerk -- idem, "[verplichte test 2]" (bewijst dat
+   LocalBikeRouter geen enkele relatie met het knooppuntennetwerk vereist)
+3. parking dicht bij een node -- idem, "[verplichte test 3]"
+4. GPS niet exact op parking -- `physical-anchor.test.ts`, "[verplichte test 4]"
+   (GPS-ruis-simulatie)
+5. bestaande nearest-node fallback blijft werken -- expliciet herbevestigd door
+   `route-to-point-fallback.test.ts`/`start-node-scoring.test.ts` opnieuw te draaien
+   (ongewijzigd, 3+5 tests, allemaal groen)
+6. physicalStart blijft onveranderd -- `physical-anchor.test.ts`, "[verplichte test 6]"
+7. bestaande node-route blijft werken -- `loop-route-generator.integration.test.ts`/
+   `loop-route-generator-history.test.ts` opnieuw bevestigd (2+4 tests, ongewijzigd)
+8. volledige testsuite blijft groen -- **373/373**, `tsc` schoon
+
+**`lib/route-engine/` is dit hele Fase-4-traject NIET aangepast** (geen enkel bestand in die
+map is deze fase gewijzigd) -- expliciet gecontroleerd, niet alleen aangenomen.
+
+**Bewust NIET gedaan in Fase 4 (zoals afgesproken):** geen Back to Start (Fase 5), geen
+UI-herontwerp, geen routegeschiedenis-wijziging, geen nieuwe opslag/API buiten wat hier
+strikt nodig was.
+
+**Volgende stap, per de gebruiker's eigen voorstel:** pas NU een echte ORS-API-key
+aanvragen en één integratietest doen -- niet alleen de adapter los, maar de VOLLEDIGE keten
+`parkeerplaats → LocalBikeRouter → eerste knooppunt → KnotRouteEngine`. Dat is nu voor het
+eerst een zinvolle test, want de keten staat er nu daadwerkelijk.

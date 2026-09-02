@@ -1,73 +1,70 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/firebase-admin";
-import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
-import { computeRouteWithFallback } from "@/lib/route-engine/route-to-point-fallback";
-import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
+import { LocalBikeRouter } from "@/lib/local-bike-router/local-bike-router";
+import { OpenRouteServiceAdapter } from "@/lib/local-bike-router/open-route-service-adapter";
 
 export const maxDuration = 30;
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/route/to-start
- * Body: { candidateNodeIds: string[], candidateDistancesM?: number[], toLogicalNodeId: string }
- * Response bij succes: { route, resolvedEdges, nodeDisplayNumbers, selectedStartNodeId,
- *   selectedStartNodeDisplayNumber, selectedCandidateRank }
- * Response bij falen: 404 { error, reason: "no_usable_candidate", candidatesAttempted }
+ * Body: { origin: {lat, lon}, destination: {lat, lon} }
+ * Response bij succes: { geometry: {lat,lon}[], distanceM, durationS }
+ * Response bij falen: { error, reason } (404/502 afhankelijk van het type fout)
  *
- * Sectie 6M/6N: "navigeer naar het startpunt" -- de live GPS-positie wordt
- * (client-side, in NavigationScreen) eerst geresolved naar kandidaat-
- * knooppunten via het bestaande `/api/location/resolve`, en die kandidaten
- * worden hier met dezelfde fallback-logica als de rondje-generator (sectie
- * 6B) geprobeerd totdat er een bruikbare route naar het startknooppunt
- * gevonden is.
+ * FASE 4 (GOKNOOP-MASTER.md sectie 9.11/9.12, 30-8-2026) -- HERSCHREVEN,
+ * NIET meer additief naast het oude gedrag: dit endpoint routeerde eerder
+ * via `computeRouteWithFallback()` (het knooppuntennetwerk zelf, Layer A).
+ * Dat was zelf al een noodgreep -- geen straten, alleen knooppunt-edges.
+ * Nu vervangen door `LocalBikeRouter` (Layer B, sectie 9.3): een fysiek
+ * vertrekpunt (parkeerplaats, of gewoon de live positie) hoeft namelijk
+ * helemaal geen knooppunt-kandidaat te zijn -- `LocalBikeRouter` routeert
+ * rechtstreeks tussen twee willekeurige GPS-punten via gewone straten.
+ *
+ * Geen wijziging aan `lib/route-engine/` (Fase 4-eis, sectie 9.12 punt 8):
+ * dit bestand importeert er zelfs niets meer uit. De client
+ * (`NavigationScreen.tsx`) bepaalt `destination` zelf (de coördinaten van
+ * `route.nodes[0]`, al lokaal bekend via `model.geometry[0]`) -- dit
+ * endpoint heeft dus geen Firestore/GraphProvider-toegang meer nodig voor
+ * deze specifieke aanroep.
  */
 export async function POST(req: NextRequest) {
-  let body: { candidateNodeIds?: string[]; candidateDistancesM?: number[]; toLogicalNodeId?: string };
+  let body: { origin?: { lat: number; lon: number }; destination?: { lat: number; lon: number } };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
   }
 
-  const { candidateNodeIds, candidateDistancesM, toLogicalNodeId } = body;
-  if (!candidateNodeIds || candidateNodeIds.length === 0 || !toLogicalNodeId) {
-    return NextResponse.json({ error: "candidateNodeIds en toLogicalNodeId zijn verplicht." }, { status: 400 });
+  const { origin, destination } = body;
+  if (
+    !origin ||
+    !destination ||
+    typeof origin.lat !== "number" ||
+    typeof origin.lon !== "number" ||
+    typeof destination.lat !== "number" ||
+    typeof destination.lon !== "number"
+  ) {
+    return NextResponse.json({ error: "origin en destination ({lat, lon}) zijn verplicht." }, { status: 400 });
   }
 
-  const candidates: LoopStartCandidate[] = candidateNodeIds.map((logicalNodeId, i) => ({
-    logicalNodeId,
-    distanceM: candidateDistancesM?.[i],
-  }));
-
   try {
-    const db = getDb();
-    const activeDatasetSnap = await db.collection("config").doc("activeDataset").get();
-    if (!activeDatasetSnap.exists) {
-      return NextResponse.json({ error: "Geen actieve dataset geconfigureerd." }, { status: 500 });
-    }
-    const datasetVersionId = activeDatasetSnap.data()!.datasetVersionId as string;
+    const router = new LocalBikeRouter(new OpenRouteServiceAdapter());
+    const result = await router.route(origin, destination, "cycling");
 
-    const provider = new CachedGraphProvider(datasetVersionId);
-    await provider.load();
-
-    if (!provider.getNode(toLogicalNodeId)) {
-      return NextResponse.json({ error: `toLogicalNodeId '${toLogicalNodeId}' bestaat niet in dataset ${datasetVersionId}.` }, { status: 404 });
-    }
-
-    const result = computeRouteWithFallback(provider, datasetVersionId, candidates, toLogicalNodeId);
-
-    if ("ok" in result && result.ok === false) {
-      return NextResponse.json(
-        { error: result.message, reason: result.reason, candidatesAttempted: result.candidatesAttempted },
-        { status: 404 }
-      );
+    if ("reason" in result) {
+      const status = result.reason === "no_route_found" ? 404 : 502;
+      return NextResponse.json({ error: result.message, reason: result.reason }, { status });
     }
 
     return NextResponse.json(result);
   } catch (err) {
+    // Vangt o.a. de "OPENROUTESERVICE_API_KEY ontbreekt"-fout op (constructor van
+    // OpenRouteServiceAdapter) -- graceful 500 i.p.v. een onafgevangen crash, zodat de app
+    // bruikbaar blijft (fase A valt terug op de hemelsbrede afstand/richting) totdat er een
+    // echte ORS-sleutel geconfigureerd is.
     return NextResponse.json(
       { error: "Route-naar-startpunt-berekening mislukt.", details: err instanceof Error ? err.message : String(err) },
-      { status: 502 }
+      { status: 500 }
     );
   }
 }

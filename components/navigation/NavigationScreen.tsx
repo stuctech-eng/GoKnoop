@@ -47,7 +47,9 @@ import { distanceBetween, bearingDegrees } from "@/lib/navigation/matching/geome
 import { determinePreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
 import { selectHeadingDeg, smoothHeadingDeg, relativeAngleDeg } from "@/lib/navigation/direction/relative-direction";
 import type { PreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
-import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
+import { wgs84ToRd, rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
+import type { PhysicalAnchor } from "@/lib/navigation/physical-anchor";
+import { resolvePhysicalStart } from "@/lib/navigation/physical-anchor";
 import { buildRouteGeoJson } from "@/lib/map/route-geometry-adapter";
 import { buildPositionMarkerGeoJson } from "@/lib/map/position-marker-adapter";
 import { recordRiddenRoute } from "@/lib/history/ridden-routes-store";
@@ -148,6 +150,14 @@ export default function NavigationScreen({
   const smoothedHeadingRef = useRef<number | null>(null);
   const hasRequestedRouteToStartRef = useRef(false);
   const routeToStartDistanceRef = useRef<number | null>(null);
+  /**
+   * Fase 4 (sectie 9.12, punt 5/6): het fysieke vertrekpunt, EENMALIG vastgelegd bij de
+   * eerste sample in fase TO_START, en daarna NOOIT overschreven tijdens de sessie
+   * (cruciale regel, sectie 9.7 -- essentieel voor een latere Back to Start, Fase 5, hier
+   * nog niet gebouwd). Blijft volledig onafhankelijk van `nodeSequence[0]`
+   * (routeStartNodeId) -- twee aparte concepten, nooit door elkaar gehaald.
+   */
+  const physicalStartRef = useRef<PhysicalAnchor | null>(null);
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [running, setRunning] = useState(false);
@@ -281,32 +291,32 @@ export default function NavigationScreen({
     let sessionStarted = false;
 
     /**
-     * Sectie 6N: echte, straatvolgende route naar het startpunt -- op verzoek
-     * ("navigeren naar het knooppunt", niet alleen hemelsbrede afstand+richting).
-     * Eenmalig aangeroepen (hasRequestedRouteToStartRef), geen doorlopende
-     * herberekening bij elke sample -- bewust een scoped-eerste-versie, geen
-     * live re-routing als de gebruiker een andere weg neemt.
+     * FASE 4 (sectie 9.11/9.12, 30-8-2026) -- HERSCHREVEN: routeerde eerder via
+     * `computeRouteWithFallback()` (het knooppuntennetwerk zelf, Layer A, een noodgreep).
+     * Nu via `LocalBikeRouter` (Layer B, straten) -- de server-kant heeft geen
+     * knooppunt-kandidaten meer nodig voor de HERKOMST (een fysiek vertrekpunt is geen
+     * knooppunt-kandidaat), alleen de coördinaten van origin/destination.
+     *
+     * `physicalStart` wordt hier EENMALIG vastgelegd (sectie 9.7, cruciale regel: nooit
+     * overschrijven tijdens de sessie) -- de eerste stap waarbij het Fase 2-datamodel
+     * daadwerkelijk gebruikt wordt.
+     *
+     * Eenmalig aangeroepen (hasRequestedRouteToStartRef), geen doorlopende herberekening
+     * bij elke sample -- bewust een scoped-eerste-versie, geen live re-routing als de
+     * gebruiker een andere weg neemt.
      */
     async function fetchRouteToStart(lat: number, lon: number) {
+      physicalStartRef.current = resolvePhysicalStart(physicalStartRef.current, { lat, lon });
+
       try {
-        const resolveRes = await fetch("/api/location/resolve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lat, lon, limit: 5 }),
-        });
-        const resolveData = await resolveRes.json();
-        if (!resolveRes.ok || !resolveData.candidates?.length) {
-          appendLog("route naar startpunt: locatie kon niet geresolved worden");
-          return;
-        }
+        const destinationWgs84 = rdToWgs84(model.geometry[0].x, model.geometry[0].y);
 
         const toStartRes = await fetch("/api/route/to-start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            candidateNodeIds: resolveData.candidates.map((c: { logicalNodeId: string }) => c.logicalNodeId),
-            candidateDistancesM: resolveData.candidates.map((c: { distanceM: number }) => c.distanceM),
-            toLogicalNodeId: nodeSequence[0],
+            origin: { lat: physicalStartRef.current.lat, lon: physicalStartRef.current.lon },
+            destination: destinationWgs84,
           }),
         });
         const toStartData = await toStartRes.json();
@@ -315,13 +325,23 @@ export default function NavigationScreen({
           return;
         }
 
-        const toStartModel = buildRouteProgressModel(toStartData.resolvedEdges, toStartData.route.nodes);
-        const geoJson = buildRouteGeoJson(toStartModel, toStartData.nodeDisplayNumbers);
+        // Simpele polylijn, GEEN buildRouteProgressModel/buildRouteGeoJson -- die zijn
+        // specifiek voor het edge-gebaseerde knooppuntenmodel (lib/route-engine/), en dit is
+        // gewoon een rechte, ongestructureerde straten-polylijn (Layer B levert geen
+        // edges/nodes, alleen een puntenreeks + totaalafstand).
+        const lineGeoJson: GeoJSON.Feature = {
+          type: "Feature",
+          geometry: {
+            type: "LineString",
+            coordinates: toStartData.geometry.map((p: { lat: number; lon: number }) => [p.lon, p.lat]),
+          },
+          properties: {},
+        };
 
         const map = mapRef.current;
         if (map) {
           if (!map.getSource("goknoop-route-to-start")) {
-            map.addSource("goknoop-route-to-start", { type: "geojson", data: geoJson.line as GeoJSON.Feature });
+            map.addSource("goknoop-route-to-start", { type: "geojson", data: lineGeoJson });
             // Onder de hoofdroute-laag getekend (dun, gestippeld, ander blauw) -- duidelijk
             // onderscheiden van de daadwerkelijke gekozen fietsroute (dikke, effen teal lijn).
             map.addLayer(
@@ -335,15 +355,13 @@ export default function NavigationScreen({
               "goknoop-route-line"
             );
           } else {
-            (map.getSource("goknoop-route-to-start") as maplibregl.GeoJSONSource).setData(geoJson.line as GeoJSON.Feature);
+            (map.getSource("goknoop-route-to-start") as maplibregl.GeoJSONSource).setData(lineGeoJson);
           }
         }
 
-        routeToStartDistanceRef.current = toStartModel.totalDistanceM;
-        setRouteToStartDistanceM(toStartModel.totalDistanceM);
-        appendLog(
-          `route naar startpunt getekend (${Math.round(toStartModel.totalDistanceM)}m, via kandidaat #${toStartData.selectedCandidateRank})`
-        );
+        routeToStartDistanceRef.current = toStartData.distanceM;
+        setRouteToStartDistanceM(toStartData.distanceM);
+        appendLog(`route naar startpunt getekend (${Math.round(toStartData.distanceM)}m, via LocalBikeRouter)`);
       } catch (err) {
         appendLog(`route-naar-startpunt-fout: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -517,6 +535,7 @@ export default function NavigationScreen({
     hasRecordedArrivalRef.current = false;
     hasRequestedRouteToStartRef.current = false;
     routeToStartDistanceRef.current = null;
+    physicalStartRef.current = null; // alleen bij een volledige sessie-stop, nooit tussentijds
     setRouteToStartDistanceM(null);
     smoothedHeadingRef.current = null;
     mapRef.current?.easeTo({ bearing: 0, duration: 500 });

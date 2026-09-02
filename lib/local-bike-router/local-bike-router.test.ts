@@ -72,3 +72,44 @@ describe("LocalBikeRouter — caching (sectie 9.6, 'zo weinig mogelijk requests'
     expect(provider.callCount).toBe(1);
   });
 });
+
+describe("LocalBikeRouter — Fase 4-scenario's (parking ↔ startknooppunt, sectie 9.12)", () => {
+  it("[verplichte test 1] parking → eerste knooppunt: een normale, korte fietsverbinding werkt", async () => {
+    // 'parking' en 'destination' zijn hier gewoon willekeurige lat/lon-punten -- LocalBikeRouter
+    // kent geen knooppunten, alleen coördinaten (dat is precies het punt van Layer B).
+    const parking: LatLon = { lat: 52.5000, lon: 5.1000 };
+    const firstNode: LatLon = { lat: 52.5020, lon: 5.1030 }; // ~250m verderop
+    const provider = new FakeProvider(fakeSuccess(280));
+    const router = new LocalBikeRouter(provider);
+
+    const result = await router.route(parking, firstNode, "cycling");
+
+    expect("distanceM" in result).toBe(true);
+    expect(provider.callCount).toBe(1);
+  });
+
+  it("[verplichte test 2] parking buiten het knooppuntennetwerk: LocalBikeRouter routeert net zo goed, want die kent het knooppuntennetwerk helemaal niet", async () => {
+    // Een 'parking' ergens midden in een woonwijk, ver van elk fietsknooppunt -- voor
+    // LocalBikeRouter maakt dat niets uit, het is gewoon een GPS-coördinaat als elk ander.
+    const parkingFarFromNetwork: LatLon = { lat: 51.9, lon: 4.4 }; // willekeurig, geen enkele relatie tot een knooppunt
+    const someNode: LatLon = { lat: 52.5, lon: 5.1 };
+    const provider = new FakeProvider(fakeSuccess(65000));
+    const router = new LocalBikeRouter(provider);
+
+    const result = await router.route(parkingFarFromNetwork, someNode, "cycling");
+
+    expect("distanceM" in result).toBe(true); // geen enkele knooppunt-gerelateerde afwijzing
+    expect(provider.callCount).toBe(1);
+  });
+
+  it("[verplichte test 3] parking dicht bij een knooppunt: een korte afstand wordt gewoon correct doorgegeven", async () => {
+    const parkingNearNode: LatLon = { lat: 52.50000, lon: 5.10000 };
+    const nearbyNode: LatLon = { lat: 52.50010, lon: 5.10010 }; // ~13m verderop
+    const provider = new FakeProvider(fakeSuccess(15));
+    const router = new LocalBikeRouter(provider);
+
+    const result = await router.route(parkingNearNode, nearbyNode, "cycling");
+
+    expect("distanceM" in result && result.distanceM).toBe(15);
+  });
+});
