@@ -901,6 +901,22 @@ gevonden"-banner, `app/page.tsx`) zonder enige codewijziging blijft werken.
 
 345/345 tests, `tsc` schoon.
 
+### 8F. ECHTE reroute-wiring — nog NOOIT concreet ingepland (vraag gesteld 30-8-2026: "wanneer wilde je reroute dan doen?")
+
+Bestaat al, sinds Phase 4 Navigation Engine (stap 7/8): `RerouteExecutor`/`performReroute`/
+`RerouteContextTracker`/`RECENT_ROUTE_MEMORY` (`lib/navigation/reroute/`), volledig getest in
+isolatie. **Nooit aangesloten op `NavigationScreen.tsx`** -- stond al vroeg als openstaand
+testpunt genoteerd ("Reroute... onder echte, gecombineerde belasting", sectie 7's oude
+eindvalidatie-checklist), maar kreeg nooit een concrete "volgende stap"-status, steeds
+overschaduwd door andere prioriteiten (Volendam-fallback, tabbalk, parkeerplaats-feature).
+
+Sectie 9.17 bouwde inmiddels een MINIMALE stopgap (cyclet door de reroute-lifecycle heen
+zonder een echte nieuwe route te berekenen, puur om de matching-freeze bij OFF_ROUTE op te
+lossen) -- dat is dus GEEN vervanging van dit backlog-item, alleen een noodgreep tegen het
+ergste symptoom. De ECHTE feature (bij een bevestigde afwijking een daadwerkelijk NIEUWE
+route via de Route Engine berekenen, met dedup tegen de recent-gereden route) staat hiermee
+nu voor het eerst expliciet als eigen, apart te plannen punt vastgelegd.
+
 ### 8D. Uit de GPT-mockup, nog niet gebouwd
 
 - Gebogen afslagpijl (echte links/rechts/rechtdoor-symbolen i.p.v. alleen een geroteerde pijl)
