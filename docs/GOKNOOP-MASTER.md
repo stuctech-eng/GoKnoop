@@ -1324,3 +1324,26 @@ bij een dicht ingezoomde weergave duwde de richtingkaart bovenin (die veel hoger
 als sectie 6H's fitBounds-fix voor het overzichtsscherm, nu opnieuw toegepast op déze,
 nieuwe fitBounds-aanroep: asymmetrische marge (`{ top: 200, bottom: 80, left: 60, right: 60
 }`). 373/373 tests ongewijzigd, `tsc` schoon.
+
+### 9.16 Kaart-volgen + vloeiendere overgangen (Home-tab én navigatiescherm) — ✅ GEBOUWD (30-8-2026)
+
+Feedback na echt fietsen: op de Kaart-hometab liep de positie tijdens het fietsen uit beeld
+(de kaart draaide wel mee, maar volgde de positie niet), en op zowel de hometab als tijdens
+echte navigatie (fase C) voelde het draaien "stukje voor stukje" i.p.v. vloeiend.
+
+**Fix 1 -- positie-volgen op de Kaart-hometab** (`LiveLocationScreen.tsx`): `map.easeTo()`
+kreeg er `center: [sample.lon, sample.lat]` bij, naast de al bestaande `bearing` --
+hergebruikt exact hetzelfde patroon dat `NavigationScreen.tsx` al had. Zoom blijft
+ongewijzigd (bewuste keuze blijft staan: "het scherm blijft groot", geen navigatiemodus).
+
+**Fix 2 -- vloeiendere overgangen, beide schermen**: `EASE_DURATION_MS` verlengd van 500ms
+naar 900ms (uitgangspunt, nog niet definitief). Oorzaak van het "stukje voor stukje"-gevoel:
+elke GPS-sample triggerde een eigen, losstaande korte animatie -- als de pauze tussen twee
+samples langer is dan de animatieduur, voelt elke afzonderlijke beweging aan als een korte
+ruk i.p.v. een doorlopende beweging. Toegepast op zowel `LiveLocationScreen.tsx` als
+`NavigationScreen.tsx`'s per-sample heading-up-animaties. De eenmalige reset-animaties (terug
+naar noordgericht bij stoppen/terugvallen naar Start Guidance) bewust ONGEWIJZIGD gelaten op
+500ms -- dat zijn geen herhaalde per-sample animaties, daar speelt dit probleem niet.
+
+Geen wijziging aan `lib/route-engine/`. 373/373 tests ongewijzigd (pure UI-tuning, geen
+nieuwe testbare pure logica).

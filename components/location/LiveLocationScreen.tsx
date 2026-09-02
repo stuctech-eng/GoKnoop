@@ -38,6 +38,11 @@ const POSITION_COLOR = "#3B82F6"; // zelfde blauw als de live-positiemarker op h
 // bewust bevestigd met de gebruiker vóór het bouwen).
 const HEADING_SMOOTHING_ALPHA = 0.35;
 const MOVEMENT_SPEED_THRESHOLD_MPS = 0.5;
+// Verlengd van 500 naar 900ms (30-8-2026, op basis van "draaien gaat stukje voor stukje"):
+// bij een pauze tussen GPS-samples die langer is dan de animatieduur voelt elke afzonderlijke
+// beweging aan als een korte ruk i.p.v. een doorlopende beweging. Uitgangspunt, nog niet
+// definitief -- zelfde discipline als de andere kalibratiewaarden (sectie 8A).
+const EASE_DURATION_MS = 900;
 
 export type LiveLocationScreenProps = {
   /** Aangeroepen zodra de gebruiker deze locatie bevestigt om door te gaan naar afstandskeuze. */
@@ -152,16 +157,21 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
         }
 
         // Heading-up (op verzoek, 29-8-2026): hergebruikt exact dezelfde, al geteste functies
-        // als het navigatiescherm (sectie 6H) -- ALLEEN de bearing, bewust GEEN zoom-wijziging
-        // en GEEN gedwongen camera-volgen (dit is geen actieve navigatie, gewoon het rustige
-        // overzicht -- de gebruiker bevestigde expliciet: "het scherm blijft groot").
+        // als het navigatiescherm (sectie 6H) -- bewust GEEN zoom-wijziging (dit is geen
+        // actieve navigatie, gewoon het rustige overzicht -- "het scherm blijft groot").
+        // WEL positie-volgend (center), anders loopt je stipje tijdens het fietsen uit beeld --
+        // zelfde patroon als NavigationScreen al gebruikte, hier ontbrak het nog.
         const selectedHeading = selectHeadingDeg(
           { gpsHeadingDeg: sample.headingDeg, speedMps: sample.speedMps, previousStableHeadingDeg: smoothedHeadingRef.current },
           { speedThresholdMps: MOVEMENT_SPEED_THRESHOLD_MPS }
         );
         if (selectedHeading !== null) {
           smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
-          map.easeTo({ bearing: smoothedHeadingRef.current, duration: 500 });
+          map.easeTo({ center: [sample.lon, sample.lat], bearing: smoothedHeadingRef.current, duration: EASE_DURATION_MS });
+        } else {
+          // Geen betrouwbare richting (bijv. stilstand) -- toch meebewegen met de positie,
+          // zonder de bearing aan te passen.
+          map.easeTo({ center: [sample.lon, sample.lat], duration: EASE_DURATION_MS });
         }
       }
     });

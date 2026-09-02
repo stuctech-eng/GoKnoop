@@ -83,6 +83,9 @@ const ARRIVAL_CONFIRM_DURATION_MS = 3000;
 // noordgericht (sectie 5.3/10), heading-up is specifiek voor het actief navigeren.
 const NAVIGATION_ZOOM = 17.5;
 const HEADING_SMOOTHING_ALPHA = 0.35; // uitgangspunt, nog niet definitief (zelfde discipline als sectie 3.7)
+// Verlengd van 500 naar 900ms (30-8-2026, "draaien gaat stukje voor stukje" -- zelfde
+// aanpassing als de Kaart-hometab, LiveLocationScreen.tsx). Uitgangspunt, nog niet definitief.
+const EASE_DURATION_MS = 900;
 
 // Statusweergave per NavigationState (stap 12.6) -- puur weergave, geen nieuwe
 // navigatielogica. Beknopte, niet-alarmistische labels (ontwerpregel: afwijking
@@ -499,7 +502,7 @@ export default function NavigationScreen({
               center: [sample.lon, sample.lat],
               bearing: smoothedHeadingRef.current,
               zoom: NAVIGATION_ZOOM,
-              duration: 500,
+              duration: EASE_DURATION_MS,
             });
           }
           // Richtingpijl RELATIEF t.o.v. de rijrichting (0° = rechtdoor/boven) -- de kaart zelf
