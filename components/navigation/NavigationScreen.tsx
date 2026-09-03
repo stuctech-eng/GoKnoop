@@ -174,6 +174,9 @@ export type NavigationScreenProps = {
     distanceTraveledM: number;
     rideTimeS: number;
     physicalStart: PhysicalAnchor | null;
+    /** BUGFIX (sectie 9.41): of de matching al echt gestart was (fase C bereikt) op het
+     *  moment van pauzeren -- bepaalt of "hervatten" fase A/B mag overslaan. */
+    hasSessionStarted: boolean;
   }) => void;
   /**
    * "Rit hervatten" (sectie 9.31, 30-8-2026): als deze drie samen meegegeven worden, slaat
@@ -224,6 +227,15 @@ export default function NavigationScreen({
   const hasFitBoundsToStartRef = useRef(false);
   /** Meest recente live positie -- gebruikt door de Back to Start-knop (sectie 9.18). */
   const lastSampleRef = useRef<{ lat: number; lon: number } | null>(null);
+  /**
+   * BUGFIX (30-8-2026, "hervat rit werkt alleen als de navigatie begonnen is"): houdt bij of
+   * de matching daadwerkelijk gestart is (fase C bereikt) op het moment van pauzeren. Nodig
+   * omdat pauzeren al vanaf fase A mogelijk is (sectie 9.25) -- maar "hervatten" mag alleen
+   * fase A/B overslaan (`startInProgress`, sectie 9.31) als er ECHT al gematcht werd; anders
+   * moet een hervatte rit gewoon opnieuw fase A doorlopen (je was nog onderweg naar de route,
+   * niet erop).
+   */
+  const hasSessionStartedRef = useRef(false);
   /** Startknooppunt-coördinaten (WGS84) -- voor de "Open in Kaarten"-link tijdens fase A
    *  (sectie 9.29). `model` zelf zit in een andere scope (de effect-closure), niet
    *  bereikbaar vanuit de render -- daarom hier apart bewaard. */
@@ -594,6 +606,7 @@ export default function NavigationScreen({
         try {
           stateMachine.start();
           sessionStarted = true;
+          hasSessionStartedRef.current = true;
           // Bij hervatten: terugrekenen zodat sessionStartedAtMsRef de VOLLEDIGE (cumulatieve)
           // rijtijd weergeeft bij een volgende pauze, niet alleen de tijd sinds hervatten.
           sessionStartedAtMsRef.current = Date.now() - (initialElapsedRideTimeS ?? 0) * 1000;
@@ -721,6 +734,7 @@ export default function NavigationScreen({
     physicalStartRef.current = null; // alleen bij een volledige sessie-stop, nooit tussentijds
     hasFitBoundsToStartRef.current = false;
     setDirectionCardEnlarged(false);
+    hasSessionStartedRef.current = false;
     setProgressPanelEnlarged(false);
     setRouteToStartDistanceM(null);
     smoothedHeadingRef.current = null;
@@ -803,6 +817,7 @@ export default function NavigationScreen({
                 distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
                 rideTimeS,
                 physicalStart: physicalStartRef.current,
+                hasSessionStarted: hasSessionStartedRef.current,
               });
             }}
             style={{

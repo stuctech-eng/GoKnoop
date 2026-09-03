@@ -101,7 +101,7 @@ export default function Home() {
     datasetVersionId: string;
     /** Sectie 9.31 ("Rit hervatten"): alleen gevuld als dit een hervatte gepauzeerde rit is
      *  -- laat NavigationScreen fase A/B overslaan en direct in matching-modus starten. */
-    resumeContext?: { physicalStart: PhysicalAnchor | null; elapsedRideTimeS: number };
+    resumeContext?: { physicalStart: PhysicalAnchor | null; elapsedRideTimeS: number; skipToMatching: boolean };
   } | null>(null);
   /** Fase 5 (sectie 9.18): het "terug naar het startknooppunt"-been van een Back to Start-rit. */
   const [activeBackToStartRoute, setActiveBackToStartRoute] = useState<{
@@ -633,6 +633,7 @@ export default function Home() {
     distanceTraveledM: number;
     rideTimeS: number;
     physicalStart: PhysicalAnchor | null;
+    hasSessionStarted: boolean;
   }) {
     const activeRoute = getActiveRouteForPause();
     if (!activeRoute) return;
@@ -644,6 +645,7 @@ export default function Home() {
       lastKnownPosition: data.lastKnownPosition,
       distanceTraveledM: data.distanceTraveledM,
       rideTimeS: data.rideTimeS,
+      hasSessionStarted: data.hasSessionStarted,
     });
     setPausedRide(getPausedRide());
     setStep("paused");
@@ -674,7 +676,16 @@ export default function Home() {
         nodeSequence: pausedRide.routeNodes,
         nodeDisplayNumbers: data.nodeDisplayNumbers,
         datasetVersionId: pausedRide.datasetVersionId,
-        resumeContext: { physicalStart: pausedRide.physicalStart, elapsedRideTimeS: pausedRide.rideTimeS },
+        // BUGFIX (sectie 9.41, 30-8-2026): "hervatten" mag fase A/B alleen overslaan als de
+        // matching op het moment van pauzeren ECHT al gestart was (fase C bereikt). Was je nog
+        // onderweg naar het startknooppunt (fase A), dan moet hervatten gewoon opnieuw fase A/B
+        // doorlopen -- forceren-naar-matching zonder dat je ooit op de route was, gaf eerder een
+        // rit die "niets deed".
+        resumeContext: {
+          physicalStart: pausedRide.physicalStart,
+          elapsedRideTimeS: pausedRide.rideTimeS,
+          skipToMatching: pausedRide.hasSessionStarted ?? false,
+        },
       });
       clearPausedRide();
       setPausedRide(null);
@@ -1442,7 +1453,7 @@ export default function Home() {
                 : () => setSelectedLoop(reverseLoopCandidate(selectedLoop))
             }
             onPause={handlePause}
-            startInProgress={!!activeSavedRoute?.resumeContext}
+            startInProgress={!!activeSavedRoute?.resumeContext?.skipToMatching}
             initialPhysicalStart={activeSavedRoute?.resumeContext?.physicalStart ?? undefined}
             initialElapsedRideTimeS={activeSavedRoute?.resumeContext?.elapsedRideTimeS}
           />

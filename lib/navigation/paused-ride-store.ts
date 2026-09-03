@@ -23,6 +23,12 @@ export type PausedRideSnapshot = {
   lastKnownPosition: { lat: number; lon: number } | null;
   distanceTraveledM: number;
   rideTimeS: number;
+  /** BUGFIX (sectie 9.41, 30-8-2026): of de matching al echt gestart was (fase C bereikt) op
+   *  het moment van pauzeren -- bepaalt bij hervatten of fase A/B overgeslagen mag worden.
+   *  Optioneel voor achterwaartse compatibiliteit met eerder opgeslagen pauzes (vóór deze
+   *  bugfix) -- ontbreekt het veld, dan wordt veilig aangenomen dat de sessie nog niet
+   *  gestart was (dus gewoon fase A/B opnieuw doorlopen bij hervatten). */
+  hasSessionStarted?: boolean;
   pausedAt: string; // ISO-datum
 };
 
@@ -37,6 +43,7 @@ function isPausedRideSnapshot(value: unknown): value is PausedRideSnapshot {
     (v.lastKnownPosition === null || typeof v.lastKnownPosition === "object") &&
     typeof v.distanceTraveledM === "number" &&
     typeof v.rideTimeS === "number" &&
+    (v.hasSessionStarted === undefined || typeof v.hasSessionStarted === "boolean") &&
     typeof v.pausedAt === "string"
   );
 }

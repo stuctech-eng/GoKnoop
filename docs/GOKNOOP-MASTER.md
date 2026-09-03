@@ -2164,3 +2164,31 @@ al voor dat stuk.
 
 Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (hergebruikt uitsluitend
 al bestaande, al geteste functies, geen nieuwe pure logica).
+
+### 9.41 ECHTE BUG: "Hervat rit" werkte alleen als navigatie al begonnen was — ✅ GEFIXT (30-8-2026)
+
+**Bevestigd probleem**: sinds pauzeren al vanaf fase A mogelijk werd (sectie 9.25), kon je ook
+pauzeren VOORDAT je het startknooppunt bereikt had. Maar "hervatten" (sectie 9.31) sloeg
+ALTIJD fase A/B over en forceerde direct matching-modus -- als je nog nooit op de
+knooppuntenroute was geweest (nog onderweg naar het startpunt), leidde dat tot een hervatte
+rit die "niets deed" (matching tegen een route waar je nooit op geweest bent, ver weg).
+
+**Fix**: een nieuwe `hasSessionStartedRef` in `NavigationScreen.tsx` houdt bij of de matching
+ECHT gestart was (fase C bereikt, `stateMachine.start()` succesvol aangeroepen) op het moment
+van pauzeren. Deze informatie gaat mee in de pauze-snapshot (`PausedRideSnapshot.
+hasSessionStarted`, optioneel veld voor achterwaartse compatibiliteit met eerder opgeslagen
+pauzes). Bij hervatten: `startInProgress` (fase A/B overslaan) wordt nu ALLEEN ingeschakeld
+als de sessie ook echt gestart was vóór het pauzeren -- was je nog onderweg (fase A), dan
+doorloopt een hervatte rit gewoon opnieuw fase A/B, zoals het hoort.
+
+`initialPhysicalStart`/`initialElapsedRideTimeS` blijven in beide gevallen gewoon meegegeven
+(harmless als de sessie nooit startte -- `elapsedRideTimeS` is dan toch al 0).
+
+**Antwoord op de tweede vraag ("start hij meteen bij hervatten?")**: ja, bevestigd -- zodra op
+"Rit hervatten" gedrukt wordt, gaat de app direct naar het navigatiescherm (`setStep
+("navigating")`), geen extra bevestigingsstap. Met deze fix gaat dat scherm dan correct naar
+fase A (als je nog onderweg was) of direct naar matching (als je al op de route was) --
+afhankelijk van waar je daadwerkelijk was toen je pauzeerde.
+
+Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (bestaande
+`paused-ride-store`-tests blijven groen dankzij het optionele veld, geen breaking change).
