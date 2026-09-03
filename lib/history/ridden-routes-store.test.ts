@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { getRiddenRoutes, recordRiddenRoute } from "./ridden-routes-store";
+import { getRiddenRoutes, getRecentRiddenRoutesForDedup, recordRiddenRoute } from "./ridden-routes-store";
 
 /**
  * Lichte, handmatige localStorage-polyfill (geen jsdom-afhankelijkheid nodig)
@@ -20,6 +20,8 @@ function createMemoryStorage(): Storage {
   } as Storage;
 }
 
+const BASE = { edgeIds: ["e1", "e2"], nodeIds: ["n1", "n2", "n3"], startNodeId: "n1", datasetVersionId: "v1", distanceM: 5000 };
+
 describe("ridden-routes-store", () => {
   const originalWindow = (globalThis as { window?: unknown }).window;
 
@@ -35,33 +37,44 @@ describe("ridden-routes-store", () => {
     expect(getRiddenRoutes()).toEqual([]);
   });
 
-  it("slaat een gereden route op en kan 'm weer teruglezen", () => {
-    recordRiddenRoute({ edgeIds: ["e1", "e2"], nodeIds: ["n1", "n2", "n3"], startNodeId: "n1", distanceM: 5000 });
+  it("slaat een gereden route op en kan 'm weer teruglezen, met een uniek id en datasetVersionId", () => {
+    recordRiddenRoute(BASE);
     const routes = getRiddenRoutes();
     expect(routes).toHaveLength(1);
     expect(routes[0].edgeIds).toEqual(["e1", "e2"]);
     expect(routes[0].distanceM).toBe(5000);
+    expect(routes[0].datasetVersionId).toBe("v1");
+    expect(typeof routes[0].id).toBe("string");
     expect(typeof routes[0].riddenAt).toBe("string");
   });
 
   it("nieuwste route staat vooraan", () => {
-    recordRiddenRoute({ edgeIds: ["e1"], nodeIds: ["n1", "n2"], startNodeId: "n1", distanceM: 1000, riddenAt: "2026-08-01T00:00:00.000Z" });
-    recordRiddenRoute({ edgeIds: ["e2"], nodeIds: ["n1", "n3"], startNodeId: "n1", distanceM: 2000, riddenAt: "2026-08-29T00:00:00.000Z" });
+    recordRiddenRoute({ ...BASE, edgeIds: ["e1"], distanceM: 1000, riddenAt: "2026-08-01T00:00:00.000Z" });
+    recordRiddenRoute({ ...BASE, edgeIds: ["e2"], distanceM: 2000, riddenAt: "2026-08-29T00:00:00.000Z" });
     const routes = getRiddenRoutes();
     expect(routes[0].edgeIds).toEqual(["e2"]);
     expect(routes[1].edgeIds).toEqual(["e1"]);
   });
 
-  it("begrenst het aantal opgeslagen routes (voorkomt onbeperkte groei)", () => {
-    for (let i = 0; i < 25; i++) {
-      recordRiddenRoute({ edgeIds: [`e${i}`], nodeIds: ["n1", "n2"], startNodeId: "n1", distanceM: 1000 });
+  it("[BIJGESTELD 30-8-2026, 'nooit weggooien'] geen limiet meer op het aantal opgeslagen routes", () => {
+    for (let i = 0; i < 30; i++) {
+      recordRiddenRoute({ ...BASE, edgeIds: [`e${i}`] });
     }
-    expect(getRiddenRoutes().length).toBeLessThanOrEqual(20);
+    expect(getRiddenRoutes().length).toBe(30); // ALLES blijft bewaard, geen begrenzing meer
+  });
+
+  it("getRecentRiddenRoutesForDedup begrenst WEL (voor de server-aanroep), zonder de opslag zelf aan te tasten", () => {
+    for (let i = 0; i < 30; i++) {
+      recordRiddenRoute({ ...BASE, edgeIds: [`e${i}`] });
+    }
+    expect(getRiddenRoutes().length).toBe(30); // volledige opslag ongewijzigd
+    expect(getRecentRiddenRoutesForDedup().length).toBe(20); // alleen de dedup-aanroep begrensd
+    expect(getRecentRiddenRoutesForDedup(5).length).toBe(5); // aanpasbare limiet
   });
 
   it("gooit nooit een fout als localStorage ontbreekt (SSR-veilig)", () => {
     (globalThis as { window?: unknown }).window = undefined;
-    expect(() => recordRiddenRoute({ edgeIds: ["e1"], nodeIds: ["n1", "n2"], startNodeId: "n1", distanceM: 1000 })).not.toThrow();
+    expect(() => recordRiddenRoute(BASE)).not.toThrow();
     expect(getRiddenRoutes()).toEqual([]);
   });
 

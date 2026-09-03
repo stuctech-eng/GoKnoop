@@ -610,6 +610,7 @@ export default function NavigationScreen({
               edgeIds: edges.map((e) => e.id),
               nodeIds: nodeSequence,
               startNodeId: nodeSequence[0],
+              datasetVersionId,
               distanceM: model.totalDistanceM,
             });
             appendLog("aangekomen -- rit onthouden voor toekomstige routevoorstellen");

@@ -1799,3 +1799,44 @@ botsing) -- BEWUST NIET nu gefixt, apart vervolgpunt.
 
 386/386 tests (385 + 1 netto: één test herschreven naar nieuw gedrag, één nieuwe
 regressietest toegevoegd), `tsc` schoon.
+
+### 9.28 Gereden routes: correctie + zichtbaar in "Mijn routes" + "al eerder gereden"-indicator (30-8-2026)
+
+**Correctie op verzoek**: "gereden routes zijn gereden, niet op de helft gestopt". Eerder
+riep `endPausedRide()` (sectie 9.19) ten onrechte `recordRiddenRoute()` aan bij een
+voortijdig beëindigde rit vanuit het pauzemenu -- dat is nu verwijderd. Uitsluitend een
+échte aankomst (`NavigationScreen.tsx`, de ARRIVED-stabiliteitslaag) legt nog een gereden
+route vast.
+
+**Drie uitbreidingen, op verzoek:**
+
+1. **"Nooit weggooien"**: `MAX_STORED_ROUTES`-limiet (was 20) volledig verwijderd uit
+   `ridden-routes-store.ts` -- alle gereden routes blijven permanent bewaard. Voor de
+   PRAKTISCHE dedup-aanroep naar de server (avoid-lijst bij het zoeken van nieuwe routes)
+   is een aparte, wél begrensde functie toegevoegd: `getRecentRiddenRoutesForDedup()`
+   (standaard de meest recente 20) -- puur om de request-payload begrensd te houden, geen
+   verwijdering uit de opslag zelf. `datasetVersionId` en een stabiel `id` toegevoegd aan
+   het datamodel (ontbraken eerder) -- nodig om een gereden route later daadwerkelijk
+   opnieuw te kunnen laden/rijden.
+
+2. **Zichtbaar in "Mijn routes"**, als eigen sectie onder de bestaande "Opgeslagen routes":
+   elke gereden route toont de afstand, "Gereden op [datum]" (de datum werd al vastgelegd,
+   alleen nooit getoond), een "Start route"-knop (hergebruikt exact hetzelfde
+   resolve-en-start-patroon als opgeslagen routes -- `startSavedRoute`/`startRiddenRoute`
+   delen nu een gemeenschappelijke `startRouteFromReference()`-helper), en een "♡ Bewaar als
+   favoriet"-knop die de route direct naar de bestaande opgeslagen-routes-opslag kopieert.
+
+3. **"Al eerder gereden"-indicator bij het zoeken van een nieuw rondje**: op het
+   resultatenscherm toont elke routekaart nu "✓ Al eerder gereden" als de route
+   significant overlapt met een eerder gereden route -- hergebruikt dezelfde
+   `edgeOverlapRatio()`-functie die ook server-side voor dedup gebruikt wordt
+   (`lib/route-engine/route-diversity.ts`, een pure functie, veilig client-side
+   te hergebruiken). Puur informatief, geen filtering -- de gebruiker ziet nu zelf welke
+   voorgestelde routes nieuw zijn en welke al bekend zijn.
+
+**Tests bijgewerkt**: bestaande opslagtest ("begrenst het aantal") vervangen door het
+tegenovergestelde ("geen limiet meer"), plus een nieuwe test die bewijst dat de dedup-functie
+wél begrensd blijft zonder de volledige opslag aan te tasten. 387/387 tests totaal
+(386 + 1 netto), `tsc` schoon.
+
+Geen wijziging aan `lib/route-engine/`'s kern (Dijkstra/GraphProvider zelf).

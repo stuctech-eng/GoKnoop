@@ -6,7 +6,8 @@ import { RoutePreview } from "@/components/RoutePreview";
 import NavigationScreen from "@/components/navigation/NavigationScreen";
 import LiveLocationScreen from "@/components/location/LiveLocationScreen";
 import TabBar, { type TabId } from "@/components/layout/TabBar";
-import { getRiddenRoutes, recordRiddenRoute } from "@/lib/history/ridden-routes-store";
+import { getRiddenRoutes, getRecentRiddenRoutesForDedup, type RiddenRoute } from "@/lib/history/ridden-routes-store";
+import { edgeOverlapRatio } from "@/lib/route-engine/route-diversity";
 import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
 import { getPausedRide, savePausedRide, clearPausedRide, type PausedRideSnapshot } from "@/lib/navigation/paused-ride-store";
 import PauseScreen from "@/components/navigation/PauseScreen";
@@ -189,7 +190,7 @@ export default function Home() {
           candidateDistancesM: locationCandidates.map((c) => c.distanceM),
           targetDistanceM: km * 1000,
           count: 4,
-          avoidRouteEdgeSets: getRiddenRoutes().map((r) => r.edgeIds),
+          avoidRouteEdgeSets: getRecentRiddenRoutesForDedup().map((r) => r.edgeIds),
         }),
       });
       const data = await res.json();
@@ -237,31 +238,52 @@ export default function Home() {
     setSavedRoutesVersion((v) => v + 1);
   }
 
-  async function startSavedRoute(saved: SavedRoute) {
+  /** Gedeeld door `startSavedRoute` en `startRiddenRoute` (30-8-2026) -- zelfde patroon, andere bron. */
+  async function startRouteFromReference(ref: { datasetVersionId: string; edgeIds: string[]; nodeIds: string[] }, errorContext: string) {
     setStep("loading");
     try {
       const res = await fetch("/api/route/resolve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ datasetVersionId: saved.datasetVersionId, edgeIds: saved.edgeIds, nodeIds: saved.nodeIds }),
+        body: JSON.stringify({ datasetVersionId: ref.datasetVersionId, edgeIds: ref.edgeIds, nodeIds: ref.nodeIds }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setErrorMessage(data.error ?? "Deze opgeslagen route kon niet worden geladen.");
+        setErrorMessage(data.error ?? `Deze ${errorContext} kon niet worden geladen.`);
         setStep("error");
         return;
       }
       setActiveSavedRoute({
         edges: data.resolvedEdges,
-        nodeSequence: saved.nodeIds,
+        nodeSequence: ref.nodeIds,
         nodeDisplayNumbers: data.nodeDisplayNumbers,
-        datasetVersionId: saved.datasetVersionId,
+        datasetVersionId: ref.datasetVersionId,
       });
       setStep("navigating");
     } catch {
-      setErrorMessage("Er ging iets mis bij het laden van deze route.");
+      setErrorMessage(`Er ging iets mis bij het laden van deze ${errorContext}.`);
       setStep("error");
     }
+  }
+
+  async function startSavedRoute(saved: SavedRoute) {
+    await startRouteFromReference(saved, "opgeslagen route");
+  }
+
+  async function startRiddenRoute(ridden: RiddenRoute) {
+    await startRouteFromReference(ridden, "gereden route");
+  }
+
+  function saveRiddenRouteAsFavorite(ridden: RiddenRoute) {
+    saveRoute({
+      name: null,
+      edgeIds: ridden.edgeIds,
+      nodeIds: ridden.nodeIds,
+      startNodeId: ridden.startNodeId,
+      distanceM: ridden.distanceM,
+      datasetVersionId: ridden.datasetVersionId,
+    });
+    setSavedRoutesVersion((v) => v + 1);
   }
 
   /**
@@ -511,14 +533,14 @@ export default function Home() {
   }
 
   /** Rit beëindigen vanuit pauze (sectie 9.19/9.23): voortgang tot nu toe onthouden, net als een normaal voltooide rit. */
+  /**
+   * BIJGESTELD (30-8-2026, "gereden routes zijn gereden, niet op de helft gestopt"): riep
+   * eerder `recordRiddenRoute()` aan -- dat was fout, een voortijdig beëindigde rit telt niet
+   * als "gereden". Alleen een échte aankomst (NavigationScreen.tsx, ARRIVED-stabiliteitslaag)
+   * legt een gereden route vast.
+   */
   function endPausedRide() {
     if (!pausedRide) return;
-    recordRiddenRoute({
-      edgeIds: pausedRide.routeEdges,
-      nodeIds: pausedRide.routeNodes,
-      startNodeId: pausedRide.routeNodes[0],
-      distanceM: pausedRide.distanceTraveledM,
-    });
     clearPausedRide();
     setPausedRide(null);
     reset();
@@ -723,6 +745,68 @@ export default function Home() {
                     </div>
                   ))
                 )}
+
+                <div style={{ borderTop: "1px solid #e5e5e0", margin: "2rem 0 1.5rem" }} />
+
+                <h2 style={{ fontSize: 24, marginBottom: "0.5rem" }}>Gereden routes</h2>
+                <p style={{ fontSize: 13, opacity: 0.6, marginBottom: "1.25rem" }}>
+                  Automatisch onthouden na een voltooide rit -- blijft altijd bewaard.
+                </p>
+                {getRiddenRoutes().length === 0 ? (
+                  <p style={{ fontSize: 15, opacity: 0.6, textAlign: "center" }}>Je hebt nog geen route uitgereden.</p>
+                ) : (
+                  getRiddenRoutes().map((ridden) => (
+                    <div
+                      key={ridden.id}
+                      style={{
+                        background: "white",
+                        border: "1px solid #e5e5e0",
+                        borderRadius: "var(--radius-card)",
+                        padding: "1rem",
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 17, fontWeight: 700 }}>{formatKm(ridden.distanceM)} km</div>
+                        <div style={{ fontSize: 13, opacity: 0.6 }}>
+                          Gereden op {new Date(ridden.riddenAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => startRiddenRoute(ridden)}
+                          style={{
+                            flex: 1,
+                            minHeight: 44,
+                            background: "var(--color-knoop-green)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: 8,
+                            fontSize: 15,
+                            fontWeight: 600,
+                          }}
+                        >
+                          Start route
+                        </button>
+                        <button
+                          onClick={() => saveRiddenRouteAsFavorite(ridden)}
+                          style={{
+                            minHeight: 44,
+                            padding: "0 16px",
+                            background: "white",
+                            color: "var(--color-knoop-green)",
+                            border: "2px solid var(--color-knoop-green)",
+                            borderRadius: 8,
+                            fontSize: 15,
+                            fontWeight: 600,
+                          }}
+                        >
+                          ♡ Bewaar als favoriet
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </section>
             )}
 
@@ -877,34 +961,48 @@ export default function Home() {
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {loops.map((loop, i) => (
-                <button
-                  key={i}
-                  onClick={() => {
-                    setSelectedLoop(loop);
-                    setStep("detail");
-                  }}
-                  style={{
-                    textAlign: "left",
-                    background: "white",
-                    border: "2px solid var(--color-sand)",
-                    borderRadius: "var(--radius-card)",
-                    padding: 14,
-                    boxShadow: "var(--shadow-card)",
-                  }}
-                >
-                  <RoutePreview geometry={loop.route.geometry} height={140} startLabel={loop.nodeDisplayNumbers[0]} />
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
-                    <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 28, fontWeight: 700 }}>
-                      ~{formatKm(loop.actualDistanceM)} km
-                    </span>
-                    <span style={{ fontSize: 13, opacity: 0.6 }}>{loop.route.nodes.length} knooppunten</span>
-                  </div>
-                  <div style={{ fontSize: 13, marginTop: 4, opacity: 0.75 }}>
-                    {qualifyDeviation(loop.deviationPercent).icon} {qualifyDeviation(loop.deviationPercent).label}
-                  </div>
-                </button>
-              ))}
+              {(() => {
+                // Berekend vóór de map (niet per kaart opnieuw) -- "al eerder gereden"-indicator
+                // op verzoek (30-8-2026), hergebruikt dezelfde overlap-logica als de
+                // server-side dedup (edgeOverlapRatio), puur voor weergave, geen filtering.
+                const riddenEdgeSets = getRiddenRoutes().map((r) => r.edgeIds);
+                return loops.map((loop, i) => {
+                  const alreadyRidden = riddenEdgeSets.some((riddenEdges) => edgeOverlapRatio(riddenEdges, loop.route.edges) > 0.6);
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        setSelectedLoop(loop);
+                        setStep("detail");
+                      }}
+                      style={{
+                        textAlign: "left",
+                        background: "white",
+                        border: "2px solid var(--color-sand)",
+                        borderRadius: "var(--radius-card)",
+                        padding: 14,
+                        boxShadow: "var(--shadow-card)",
+                      }}
+                    >
+                      <RoutePreview geometry={loop.route.geometry} height={140} startLabel={loop.nodeDisplayNumbers[0]} />
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
+                        <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 28, fontWeight: 700 }}>
+                          ~{formatKm(loop.actualDistanceM)} km
+                        </span>
+                        <span style={{ fontSize: 13, opacity: 0.6 }}>{loop.route.nodes.length} knooppunten</span>
+                      </div>
+                      <div style={{ fontSize: 13, marginTop: 4, opacity: 0.75 }}>
+                        {qualifyDeviation(loop.deviationPercent).icon} {qualifyDeviation(loop.deviationPercent).label}
+                      </div>
+                      {alreadyRidden && (
+                        <div style={{ fontSize: 12, marginTop: 6, color: "var(--color-knoop-green)", fontWeight: 600 }}>
+                          ✓ Al eerder gereden
+                        </div>
+                      )}
+                    </button>
+                  );
+                });
+              })()}
             </div>
           </section>
         )}
