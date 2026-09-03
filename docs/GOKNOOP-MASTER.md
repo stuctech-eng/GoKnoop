@@ -1992,3 +1992,43 @@ wordt. Voor nu gebruikt de deelbare link de handmatig ingevoerde naam (indien aa
 toont "Gedeelde route".
 
 Geen wijziging aan `lib/route-engine/`. 393/393 tests (387 + 6 nieuw), `tsc` schoon.
+
+### 9.34 Automatische routenaam — ✅ GEBOUWD (30-8-2026)
+
+**Technische verkenning eerst, zoals afgesproken**: bevestigd dat GoKnoop al Nominatim
+(OpenStreetMap) gebruikt voor plaatsnaam-zoeken (`geocodePlaceName`) -- dezelfde, gratis dienst
+heeft ook een `/reverse`-endpoint (coördinaten → plaatsnaam), geen nieuwe externe dienst nodig.
+**Belangrijke gebruiksgrens, geverifieerd via Nominatim's officiële beleid**: systematische
+bevragingen zijn expliciet verboden (incl. "reverse queries in a grid") -- dit is met opzet zo
+gebouwd dat er NOOIT meer dan 2 Nominatim-aanvragen per routenaam-suggestie plaatsvinden,
+nooit een bevraging per knooppunt.
+
+**Gebouwd:**
+- `reverseGeocode()` toegevoegd aan het bestaande `lib/route-engine/geocode.ts`, naast de al
+  bestaande voorwaartse geocoder -- zelfde User-Agent-verplichting, zelfde dienst.
+- `lib/naming/route-naming.ts` -- drie pure, apart geteste functies:
+  - `pickNamingPoints()`: kiest het beginpunt + het (hemelsbreed) VERSTE punt uit de
+    route-geometrie -- meestal de overkant van een rondje, geeft namen als "Edam -- Volendam"
+    i.p.v. twee keer bijna dezelfde plek. Kiest ALTIJD precies 2 punten, ongeacht hoe lang de
+    route is.
+  - `buildNameFromPlaces()`: "Rondje X" bij één gevonden plaats, "X -- Y" bij twee
+    verschillende.
+  - `makeNameUnique()`: voegt "(2)"/"(3)"/... toe als de voorgestelde naam al bestaat binnen
+    de opgeslagen routes -- exact de "geen twee identieke namen"-eis uit de oorspronkelijke
+    opdracht.
+- Nieuw endpoint `POST /api/route/suggest-name` -- roept de (hooguit 2) reverse-geocode-
+  aanvragen SEQUENTIEEL aan, met 1,1 seconde pauze ertussen (Nominatim's 1-aanvraag/seconde-
+  grens, met marge).
+- **Client**: bij het openen van "♡ Opslaan in Mijn routes" wordt automatisch een naam
+  gesuggereerd en het naamveld voorgevuld -- de gebruiker kan 'm altijd nog aanpassen/
+  overschrijven, nooit een bewuste eigen invoer overschreven. De uniekheids-eis wordt ook
+  bij het daadwerkelijk opslaan afgedwongen (`confirmSaveRoute`), niet alleen bij de
+  suggestie zelf -- dus ook een handmatig ingetypte naam die toevallig al bestaat wordt
+  automatisch onderscheidend gemaakt.
+
+**11 nieuwe tests** (de drie pure functies), 404/404 totaal (393 + 11), `tsc` schoon. Geen
+wijziging aan `lib/route-engine/`'s kern.
+
+**Nog openstaand, nog niet bevestigd of gebouwd**: de eerder besproken "Gedeelde routes"-
+sectie in "Mijn routes" (datum + optioneel "met wie", sectie afgesproken maar het bouwen zelf
+werd onderbroken door deze naamgevings-vraag) -- terugkomen hierop in een volgende beurt.

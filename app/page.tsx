@@ -10,6 +10,8 @@ import { getRiddenRoutes, getRecentRiddenRoutesForDedup, type RiddenRoute } from
 import { edgeOverlapRatio } from "@/lib/route-engine/route-diversity";
 import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
 import { encodeRouteShareCode, decodeRouteShareCode, buildShareUrl } from "@/lib/sharing/route-share-link";
+import { pickNamingPoints, makeNameUnique } from "@/lib/naming/route-naming";
+import { rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
 import { getPausedRide, savePausedRide, clearPausedRide, type PausedRideSnapshot } from "@/lib/navigation/paused-ride-store";
 import PauseScreen from "@/components/navigation/PauseScreen";
 import type { GraphEdge } from "@/lib/route-engine/types";
@@ -196,6 +198,7 @@ export default function Home() {
   const [savedRoutesVersion, setSavedRoutesVersion] = useState(0); // bumpen om de Mijn-routes-lijst opnieuw te lezen
   const [showSaveNamePrompt, setShowSaveNamePrompt] = useState(false);
   const [routeNameInput, setRouteNameInput] = useState("");
+  const [suggestingName, setSuggestingName] = useState(false);
   const [placeName, setPlaceName] = useState("");
   /** Sectie 9.21 ("route naar een adres") -- eigen, apart veld/state van de bestaande plaatsnaam-zoekfunctie. */
   const [destinationInput, setDestinationInput] = useState("");
@@ -308,8 +311,11 @@ export default function Home() {
 
   function confirmSaveRoute() {
     if (!selectedLoop) return;
+    const trimmed = routeNameInput.trim();
+    const existingNames = getSavedRoutes().map((r) => r.name).filter((n): n is string => n !== null);
+    const finalName = trimmed ? makeNameUnique(trimmed, existingNames) : null;
     saveRoute({
-      name: routeNameInput.trim() || null,
+      name: finalName,
       edgeIds: selectedLoop.route.edges,
       nodeIds: selectedLoop.route.nodes,
       startNodeId: selectedLoop.route.nodes[0],
@@ -396,6 +402,37 @@ export default function Home() {
     });
     setSavedRoutesVersion((v) => v + 1);
     window.history.replaceState({}, "", window.location.pathname);
+  }
+
+  /**
+   * Automatische routenaam (sectie 9.34, 30-8-2026): kiest 2 punten uit de route-geometrie
+   * (`pickNamingPoints` -- NOOIT meer, respecteert Nominatim's verbod op systematische
+   * bevragingen), roept `/api/route/suggest-name` aan, en maakt de naam uniek t.o.v. de al
+   * opgeslagen routenamen. Vult het naamveld alleen in als de gebruiker nog niets zelf heeft
+   * ingetypt -- overschrijft nooit een bewuste eigen keuze.
+   */
+  async function suggestRouteNameFor(geometryRd: { x: number; y: number }[]) {
+    setSuggestingName(true);
+    try {
+      const points = pickNamingPoints(geometryRd);
+      if (!points) return;
+      const wgs84Points = points.map((p) => rdToWgs84(p.x, p.y));
+      const res = await fetch("/api/route/suggest-name", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ points: wgs84Points }),
+      });
+      const data = await res.json();
+      if (data.name && !routeNameInput.trim()) {
+        const existingNames = getSavedRoutes().map((r) => r.name).filter((n): n is string => n !== null);
+        setRouteNameInput(makeNameUnique(data.name, existingNames));
+      }
+    } catch {
+      // Best-effort: als de suggestie mislukt, blijft het veld gewoon leeg -- de gebruiker
+      // kan altijd zelf een naam intypen.
+    } finally {
+      setSuggestingName(false);
+    }
   }
 
   /**
@@ -1237,7 +1274,10 @@ export default function Home() {
 
             {!showSaveNamePrompt ? (
               <button
-                onClick={() => setShowSaveNamePrompt(true)}
+                onClick={() => {
+                  setShowSaveNamePrompt(true);
+                  if (selectedLoop) suggestRouteNameFor(selectedLoop.route.geometry);
+                }}
                 style={{
                   width: "100%",
                   minHeight: 48,
@@ -1254,7 +1294,9 @@ export default function Home() {
               </button>
             ) : (
               <div style={{ marginBottom: 12, background: "var(--color-sand)", borderRadius: "var(--radius-card)", padding: "0.85rem 1rem" }}>
-                <p style={{ fontSize: 14, marginBottom: 8 }}>Geef je route een naam (optioneel)</p>
+                <p style={{ fontSize: 14, marginBottom: 8 }}>
+                  Geef je route een naam (optioneel){suggestingName && " -- suggestie ophalen..."}
+                </p>
                 <input
                   value={routeNameInput}
                   onChange={(e) => setRouteNameInput(e.target.value)}
