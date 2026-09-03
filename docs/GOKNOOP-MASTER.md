@@ -1713,3 +1713,16 @@ geven (zoals hier) als, potentieel gevaarlijker, ECHTE fouten MISSEN als een nie
 versie toevallig soepeler is dan de gepinde, oudere versie.
 
 385/385 tests ongewijzigd, `tsc` schoon (nu met correct uitgelijnde dependency-versies).
+
+### 9.25 Pauzeknop eerder beschikbaar: vanaf "Start", niet pas fase C (30-8-2026)
+
+Op verzoek: de "⏸ Pauze"-knop stond eerder alleen tijdens fase NAVIGATING (fase C). Nu
+zichtbaar vanaf het moment dat de sessie daadwerkelijk gestart is (`running`, dus zodra op
+"Start" gedrukt wordt) -- ook tijdens fase A ("Rijd naar het startpunt") en fase B ("Je staat
+bij het startpunt"). De bestaande `onPause`-handler hoefde niet aangepast: tijdens fase A/B is
+`progressInfo`/`sessionStartedAtMsRef` nog niet gevuld, dus een pauze op dat moment legt
+gewoon `distanceTraveledM: 0`/`rideTimeS: 0` vast -- correct gedrag, geen speciale afhandeling
+nodig.
+
+Geen wijziging aan `lib/route-engine/`. 385/385 tests ongewijzigd (pure UI-zichtbaarheids-
+wijziging).

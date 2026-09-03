@@ -935,7 +935,7 @@ export default function NavigationScreen({
           )
         )}
 
-        {phase === "NAVIGATING" && onPause && (
+        {running && onPause && (
           // Back to Start staat nu UITSLUITEND in het pauzemenu (op verzoek: "alles in het
           // pauzemenu, is tevens controlekamer") -- hier alleen nog de Pauze-knop, nu als eigen,
           // herkenbare ronde knop i.p.v. een klein pilletje naast een andere knop.
