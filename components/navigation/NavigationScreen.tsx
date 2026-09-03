@@ -236,6 +236,46 @@ export default function NavigationScreen({
   const [nextNode, setNextNode] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
   const [progressInfo, setProgressInfo] = useState<{ ratio: number; distanceAlongM: number; totalM: number } | null>(null);
   const [phase, setPhase] = useState<PreNavigationPhase>("TO_START");
+  /**
+   * "2 seconden ingedrukt houden vergroot het blok" (sectie 9.36, 30-8-2026): 2000ms is
+   * bewust ruim boven iOS Safari's eigen ingedrukt-houden-drempel (rond 500ms, voor
+   * kopiëren/delen-menu's) -- geen conflict met bestaand systeemgedrag. Onafhankelijke
+   * toggle per blok (richtingkaart / voortgangsbalk); nogmaals 2 sec ingedrukt houden zet
+   * 'm terug naar normaal.
+   */
+  const [directionCardEnlarged, setDirectionCardEnlarged] = useState(false);
+  const [progressPanelEnlarged, setProgressPanelEnlarged] = useState(false);
+  const longPressTimerRef = useRef<number | null>(null);
+
+  function longPressHandlers(toggle: () => void) {
+    return {
+      onPointerDown: () => {
+        if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = window.setTimeout(() => {
+          toggle();
+          longPressTimerRef.current = null;
+        }, 2000);
+      },
+      onPointerUp: () => {
+        if (longPressTimerRef.current) {
+          window.clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+      },
+      onPointerCancel: () => {
+        if (longPressTimerRef.current) {
+          window.clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+      },
+      onPointerLeave: () => {
+        if (longPressTimerRef.current) {
+          window.clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+      },
+    };
+  }
   const [startInfo, setStartInfo] = useState<{ nodeId: string; distanceM: number; bearingDeg: number } | null>(null);
   // Sectie 6N/9.17-BUGFIX: de EENMALIG opgehaalde totale lengte van de LocalBikeRouter-route
   // naar het startpunt. Bewust NIET meer gebruikt voor de live afstandsweergave/aankomstcheck
@@ -676,6 +716,8 @@ export default function NavigationScreen({
     routeToStartDistanceRef.current = null;
     physicalStartRef.current = null; // alleen bij een volledige sessie-stop, nooit tussentijds
     hasFitBoundsToStartRef.current = false;
+    setDirectionCardEnlarged(false);
+    setProgressPanelEnlarged(false);
     setRouteToStartDistanceM(null);
     smoothedHeadingRef.current = null;
     mapRef.current?.easeTo({ bearing: 0, duration: 500 });
@@ -837,6 +879,7 @@ export default function NavigationScreen({
         ) : (
           (phase === "TO_START" ? startInfo : nextNode) && (
           <div
+            {...longPressHandlers(() => setDirectionCardEnlarged((v) => !v))}
             style={{
               background: "#085041",
               borderRadius: 20,
@@ -844,8 +887,11 @@ export default function NavigationScreen({
               width: "100%",
               maxWidth: 340,
               boxShadow: "0 4px 20px rgba(0,0,0,0.28)",
-              transition: "opacity 0.25s ease",
+              transition: "opacity 0.25s ease, transform 0.25s ease",
+              transform: directionCardEnlarged ? "scale(1.35)" : "scale(1)",
+              transformOrigin: "top center",
               boxSizing: "border-box",
+              touchAction: "manipulation",
             }}
           >
             {phase === "TO_START" && startInfo && (
@@ -1070,6 +1116,7 @@ export default function NavigationScreen({
 
       {progressInfo && phase === "NAVIGATING" && (
         <div
+          {...longPressHandlers(() => setProgressPanelEnlarged((v) => !v))}
           style={{
             position: "absolute",
             bottom: 20,
@@ -1080,6 +1127,10 @@ export default function NavigationScreen({
             padding: "14px 18px",
             zIndex: 10,
             boxShadow: "0 2px 10px rgba(0,0,0,0.12)",
+            transition: "transform 0.25s ease",
+            transform: progressPanelEnlarged ? "scale(1.35)" : "scale(1)",
+            transformOrigin: "bottom center",
+            touchAction: "manipulation",
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>

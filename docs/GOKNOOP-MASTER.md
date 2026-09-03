@@ -2055,3 +2055,30 @@ door de gebruiker zelf achteraf in te vullen tekstveld per gedeelde route.
   invoerveld voor "met wie" dat bij het verlaten van het veld (`onBlur`) wordt opgeslagen.
 
 Geen wijziging aan `lib/route-engine/`. 411/411 tests (404 + 7 nieuw), `tsc` schoon.
+
+### 9.36 "2 sec ingedrukt houden = vergroot" voor richtingkaart + voortgangsbalk — ✅ GEBOUWD (30-8-2026)
+
+**Overleg vooraf, per de gebruiker bevestigd**: 2000ms als drempel, bewust ruim boven iOS
+Safari's eigen ingedrukt-houden-drempel (~500ms voor kopiëren/delen-contextmenu's) -- geen
+conflict met bestaand systeemgedrag. Uitvoering: optie A (het blok zelf wordt groter, in
+dezelfde context op de kaart, geen volledig-scherm-overlay). Gedrag: toggle -- 2 sec
+ingedrukt houden vergroot, nogmaals 2 sec ingedrukt houden zet terug naar normaal.
+
+**Gebouwd**: `longPressHandlers()`-helper (pointerdown start een 2000ms-timer, pointerup/
+-cancel/-leave annuleert 'm) + `directionCardEnlarged`/`progressPanelEnlarged`-state, elk
+onafhankelijk toggle-baar. Uitvoering via CSS `transform: scale(1.35)` i.p.v. elke losse
+padding/font-size-waarde apart herschrijven -- eenvoudiger en garandeert dat alles (tekst,
+iconen, marges) evenredig meegroeit.
+
+**Belangrijk detail, bewust zo gekozen**: `transformOrigin` verschilt per blok --
+richtingkaart groeit vanaf `top center` (voorkomt overlap met de bovenbalk/Stop-knop erboven),
+voortgangsbalk groeit vanaf `bottom center` (voorkomt dat-ie van het scherm afgeduwd wordt).
+Beide toggles resetten bij `stop()` -- een nieuwe sessie begint altijd weer normaal-grootte.
+
+**Nog OPENSTAAND, niet vergeten**: de eerder besproken/afgesproken verplaatsing van de
+pauzeknop van een losse, zwevende knop NAAR een klein icoontje ín de richtingkaart zelf (op
+verzoek, om minder losse elementen op de kaart te hebben) -- dat gesprek werd onderbroken
+door dit langere-druk-idee, nog niet gebouwd.
+
+Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (pure UI-interactie, geen
+nieuwe testbare pure logica).
