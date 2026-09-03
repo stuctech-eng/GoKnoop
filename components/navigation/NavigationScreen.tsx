@@ -237,41 +237,26 @@ export default function NavigationScreen({
   const [progressInfo, setProgressInfo] = useState<{ ratio: number; distanceAlongM: number; totalM: number } | null>(null);
   const [phase, setPhase] = useState<PreNavigationPhase>("TO_START");
   /**
-   * "2 seconden ingedrukt houden vergroot het blok" (sectie 9.36, 30-8-2026): 2000ms is
-   * bewust ruim boven iOS Safari's eigen ingedrukt-houden-drempel (rond 500ms, voor
-   * kopiëren/delen-menu's) -- geen conflict met bestaand systeemgedrag. Onafhankelijke
-   * toggle per blok (richtingkaart / voortgangsbalk); nogmaals 2 sec ingedrukt houden zet
-   * 'm terug naar normaal.
+   * "Dubbeltikken vergroot het blok" (sectie 9.38, 30-8-2026) -- BIJGESTELD van de eerdere
+   * "2 seconden ingedrukt houden"-aanpak (sectie 9.36): die bleek in de praktijk niet
+   * betrouwbaar te werken (perfect stilhouden gedurende 2 volle seconden is lastig, zeker
+   * onderweg op de fiets). Dubbeltikken is eenvoudiger te detecteren (twee korte tikken kort
+   * na elkaar) en minder gevoelig voor een kleine trilling van de hand. Onafhankelijke toggle
+   * per blok (richtingkaart / voortgangsbalk); nogmaals dubbeltikken zet 'm terug naar normaal.
    */
   const [directionCardEnlarged, setDirectionCardEnlarged] = useState(false);
   const [progressPanelEnlarged, setProgressPanelEnlarged] = useState(false);
-  const longPressTimerRef = useRef<number | null>(null);
+  const lastTapAtRef = useRef<number>(0);
 
-  function longPressHandlers(toggle: () => void) {
+  function doubleTapHandlers(toggle: () => void) {
     return {
-      onPointerDown: () => {
-        if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = window.setTimeout(() => {
+      onClick: () => {
+        const now = Date.now();
+        if (now - lastTapAtRef.current < 400) {
           toggle();
-          longPressTimerRef.current = null;
-        }, 2000);
-      },
-      onPointerUp: () => {
-        if (longPressTimerRef.current) {
-          window.clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
-      },
-      onPointerCancel: () => {
-        if (longPressTimerRef.current) {
-          window.clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
-      },
-      onPointerLeave: () => {
-        if (longPressTimerRef.current) {
-          window.clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
+          lastTapAtRef.current = 0; // voorkomt dat een snelle DERDE tik meteen weer toggelt
+        } else {
+          lastTapAtRef.current = now;
         }
       },
     };
@@ -767,14 +752,14 @@ export default function NavigationScreen({
             }}
             aria-label="Navigatie verlaten"
             style={{
-              width: 36,
-              height: 36,
-              borderRadius: 18,
+              width: 44,
+              height: 44,
+              borderRadius: 22,
               border: "none",
               background: "rgba(0,0,0,0.55)",
               color: "white",
-              fontSize: 18,
-              lineHeight: "36px",
+              fontSize: 19,
+              lineHeight: "44px",
               textAlign: "center",
               padding: 0,
             }}
@@ -785,22 +770,58 @@ export default function NavigationScreen({
           <span />
         )}
 
-        <button
-          onClick={running ? stop : start}
-          disabled={mapStatus !== "loaded"}
-          style={{
-            padding: "9px 18px",
-            borderRadius: 20,
-            border: "none",
-            background: running ? "#b00020" : "#085041",
-            color: "white",
-            fontSize: 13,
-            fontWeight: 600,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-          }}
-        >
-          {running ? "Stop" : "Start"}
-        </button>
+        {running && onPause ? (
+          // GPT-ontwerp-idee, 30-8-2026: één duidelijke, herkenbare knop (icoon + tekst) i.p.v.
+          // een losse "Stop" ernaast. Nu Pauze een eigen menu heeft met "Rit beëindigen" (mét
+          // bevestiging), is een aparte, direct-stoppende "Stop"-knop overbodig geworden -- dat
+          // deed hetzelfde, maar zonder bevestiging en zonder de mogelijkheid om later te
+          // hervatten. Simpeler: ✕ (dit scherm verlaten) + ⏸ Pauze (alles-in-één-plek).
+          <button
+            onClick={() => {
+              const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
+              onPause({
+                lastKnownPosition: lastSampleRef.current,
+                distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
+                rideTimeS,
+                physicalStart: physicalStartRef.current,
+              });
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              minHeight: 44,
+              padding: "10px 18px",
+              borderRadius: 22,
+              border: "none",
+              background: "#085041",
+              color: "white",
+              fontSize: 14,
+              fontWeight: 700,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+            }}
+          >
+            <span style={{ fontSize: 16 }}>⏸</span> Pauze
+          </button>
+        ) : (
+          <button
+            onClick={running ? stop : start}
+            disabled={mapStatus !== "loaded"}
+            style={{
+              minHeight: 44,
+              padding: "10px 20px",
+              borderRadius: 22,
+              border: "none",
+              background: running ? "#b00020" : "#085041",
+              color: "white",
+              fontSize: 14,
+              fontWeight: 700,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+            }}
+          >
+            {running ? "Stop" : "Start"}
+          </button>
+        )}
       </div>
 
       {/* Inhoudskolom onder de top bar: richtingkaart, en (alleen in debugmodus) het statuspaneel --
@@ -879,7 +900,7 @@ export default function NavigationScreen({
         ) : (
           (phase === "TO_START" ? startInfo : nextNode) && (
           <div
-            {...longPressHandlers(() => setDirectionCardEnlarged((v) => !v))}
+            {...doubleTapHandlers(() => setDirectionCardEnlarged((v) => !v))}
             style={{
               position: "relative",
               background: "#085041",
@@ -895,42 +916,6 @@ export default function NavigationScreen({
               touchAction: "manipulation",
             }}
           >
-            {running && onPause && (
-              // Verplaatst van een losse, zwevende knop NAAR hier (op verzoek, 30-8-2026: "minder
-              // losse elementen op de kaart"). Eén plek, in de gedeelde kaart-wrapper -- werkt
-              // daardoor automatisch voor alle drie de fasen (TO_START/START_GUIDANCE/NAVIGATING),
-              // geen drie keer dezelfde knop hoeven te bouwen.
-              <button
-                onClick={(e) => {
-                  e.stopPropagation(); // voorkomt dat de klik ook de long-press-vergroot-logica raakt
-                  const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
-                  onPause({
-                    lastKnownPosition: lastSampleRef.current,
-                    distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
-                    rideTimeS,
-                    physicalStart: physicalStartRef.current,
-                  });
-                }}
-                aria-label="Pauzeer navigatie"
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  right: 8,
-                  width: 44,
-                  height: 44,
-                  borderRadius: 22,
-                  background: "rgba(255,255,255,0.16)",
-                  color: "#FFFFFF",
-                  border: "none",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 17,
-                }}
-              >
-                ⏸
-              </button>
-            )}
 
             {phase === "TO_START" && startInfo && (
               <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -1114,7 +1099,7 @@ export default function NavigationScreen({
 
       {progressInfo && phase === "NAVIGATING" && (
         <div
-          {...longPressHandlers(() => setProgressPanelEnlarged((v) => !v))}
+          {...doubleTapHandlers(() => setProgressPanelEnlarged((v) => !v))}
           style={{
             position: "absolute",
             bottom: 20,

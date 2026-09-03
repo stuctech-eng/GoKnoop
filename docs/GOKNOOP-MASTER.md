@@ -2103,3 +2103,36 @@ in de TO_START/NAVIGATING-kaartvarianten (die ook rechts in de kaart staat). Een
 het pushen zou dit meteen duidelijk maken; nog niet bevestigd.
 
 Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (pure UI-herstructurering).
+
+### 9.38 Vergroten: van "2 sec ingedrukt houden" naar dubbeltikken (30-8-2026)
+
+**Bevestigd door de gebruiker: de lange-druk-versie (sectie 9.36) werkte in de praktijk niet
+betrouwbaar** -- perfect 2 seconden stilhouden is lastig, zeker onderweg op de fiets. Op
+voorstel van de gebruiker vervangen door dubbeltikken (`onClick`, twee tikken binnen 400ms).
+Zelfde toggle-gedrag verder ongewijzigd: onafhankelijk per blok (richtingkaart/voortgangsbalk),
+nogmaals dubbeltikken zet terug naar normaal. `lastTapAtRef` wordt na een geslaagde toggle
+gereset, zodat een snelle DERDE tik niet meteen weer toggelt.
+
+Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (pure UI-interactie).
+
+### 9.39 Topbalk vereenvoudigd: "Stop" vervangen door één duidelijke "⏸ Pauze"-knop — ✅ GEBOUWD (30-8-2026)
+
+Naar aanleiding van een GPT-ontwerp-idee (gedeeld als screenshot) en aansluitend bij wat in
+sectie 9.37/9.38's gesprek al naar voren kwam: er waren drie deels overlappende
+"stop"-achtige acties (✕/Stop/Pauze). Nu vereenvoudigd:
+
+- **Zodra er een `onPause`-handler beschikbaar is** (de echte app, niet de kale debug-harnas):
+  de losse "Stop"-knop verdwijnt, vervangen door ÉÉN duidelijke knop "⏸ Pauze" (icoon + tekst,
+  duidelijker dan een kaal icoontje) op exact dezelfde plek in de topbalk.
+- **Redenering**: nu Pauze een eigen menu heeft met "Rit beëindigen" (MET verplichte
+  bevestiging, sectie 9.19), was een aparte, direct-stoppende "Stop"-knop feitelijk overbodig
+  -- die deed hetzelfde maar zonder bevestiging en zonder hervat-mogelijkheid.
+- **Terugvalgedrag behouden**: als er GEEN `onPause`-handler is (bijv. het kale debug-harnas
+  zonder ouder-component), blijft de oude "Stop"-knop gewoon bestaan -- geen functionaliteit
+  verloren in dat scenario.
+- Het pauze-icoontje dat eerder ín de richtingkaart stond (sectie 9.37) is hierdoor overbodig
+  geworden en verwijderd -- zit nu alleen nog in de topbalk.
+- **Kruisje (✕) vergroot van 36px naar 44px**, gelijk aan de nieuwe Pauze-knop -- voldoet nu
+  aan de al vastgelegde minimum-tikdoelgrootte (sectie 13) en oogt visueel consistent.
+
+Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (pure UI-herstructurering).
