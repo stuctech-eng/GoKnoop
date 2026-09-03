@@ -1749,3 +1749,53 @@ ongeacht de fase.
 
 385/385 tests ongewijzigd (bug 1 raakte alleen configuratiewaarden binnen een al bestaande,
 geteste functie; bug 2 is pure UI-positionering).
+
+### 9.27 ECHTE REGRESSIE GEVONDEN: gereden-routes-dedup werd te agressief na een dag testen (30-8-2026)
+
+**Het gerapporteerde probleem**: "20km gevraagd, kreeg routes van 38/42.8/65.6km" -- bevestigd
+als een echte regressie (niet het oorspronkelijke gedrag: "hij was goed, de rondjes").
+
+**Belangrijke les over het diagnoseproces zelf**: de eerste diagnose (sectie 9.26, de
+score-gewichten) bleek FOUT -- beide fixes van die ronde waren bevestigd live op GitHub, maar
+het probleem bleef identiek. Dat had ik moeten opmerken als signaal om de diagnose te
+heroverwegen, niet om nogmaals aan dezelfde knop te draaien. Uiteindelijk gevonden door
+terug te redeneren vanuit "hij was goed" (dus een regressie, geen structureel probleem) en te
+zoeken naar wat er SPECIFIEK vandaag veranderd was in dit gebied: de gereden-routes-dedup
+(sectie 6F/Fase 2), na een hele dag intensief testen in exact hetzelfde Volendam/Edam-gebied.
+
+**Root cause, bevestigd in de code**: `avoidRouteEdgeSets` in `generateLoopRoutes()`
+(`loop-route-generator.ts`) was een HARDE uitsluiting -- een kandidaat die matchte met een
+eerder gereden route werd volledig overgeslagen, ongeacht hoe goed die verder paste. Na een
+dag testen (tot 20 opgeslagen gereden routes, `MAX_STORED_ROUTES`) in hetzelfde kleine gebied
+waren vrijwel alle goed-passende 20km-opties al "gereden" en dus uitgesloten -- de generator
+moest noodgedwongen veel verder afwijkende routes (38-65km) teruggeven om toch `count` routes
+te vinden.
+
+**Fix**: van harde uitsluiting naar zachte voorkeur MET terugval. Eerste doorgang: frisse
+(niet eerder gereden) routes hebben de voorkeur, op volgorde van beste afstandspassing.
+Tweede doorgang, ALLEEN als er na de eerste doorgang nog ruimte over is (`accepted.length <
+count`): vul aan met de best passende eerder-gereden routes. Zo blijft "liever een nieuwe
+route" het uitgangspunt (ongewijzigd t.o.v. de oorspronkelijke intentie, sectie 24 van de
+oorspronkelijke pauze-opdracht: "standaard liever een nieuwe route, maar gebruiker mag bewust
+een oude route opnieuw kiezen"), maar wordt afstandskwaliteit nooit meer opgeofferd om
+herhaling koste wat het kost te vermijden.
+
+**Test bijgewerkt + nieuwe regressietest**: de bestaande test die het OUDE (harde) gedrag
+verifieerde is herschreven naar het nieuwe, gewenste gedrag (terugval geeft nog steeds
+routes, met afstandskwaliteit vergelijkbaar aan de ongefilterde beste route). Een NIEUWE test
+bootst het exacte gerapporteerde scenario na (alle 4 baseline-routes als "gereden"
+gemarkeerd) en bewijst dat de teruggegeven routes nooit extreem afwijken (< 50%) -- direct
+tegen het gerapporteerde symptoom (~225% afwijking bij 65,6km i.p.v. 20km).
+
+**Bijkomende, kleinere bevinding (NIET gefixt, bewust als apart punt genoteerd)**: de "Beste
+startpunt gevonden"-banner op het resultatenscherm toonde een verwarrende, zelf-tegenstrijdige
+tekst ("Knooppunt 98 -- Knooppunt 98 lag dichterbij") -- de onderliggende LOGICA bleek
+correct (een daadwerkelijk andere, beter scorende kandidaat werd gekozen), maar er bestaan
+blijkbaar twee verschillende, echte knooppunten in de dataset die toevallig hetzelfde
+weergavenummer "98" delen (al eerder gezien op de kaart bij Volendam, sectie eerder in dit
+document). Dit is een data-eigenaardigheid, geen codefout -- vereist knooppunten met dubbele
+weergavenummers kunnen onderscheiden (bijv. door coördinaten of interne ID te tonen bij een
+botsing) -- BEWUST NIET nu gefixt, apart vervolgpunt.
+
+386/386 tests (385 + 1 netto: één test herschreven naar nieuw gedrag, één nieuwe
+regressietest toegevoegd), `tsc` schoon.

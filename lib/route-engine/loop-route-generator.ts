@@ -262,8 +262,12 @@ export function generateLoopRoutes(
   candidates.sort((a, b) => a.deviationM - b.deviationM);
 
   const accepted: LoopCandidate[] = [];
+  const historyMatchedFallback: LoopCandidateDraft[] = [];
   let duplicateRejected = 0;
   let historyRejected = 0;
+
+  // Eerste doorgang: FRISSE routes (nog niet eerder gereden) hebben de voorkeur, op volgorde
+  // van beste afstandspassing.
   for (const candidate of candidates) {
     if (accepted.length >= count) break;
     const isDuplicate = accepted.some(
@@ -278,8 +282,28 @@ export function generateLoopRoutes(
     );
     if (matchesRiddenHistory) {
       historyRejected++;
+      historyMatchedFallback.push(candidate); // bewaren -- mogelijk toch nodig, zie hieronder
       continue;
     }
+    accepted.push({
+      ...candidate,
+      resolvedEdges: resolveRouteEdges(provider, candidate.route),
+      nodeDisplayNumbers: candidate.route.nodes.map((nodeId) => provider.getNode(nodeId)?.displayNumber ?? nodeId),
+    });
+  }
+
+  // Zachte voorkeur, GEEN harde uitsluiting (bugfix 30-8-2026: na een dag intensief testen in
+  // hetzelfde gebied bleken vrijwel alle goed-passende routes al "gereden" en dus uitgesloten
+  // te zijn, waardoor alleen sterk afwijkende (bijv. 65km i.p.v. 20km) opties overbleven --
+  // duidelijk een regressie t.o.v. het doel). Als er na het vermijden van geschiedenis te
+  // weinig frisse opties overblijven, vul aan met de best passende eerder-gereden routes --
+  // afstandskwaliteit mag niet drastisch verslechteren alleen om herhaling te vermijden.
+  for (const candidate of historyMatchedFallback) {
+    if (accepted.length >= count) break;
+    const isDuplicate = accepted.some(
+      (a) => edgeOverlapRatio(a.route.edges, candidate.route.edges) > overlapThreshold
+    );
+    if (isDuplicate) continue;
     accepted.push({
       ...candidate,
       resolvedEdges: resolveRouteEdges(provider, candidate.route),
