@@ -976,48 +976,6 @@ export default function NavigationScreen({
           )
         )}
 
-        {running && onPause && (
-          // Back to Start staat nu UITSLUITEND in het pauzemenu (op verzoek: "alles in het
-          // pauzemenu, is tevens controlekamer") -- hier alleen nog de Pauze-knop.
-          //
-          // BIJGESTELD (30-8-2026, "geen betere plek?"): stond eerst inline direct onder de
-          // richtingkaart (`marginTop`) -- daardoor verschoof de knop per fase, want elke fase
-          // (TO_START/START_GUIDANCE/NAVIGATING) heeft een andere kaarthoogte. Nu een VASTE
-          // positie rechtsonder, onafhankelijk van de richtingkaart, en boven de voortgangsbalk
-          // (die begint bij bottom:164) zodat ze nooit overlappen.
-          <button
-            onClick={() => {
-              const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
-              onPause({
-                lastKnownPosition: lastSampleRef.current,
-                distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
-                rideTimeS,
-                physicalStart: physicalStartRef.current,
-              });
-            }}
-            aria-label="Pauzeer navigatie"
-            style={{
-              position: "absolute",
-              bottom: 280,
-              right: 12,
-              zIndex: 10,
-              width: 60,
-              height: 60,
-              borderRadius: 30,
-              background: "#FFFFFF",
-              color: "#085041",
-              border: "none",
-              boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 26,
-            }}
-          >
-            ⏸
-          </button>
-        )}
-
         {/* Statuspaneel: alleen in debugmodus (geen onExit meegegeven), niet in de echte app --
             een monospace technisch paneel hoort niet in de productie-UX. */}
         {!onExit && (
@@ -1055,6 +1013,47 @@ export default function NavigationScreen({
           </div>
         )}
       </div>
+
+      {running && onPause && (
+        // BUGFIX (30-8-2026, "pauzeknop niet zichtbaar"): stond eerder GENEST binnen de
+        // richtingkaart-wrapper (die zelf geen vaste hoogte heeft, alleen `top: 64` -- de
+        // wrapper is dus maar zo hoog als de richtingkaart zelf). `bottom: 280` werd daardoor
+        // gemeten t.o.v. DIE kleine wrapper, niet t.o.v. het echte scherm -- de knop belandde
+        // zo ver BUITEN beeld. Nu een echte BROER van die wrapper (zelfde niveau als de
+        // voortgangsbalk hieronder, die wél altijd correct verscheen) -- `bottom: 280` klopt
+        // nu daadwerkelijk t.o.v. het volledige scherm.
+        <button
+          onClick={() => {
+            const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
+            onPause({
+              lastKnownPosition: lastSampleRef.current,
+              distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
+              rideTimeS,
+              physicalStart: physicalStartRef.current,
+            });
+          }}
+          aria-label="Pauzeer navigatie"
+          style={{
+            position: "absolute",
+            bottom: 280,
+            right: 12,
+            zIndex: 10,
+            width: 60,
+            height: 60,
+            borderRadius: 30,
+            background: "#FFFFFF",
+            color: "#085041",
+            border: "none",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 26,
+          }}
+        >
+          ⏸
+        </button>
+      )}
 
       {progressInfo && phase === "NAVIGATING" && (
         <div

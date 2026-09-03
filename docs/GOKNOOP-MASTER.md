@@ -1925,3 +1925,35 @@ Geen wijziging aan `lib/route-engine/` of aan de matching-logica zelf (`Deviatio
 `NavigationStateMachine`) -- puur een nieuwe manier om de BESTAANDE matching eerder te laten
 starten. 387/387 tests ongewijzigd, `tsc` schoon. Nog geen echte iPhone-validatie van deze
 specifieke fix.
+
+### 9.32 ECHTE ROOT CAUSE van de onzichtbare pauzeknop gevonden (30-8-2026)
+
+**De vorige "fix" (sectie 9.26/9.29, vaste `bottom`-waarden bijstellen) loste het probleem
+niet structureel op** -- de knop bleef op sommige plekken/rits onzichtbaar (bevestigd met een
+screenshot: fase A, "Rijd naar het startpunt", geen pauzeknop zichtbaar, ondanks eerdere
+positie-aanpassingen).
+
+**Werkelijke oorzaak, nu wel gevonden**: de knop stond GENEST binnen dezelfde wrapper als de
+richtingkaart (`position: absolute, top: 64`, GEEN `bottom`/`height` ingesteld) -- die wrapper
+is daardoor alleen zo hoog als haar NORMALE-FLOW-inhoud (in de praktijk: alleen de
+richtingkaart zelf, een paar honderd pixels). `bottom: 280` op de knop werd dus gemeten ten
+opzichte van DIE kleine wrapper, niet ten opzichte van het echte scherm -- de knop belandde
+zo ver BUITEN het zichtbare gebied, ver boven de kaart. Vandaar dat bijstellen van het
+`bottom`-getal keer op keer niet hielp: het probleem zat niet in de waarde, maar in de
+verkeerde referentie waaraan die waarde gemeten werd.
+
+**Fix**: de knop verplaatst naar een ECHTE BROER van die wrapper (zelfde niveau als de
+voortgangsbalk eronder, die wél altijd correct verscheen -- en dat had de aanwijzing moeten
+zijn: de voortgangsbalk gebruikt exact dezelfde soort `position: absolute, bottom: X`, maar
+dan WEL als broer van de wrapper, niet als kind).
+
+**Les**: bij een herhaald "positie klopt niet"-probleem waarbij bijstellen van het getal niet
+helpt, is de structuur (welke ouder is de containing block?) waarschijnlijker de oorzaak dan
+de waarde zelf -- dat had bij de tweede mislukte poging al onderzocht moeten worden i.p.v.
+een derde keer aan hetzelfde getal te draaien.
+
+387/387 tests ongewijzigd (pure structurele UI-fix), `tsc` schoon.
+
+**Openstaande vraag aan de gebruiker (nog niet gebouwd)**: attributie-icoontje ook
+gecentreerd tonen -- moet dat letterlijk midden op het scherm (over de kaartinhoud heen), of
+onderaan gecentreerd (i.p.v. rechtsonder in de hoek)? Antwoord nog niet ontvangen.
