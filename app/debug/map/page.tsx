@@ -80,6 +80,7 @@ export default function MapDebugPage() {
         dragRotate: false, // geen rotatie via slepen (sectie 5.3: kaart blijft noordgericht)
         pitchWithRotate: false,
         touchPitch: false,
+        attributionControl: { compact: true },
       });
     } catch (err) {
       setStatus("error");

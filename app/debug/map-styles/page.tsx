@@ -44,6 +44,7 @@ function useStyleMap(styleUrl: string) {
       dragRotate: false,
       pitchWithRotate: false,
       touchPitch: false,
+      attributionControl: { compact: true },
     });
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");

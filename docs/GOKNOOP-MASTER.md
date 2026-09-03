@@ -1678,3 +1678,38 @@ samenvoegen, ook al is de techniek gedeeld.
 
 **Nog te bepalen bij het bouwen:** exacte zoekstraal rond de bestemming, hoeveel resultaten
 tonen, of/hoe de link naar Kaarten per parkeerplaats verschijnt.
+
+---
+
+## 9.24 Vastgelopen zoom + tweede, groter gat in eigen verificatieproces (30-8-2026)
+
+**Het gemelde probleem, uiteindelijk verklaard:** de gebruiker zag een navigatiescherm zonder
+enige zichtbare knop (kruisje/Stop/Pauze) via de nieuwe "route naar een adres"-functie
+(sectie 9.21). Eerst onderzocht als mogelijke React-crash/structurele JSX-fout (haakjes-
+balans gecontroleerd op de live GitHub-versie -- klopte prima, geen structuurfout). Uiteindelijk
+bleek de daadwerkelijke oorzaak: **de browserpagina zelf was per ongeluk ingezoomd (pinch-
+zoom) en kon niet meer terug** -- een bekende iOS Safari-eigenaardigheid, geen codefout. Bij
+een vastgelopen paginazoom verdwijnen vast-gepositioneerde elementen (`position: fixed`,
+zoals het kruisje/Stop-knop) buiten het zichtbare deel van het scherm.
+
+**Fix:** `app/layout.tsx` kreeg een expliciete Next.js `viewport`-export
+(`maximumScale: 1, userScalable: false`) -- de HELE pagina kan niet meer pagina-breed
+gepincht worden. De kaart zelf (MapLibre) heeft haar eigen, onafhankelijke zoomknoppen/
+-gebaren, die blijven gewoon werken -- dit raakt alleen de browserpagina zelf, niet de kaart.
+
+**Tweede, groter gat in mijn eigen verificatieproces gevonden tijdens het uitzoeken:** mijn
+sandbox had **Next.js 16.3.3 en React 19.2.8 geïnstalleerd, terwijl de echte repo vastzit op
+Next.js 14.2.35 / React 18.3.1** (`package.json`) -- een groot major-versieverschil. Dit
+verklaarde een aparte, valse foutmelding tijdens het bouwen van deze fix zelf (een
+Next.js-Fonts-API-verschil tussen versie 14 en 16). **Rechtgezet**: sandbox nu geïnstalleerd
+met exact de gepinde versies uit de echte `package.json` (`next@14.2.35`, `react@18.3.1`,
+`react-dom@18.3.1`, en de bijbehorende `@types/*`-pakketten).
+
+**Herhaalde, belangrijke les (zelfde als sectie 9.22, nu uitgebreid)**: bij het opzetten van
+een verificatie-sandbox altijd EERST de volledige, echte `package.json` ophalen en
+ALLE dependency-versies exact matchen (niet alleen `tsconfig.json`) -- een sandbox met
+afwijkende major-versies van kernafhankelijkheden (Next.js, React) kan zowel valse fouten
+geven (zoals hier) als, potentieel gevaarlijker, ECHTE fouten MISSEN als een nieuwere
+versie toevallig soepeler is dan de gepinde, oudere versie.
+
+385/385 tests ongewijzigd, `tsc` schoon (nu met correct uitgelijnde dependency-versies).

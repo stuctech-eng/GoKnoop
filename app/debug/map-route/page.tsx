@@ -111,6 +111,7 @@ export default function MapRouteDebugPage() {
         dragRotate: false,
         pitchWithRotate: false,
         touchPitch: false,
+        attributionControl: { compact: true },
       });
     } catch (err) {
       setStatus("error");
