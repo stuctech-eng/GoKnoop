@@ -1886,3 +1886,42 @@ het moment dat `model` wél in scope is, zodat de render-laag de coördinaten ka
 
 Geen wijziging aan `lib/route-engine/`. 387/387 tests ongewijzigd (pure UI-toevoeging/-tuning,
 geen nieuwe testbare pure logica).
+
+### 9.31 "Rit hervatten" hersteld: echte doorstart i.p.v. opnieuw beginnen — ✅ GEBOUWD (30-8-2026)
+
+**Het gat, bevestigd in sectie 9.29**: "Hervat rit" startte de HELE oorspronkelijke route
+opnieuw vanaf fase A (rijd naar het eerste knooppunt) -- geen probleem bij een rondje, wel bij
+een punt-naar-punt-adres-rit, waar het beginpunt niets met de hervatlocatie te maken heeft.
+
+**Kerninzicht van de fix**: de bestaande matching/afwijkingsdetectie werkt al overal langs de
+route, niet uitsluitend vanaf het beginknooppunt -- fase A/B bestaan uitsluitend om "nog niet
+op de route" (moet er nog fysiek naartoe) te overbruggen. Bij hervatten is de gebruiker
+(waarschijnlijk) al ergens op/bij de route -- dus fase A/B kunnen gewoon worden OVERGESLAGEN,
+direct de matching-modus in, en de bestaande, al geteste matching plaatst de gebruiker vanzelf
+op de juiste plek langs de route.
+
+**Gebouwd**: drie nieuwe, optionele props op `NavigationScreen`:
+- `startInProgress` -- als waar, slaat de allereerste sample fase A/B-bepaling over en start
+  de matching direct (`stateMachine.start()` meteen, i.p.v. pas bij aankomst bij het
+  beginknooppunt).
+- `initialPhysicalStart` -- zaadt `physicalStartRef` met het OORSPRONKELIJKE vertrekpunt (niet
+  de hervat-locatie) -- cruciaal, anders zou Back to Start/een volgende pauze de verkeerde
+  parkeerplaats gebruiken.
+- `initialElapsedRideTimeS` -- telt terug bij het zetten van `sessionStartedAtMsRef`, zodat
+  een VOLGENDE pauze de cumulatieve rijtijd toont, niet alleen de tijd sinds hervatten.
+
+**Mooie bijkomstigheid, geen aparte code nodig**: de gereden afstand (voor een eventuele
+volgende pauze) hoeft NIET apart opgeteld te worden -- `progressInfo.distanceAlongM` is
+POSITIE-gebaseerd (hoe ver langs de route is de huidige gematchte positie), niet een
+opgeteld GPS-spoor. Bij hervatten toont dit dus automatisch, vanaf de eerste geslaagde match,
+de juiste cumulatieve afstand.
+
+**`app/page.tsx`**: `activeSavedRoute`-state kreeg een optioneel `resumeContext`-veld
+(`physicalStart`/`elapsedRideTimeS`), alleen gevuld door `resumePausedRide()` -- de normale
+opgeslagen-routes-start (`startSavedRoute`) en gereden-routes-start (`startRiddenRoute`) laten
+dit veld leeg, dus die blijven ongewijzigd fase A/B doorlopen zoals altijd.
+
+Geen wijziging aan `lib/route-engine/` of aan de matching-logica zelf (`DeviationDetector`/
+`NavigationStateMachine`) -- puur een nieuwe manier om de BESTAANDE matching eerder te laten
+starten. 387/387 tests ongewijzigd, `tsc` schoon. Nog geen echte iPhone-validatie van deze
+specifieke fix.

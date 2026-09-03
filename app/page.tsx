@@ -95,6 +95,9 @@ export default function Home() {
     nodeSequence: string[];
     nodeDisplayNumbers: string[];
     datasetVersionId: string;
+    /** Sectie 9.31 ("Rit hervatten"): alleen gevuld als dit een hervatte gepauzeerde rit is
+     *  -- laat NavigationScreen fase A/B overslaan en direct in matching-modus starten. */
+    resumeContext?: { physicalStart: PhysicalAnchor | null; elapsedRideTimeS: number };
   } | null>(null);
   /** Fase 5 (sectie 9.18): het "terug naar het startknooppunt"-been van een Back to Start-rit. */
   const [activeBackToStartRoute, setActiveBackToStartRoute] = useState<{
@@ -509,6 +512,7 @@ export default function Home() {
         nodeSequence: pausedRide.routeNodes,
         nodeDisplayNumbers: data.nodeDisplayNumbers,
         datasetVersionId: pausedRide.datasetVersionId,
+        resumeContext: { physicalStart: pausedRide.physicalStart, elapsedRideTimeS: pausedRide.rideTimeS },
       });
       clearPausedRide();
       setPausedRide(null);
@@ -1154,6 +1158,9 @@ export default function Home() {
                 : () => setSelectedLoop(reverseLoopCandidate(selectedLoop))
             }
             onPause={handlePause}
+            startInProgress={!!activeSavedRoute?.resumeContext}
+            initialPhysicalStart={activeSavedRoute?.resumeContext?.physicalStart ?? undefined}
+            initialElapsedRideTimeS={activeSavedRoute?.resumeContext?.elapsedRideTimeS}
           />
         )}
 

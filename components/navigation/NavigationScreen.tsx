@@ -175,6 +175,18 @@ export type NavigationScreenProps = {
     rideTimeS: number;
     physicalStart: PhysicalAnchor | null;
   }) => void;
+  /**
+   * "Rit hervatten" (sectie 9.31, 30-8-2026): als deze drie samen meegegeven worden, slaat
+   * de sessie fase A/B volledig over en start de matching DIRECT vanaf de eerste sample --
+   * geen "rijd terug naar het beginknooppunt" meer nodig. Werkt omdat de bestaande matching
+   * toch al overal langs de route werkt, niet alleen vanaf het begin.
+   */
+  startInProgress?: boolean;
+  /** Het OORSPRONKELIJKE fysieke vertrekpunt (parkeerplaats) -- moet behouden blijven na
+   *  hervatten, NIET opnieuw op de huidige (hervat-)positie gezet worden. */
+  initialPhysicalStart?: PhysicalAnchor;
+  /** Al verstreken fietstijd vóór de pauze -- zodat een volgende pauze de CUMULATIEVE tijd toont. */
+  initialElapsedRideTimeS?: number;
 };
 
 export default function NavigationScreen({
@@ -186,6 +198,9 @@ export default function NavigationScreen({
   onReverseDirection,
   lastMileInfo,
   onPause,
+  startInProgress,
+  initialPhysicalStart,
+  initialElapsedRideTimeS,
 }: NavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -202,7 +217,7 @@ export default function NavigationScreen({
    * nog niet gebouwd). Blijft volledig onafhankelijk van `nodeSequence[0]`
    * (routeStartNodeId) -- twee aparte concepten, nooit door elkaar gehaald.
    */
-  const physicalStartRef = useRef<PhysicalAnchor | null>(null);
+  const physicalStartRef = useRef<PhysicalAnchor | null>(initialPhysicalStart ?? null);
   /** Fase A (sectie 9.15): markeert of de eenmalige fitBounds op de LocalBikeRouter-route
    *  al gebeurd is -- voorkomt dat een toekomstige wijziging aan fetchRouteToStart per
    *  ongeluk de camera herhaaldelijk laat springen. */
@@ -483,7 +498,7 @@ export default function NavigationScreen({
       // startknooppunt is relevant, geen matching (er is nog geen actieve navigatie).
       const rdPosition = wgs84ToRd(sample.lat, sample.lon);
       const distanceToStartM = distanceBetween(rdPosition, model.geometry[0]);
-      const currentPhase = determinePreNavigationPhase({
+      const currentPhase = startInProgress ? "NAVIGATING" : determinePreNavigationPhase({
         sessionStarted,
         distanceToStartM,
         arrivalAtStartThresholdM: ARRIVAL_AT_START_THRESHOLD_M,
@@ -522,8 +537,10 @@ export default function NavigationScreen({
         try {
           stateMachine.start();
           sessionStarted = true;
-          sessionStartedAtMsRef.current = Date.now();
-          appendLog("startpunt bereikt, sessie gestart");
+          // Bij hervatten: terugrekenen zodat sessionStartedAtMsRef de VOLLEDIGE (cumulatieve)
+          // rijtijd weergeeft bij een volgende pauze, niet alleen de tijd sinds hervatten.
+          sessionStartedAtMsRef.current = Date.now() - (initialElapsedRideTimeS ?? 0) * 1000;
+          appendLog(startInProgress ? "rit hervat -- matching direct gestart, geen fase A/B nodig" : "startpunt bereikt, sessie gestart");
         } catch {
           return;
         }
