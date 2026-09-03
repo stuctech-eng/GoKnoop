@@ -881,6 +881,7 @@ export default function NavigationScreen({
           <div
             {...longPressHandlers(() => setDirectionCardEnlarged((v) => !v))}
             style={{
+              position: "relative",
               background: "#085041",
               borderRadius: 20,
               padding: "18px 20px",
@@ -894,6 +895,43 @@ export default function NavigationScreen({
               touchAction: "manipulation",
             }}
           >
+            {running && onPause && (
+              // Verplaatst van een losse, zwevende knop NAAR hier (op verzoek, 30-8-2026: "minder
+              // losse elementen op de kaart"). Eén plek, in de gedeelde kaart-wrapper -- werkt
+              // daardoor automatisch voor alle drie de fasen (TO_START/START_GUIDANCE/NAVIGATING),
+              // geen drie keer dezelfde knop hoeven te bouwen.
+              <button
+                onClick={(e) => {
+                  e.stopPropagation(); // voorkomt dat de klik ook de long-press-vergroot-logica raakt
+                  const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
+                  onPause({
+                    lastKnownPosition: lastSampleRef.current,
+                    distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
+                    rideTimeS,
+                    physicalStart: physicalStartRef.current,
+                  });
+                }}
+                aria-label="Pauzeer navigatie"
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  background: "rgba(255,255,255,0.16)",
+                  color: "#FFFFFF",
+                  border: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 17,
+                }}
+              >
+                ⏸
+              </button>
+            )}
+
             {phase === "TO_START" && startInfo && (
               <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                 <div
@@ -1073,46 +1111,6 @@ export default function NavigationScreen({
         )}
       </div>
 
-      {running && onPause && (
-        // BUGFIX (30-8-2026, "pauzeknop niet zichtbaar"): stond eerder GENEST binnen de
-        // richtingkaart-wrapper (die zelf geen vaste hoogte heeft, alleen `top: 64` -- de
-        // wrapper is dus maar zo hoog als de richtingkaart zelf). `bottom: 280` werd daardoor
-        // gemeten t.o.v. DIE kleine wrapper, niet t.o.v. het echte scherm -- de knop belandde
-        // zo ver BUITEN beeld. Nu een echte BROER van die wrapper (zelfde niveau als de
-        // voortgangsbalk hieronder, die wél altijd correct verscheen) -- `bottom: 280` klopt
-        // nu daadwerkelijk t.o.v. het volledige scherm.
-        <button
-          onClick={() => {
-            const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
-            onPause({
-              lastKnownPosition: lastSampleRef.current,
-              distanceTraveledM: progressInfo?.distanceAlongM ?? 0,
-              rideTimeS,
-              physicalStart: physicalStartRef.current,
-            });
-          }}
-          aria-label="Pauzeer navigatie"
-          style={{
-            position: "absolute",
-            bottom: 280,
-            right: 12,
-            zIndex: 10,
-            width: 60,
-            height: 60,
-            borderRadius: 30,
-            background: "#FFFFFF",
-            color: "#085041",
-            border: "none",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 26,
-          }}
-        >
-          ⏸
-        </button>
-      )}
 
       {progressInfo && phase === "NAVIGATING" && (
         <div

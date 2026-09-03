@@ -2082,3 +2082,24 @@ door dit langere-druk-idee, nog niet gebouwd.
 
 Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (pure UI-interactie, geen
 nieuwe testbare pure logica).
+
+### 9.37 Pauzeknop verplaatst: van los zwevend NAAR in de richtingkaart — ✅ GEBOUWD (30-8-2026)
+
+Vervolg op sectie 9.32's discussie: de losse, zwevende pauzeknop (`bottom: 280`) is verwijderd
+en vervangen door een klein icoontje (44×44px, de vastgelegde minimum-tikdoelgrootte, sectie
+13) rechtsboven ÍN de richtingkaart zelf.
+
+**Slim hergebruik**: de richtingkaart is één gedeelde wrapper voor alle drie de fasen (TO_START/
+START_GUIDANCE/NAVIGATING) -- de pauzeknop hoeft daardoor maar op ÉÉN plek in de code te staan,
+werkt automatisch voor alle drie, geen drievoudige duplicatie nodig.
+
+`onClick` roept `e.stopPropagation()` aan, zodat een tik op de pauzeknop niet ook de
+langere-druk-vergroot-logica (sectie 9.36, die op de hele kaart zit) beïnvloedt.
+
+**Eerlijke kanttekening, nog niet live geverifieerd**: de exacte positionering (top:8, right:8)
+is gekozen op basis van redeneren over de kaartopmaak, niet op basis van een echte
+render/screenshot -- er is een kans dat dit in de praktijk licht overlapt met de richtingpijl
+in de TO_START/NAVIGATING-kaartvarianten (die ook rechts in de kaart staat). Een screenshot na
+het pushen zou dit meteen duidelijk maken; nog niet bevestigd.
+
+Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (pure UI-herstructurering).
