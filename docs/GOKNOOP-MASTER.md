@@ -2136,3 +2136,31 @@ sectie 9.37/9.38's gesprek al naar voren kwam: er waren drie deels overlappende
   aan de al vastgelegde minimum-tikdoelgrootte (sectie 13) en oogt visueel consistent.
 
 Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (pure UI-herstructurering).
+
+### 9.40 Fase A draait en volgt nu ook mee (30-8-2026)
+
+Op verzoek, na het zien van hoe goed dit al werkte op de Kaart-hometab: fase A ("Rijd naar het
+startpunt") kreeg hetzelfde meedraai-en-volg-gedrag als de Kaart-hometab (`LiveLocationScreen.tsx`)
+en fase C. **Dit herzien een eerdere, expliciete keuze** -- de code zei letterlijk "fase A/B
+blijven noordgericht" (sectie 6H/6C's oorspronkelijke ontwerp). Nu bewust anders: hergebruikt
+exact hetzelfde, al bewezen patroon (`selectHeadingDeg`/`smoothHeadingDeg`/`map.easeTo`), geen
+nieuwe techniek nodig.
+
+**Bewust ongewijzigd gelaten**: de zoom-waarde. Fase A dwingt geen nieuw zoomniveau af (geen
+`NAVIGATION_ZOOM` zoals fase C) -- alleen meedraaien/meebewegen (center + bearing), niet
+automatisch inzoomen. Dat was al eerder een bewuste keuze (sectie 9.15) en blijft dat.
+
+**Eerlijke kanttekening**: de eenmalige `fitBounds`-actie uit sectie 9.15 (die de
+LocalBikeRouter-route-naar-startpunt-lijn ooit in beeld bracht en de camera dan met rust liet)
+wordt door deze wijziging FEITELIJK OVERBODIG -- elke volgende GPS-sample overschrijft die
+positionering toch weer via het nu doorlopende meebewegen. Die oude code is nog niet
+verwijderd (onschadelijk, wordt gewoon meteen overstemd) -- op te ruimen als een latere,
+kleine opschoonstap.
+
+**Laatste-knooppunt-naar-parkeerplek** (het tweede deel van de vraag): dat stuk blijft bewust
+via "Open in Kaarten" lopen (sectie 9.6/9.18) -- GoKnoop toont daar zelf geen live kaart voor,
+dus "meedraaien/volgen" is daar niet van toepassing binnen de app zelf; Apple Kaarten doet dat
+al voor dat stuk.
+
+Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (hergebruikt uitsluitend
+al bestaande, al geteste functies, geen nieuwe pure logica).

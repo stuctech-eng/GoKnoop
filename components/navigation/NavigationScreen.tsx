@@ -565,6 +565,25 @@ export default function NavigationScreen({
             type: "FeatureCollection",
             features: [{ type: "Feature", geometry: { type: "Point", coordinates: [sample.lon, sample.lat] }, properties: {} }],
           });
+
+          // BIJGESTELD (30-8-2026, op verzoek): fase A draait en volgt nu ook mee, exact
+          // hetzelfde patroon als de Kaart-hometab (LiveLocationScreen.tsx) en fase C
+          // hieronder -- eerder stond hier expliciet "fase A/B blijven noordgericht" als
+          // bewuste keuze, nu herzien. Bewust GEEN zoom-wijziging (zoom blijft zoals de
+          // eenmalige fitBounds op de LocalBikeRouter-route 'm zette, sectie 9.15) -- alleen
+          // meedraaien/meebewegen, niet automatisch inzoomen.
+          const selectedHeading = selectHeadingDeg(
+            { gpsHeadingDeg: sample.headingDeg, speedMps: sample.speedMps, previousStableHeadingDeg: smoothedHeadingRef.current },
+            { speedThresholdMps: MOVEMENT_SPEED_THRESHOLD_MPS }
+          );
+          if (selectedHeading !== null) {
+            smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
+          }
+          if (smoothedHeadingRef.current !== null) {
+            map.easeTo({ center: [sample.lon, sample.lat], bearing: smoothedHeadingRef.current, duration: EASE_DURATION_MS });
+          } else {
+            map.easeTo({ center: [sample.lon, sample.lat], duration: EASE_DURATION_MS });
+          }
         }
 
         appendLog(`onderweg naar startpunt, nog ${Math.round(distanceToStartM)}m`);
