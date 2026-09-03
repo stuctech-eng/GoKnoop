@@ -2032,3 +2032,26 @@ wijziging aan `lib/route-engine/`'s kern.
 **Nog openstaand, nog niet bevestigd of gebouwd**: de eerder besproken "Gedeelde routes"-
 sectie in "Mijn routes" (datum + optioneel "met wie", sectie afgesproken maar het bouwen zelf
 werd onderbroken door deze naamgevings-vraag) -- terugkomen hierop in een volgende beurt.
+
+### 9.35 "Gedeelde routes" — bijgehouden waar/wanneer je deelde — ✅ GEBOUWD (30-8-2026)
+
+Vervolg op de deelbare link (sectie 9.33): bijgehouden WELKE route je deelde en WANNEER, als
+derde sectie in "Mijn routes" naast "Opgeslagen routes" en "Gereden routes" (bewust daar, niet
+in Profiel -- gaat over route-geschiedenis, hoort bij de andere twee).
+
+**Belangrijke, eerlijk benoemde beperking**: "met wie" gedeeld is, kan NIET automatisch
+vastgelegd worden. Zodra iOS' native deelscherm opent (WhatsApp/Berichten/etc.) en de
+gebruiker een contact/app kiest, geeft iOS die keuze niet terug aan de webapp -- een bewuste
+privacybeperking van Apple, geen omzeilbare technische limitatie. Daarom: een optioneel,
+door de gebruiker zelf achteraf in te vullen tekstveld per gedeelde route.
+
+**Gebouwd:**
+- `lib/history/shared-routes-store.ts` -- zelfde architectuur als `saved-routes-store.ts`/
+  `ridden-routes-store.ts` (localStorage, SSR-veilig, best-effort). 7 tests.
+- `shareRoute()` (sectie 9.33) uitgebreid: registreert een gedeelde-route-entry, maar
+  UITSLUITEND als het delen daadwerkelijk slaagde (`navigator.share()` gooit een fout bij
+  annuleren -- dan wordt niets geregistreerd, correct, want er is dan niets gedeeld).
+- UI: "Gedeelde routes"-sectie toont per entry de naam, datum ("Gedeeld op..."), en een
+  invoerveld voor "met wie" dat bij het verlaten van het veld (`onBlur`) wordt opgeslagen.
+
+Geen wijziging aan `lib/route-engine/`. 411/411 tests (404 + 7 nieuw), `tsc` schoon.

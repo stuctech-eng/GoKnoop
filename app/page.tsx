@@ -9,6 +9,7 @@ import TabBar, { type TabId } from "@/components/layout/TabBar";
 import { getRiddenRoutes, getRecentRiddenRoutesForDedup, type RiddenRoute } from "@/lib/history/ridden-routes-store";
 import { edgeOverlapRatio } from "@/lib/route-engine/route-diversity";
 import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
+import { getSharedRoutes, recordSharedRoute, updateSharedWith, type SharedRouteRecord } from "@/lib/history/shared-routes-store";
 import { encodeRouteShareCode, decodeRouteShareCode, buildShareUrl } from "@/lib/sharing/route-share-link";
 import { pickNamingPoints, makeNameUnique } from "@/lib/naming/route-naming";
 import { rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
@@ -180,15 +181,29 @@ export default function Home() {
     const url = buildShareUrl({ n: saved.nodeIds, e: saved.edgeIds, d: saved.datasetVersionId, nm: saved.name }, window.location.origin);
     const routeName = saved.name ?? defaultSavedRouteName(saved.savedAt);
     const shareText = `🚲 ${routeName}\n${formatKm(saved.distanceM)} km\n\nOpen deze GoKnoop-route:\n${url}`;
+    const recordShare = () => {
+      recordSharedRoute({
+        routeName,
+        edgeIds: saved.edgeIds,
+        nodeIds: saved.nodeIds,
+        datasetVersionId: saved.datasetVersionId,
+        distanceM: saved.distanceM,
+      });
+      setSharedRoutesVersion((v) => v + 1);
+    };
     if (navigator.share) {
       try {
         await navigator.share({ title: routeName, text: shareText, url });
+        // Alleen registreren als het delen daadwerkelijk lukte -- niet bij annuleren
+        // (sectie 9.35): iOS geeft geen "met wie" terug, maar WEL of het delen zelf slaagde.
+        recordShare();
       } catch {
-        // Gebruiker annuleerde het deelvenster -- geen foutmelding nodig, normaal gedrag.
+        // Gebruiker annuleerde het deelvenster -- geen foutmelding, geen registratie, normaal gedrag.
       }
     } else {
       try {
         await navigator.clipboard.writeText(shareText);
+        recordShare();
         alert("Link gekopieerd naar het klembord.");
       } catch {
         alert(url);
@@ -196,6 +211,7 @@ export default function Home() {
     }
   }
   const [savedRoutesVersion, setSavedRoutesVersion] = useState(0); // bumpen om de Mijn-routes-lijst opnieuw te lezen
+  const [sharedRoutesVersion, setSharedRoutesVersion] = useState(0); // idem, voor de Gedeelde-routes-lijst
   const [showSaveNamePrompt, setShowSaveNamePrompt] = useState(false);
   const [routeNameInput, setRouteNameInput] = useState("");
   const [suggestingName, setSuggestingName] = useState(false);
@@ -972,6 +988,51 @@ export default function Home() {
                           ♡ Bewaar als favoriet
                         </button>
                       </div>
+                    </div>
+                  ))
+                )}
+
+                <div style={{ borderTop: "1px solid #e5e5e0", margin: "2rem 0 1.5rem" }} />
+
+                <h2 style={{ fontSize: 24, marginBottom: "0.5rem" }}>Gedeelde routes</h2>
+                <p style={{ fontSize: 13, opacity: 0.6, marginBottom: "1.25rem" }}>
+                  Bijgehouden zodra je op "Delen" drukt. "Met wie" kan iOS niet automatisch doorgeven -- vul dat zelf in als je wilt.
+                </p>
+                {getSharedRoutes().length === 0 ? (
+                  <p style={{ fontSize: 15, opacity: 0.6, textAlign: "center" }}>Je hebt nog geen route gedeeld.</p>
+                ) : (
+                  getSharedRoutes().map((shared) => (
+                    <div
+                      key={shared.id}
+                      style={{
+                        background: "white",
+                        border: "1px solid #e5e5e0",
+                        borderRadius: "var(--radius-card)",
+                        padding: "1rem",
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div style={{ fontSize: 17, fontWeight: 700 }}>{shared.routeName}</div>
+                      <div style={{ fontSize: 13, opacity: 0.6, marginBottom: 8 }}>
+                        Gedeeld op {new Date(shared.sharedAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}
+                      </div>
+                      <input
+                        defaultValue={shared.sharedWith ?? ""}
+                        placeholder="Met wie? (optioneel)"
+                        onBlur={(e) => {
+                          updateSharedWith(shared.id, e.target.value);
+                          setSharedRoutesVersion((v) => v + 1);
+                        }}
+                        style={{
+                          width: "100%",
+                          minHeight: 40,
+                          padding: "0 10px",
+                          fontSize: 14,
+                          border: "1px solid #ccc",
+                          borderRadius: 8,
+                          boxSizing: "border-box",
+                        }}
+                      />
                     </div>
                   ))
                 )}
