@@ -9,6 +9,7 @@ import TabBar, { type TabId } from "@/components/layout/TabBar";
 import { getRiddenRoutes, getRecentRiddenRoutesForDedup, type RiddenRoute } from "@/lib/history/ridden-routes-store";
 import { edgeOverlapRatio } from "@/lib/route-engine/route-diversity";
 import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
+import { encodeRouteShareCode, decodeRouteShareCode, buildShareUrl } from "@/lib/sharing/route-share-link";
 import { getPausedRide, savePausedRide, clearPausedRide, type PausedRideSnapshot } from "@/lib/navigation/paused-ride-store";
 import PauseScreen from "@/components/navigation/PauseScreen";
 import type { GraphEdge } from "@/lib/route-engine/types";
@@ -43,7 +44,7 @@ type LocationCandidate = {
   distanceM: number;
 };
 
-type Step = "distance" | "loading" | "results" | "detail" | "navigating" | "paused" | "error";
+type Step = "distance" | "loading" | "results" | "detail" | "navigating" | "paused" | "sharedPreview" | "error";
 
 const DISTANCE_OPTIONS = [20, 30, 40, 50];
 
@@ -113,6 +114,85 @@ export default function Home() {
   useEffect(() => {
     setPausedRide(getPausedRide());
   }, []);
+
+  /**
+   * Deelbare route-link (sectie 9.33, 30-8-2026): een `?share=`-parameter bevat de route
+   * RECHTSTREEKS gecodeerd (geen backend-opslag/Route-ID, bewuste architectuurkeuze). Bij het
+   * openen: decoderen, resolven via het bestaande `/api/route/resolve` (zelfde patroon als
+   * opgeslagen/gereden routes), en TONEN als voorbeeld -- NIET automatisch starten of opslaan,
+   * de ontvanger kiest zelf.
+   */
+  const [sharedPreview, setSharedPreview] = useState<{
+    edges: GraphEdge[];
+    nodeSequence: string[];
+    nodeDisplayNumbers: string[];
+    datasetVersionId: string;
+    name: string | null;
+    distanceM: number;
+  } | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const shareCode = params.get("share");
+    if (!shareCode) return;
+
+    const payload = decodeRouteShareCode(shareCode);
+    if (!payload) {
+      setErrorMessage("Deze gedeelde route-link is ongeldig of beschadigd.");
+      setStep("error");
+      return;
+    }
+
+    setStep("loading");
+    fetch("/api/route/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ datasetVersionId: payload.d, edgeIds: payload.e, nodeIds: payload.n }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          setErrorMessage(data.error ?? "Deze gedeelde route kon niet worden geladen.");
+          setStep("error");
+          return;
+        }
+        setSharedPreview({
+          edges: data.resolvedEdges,
+          nodeSequence: payload.n,
+          nodeDisplayNumbers: data.nodeDisplayNumbers,
+          datasetVersionId: payload.d,
+          name: payload.nm,
+          distanceM: data.distanceM ?? 0,
+        });
+        setStep("sharedPreview");
+      })
+      .catch(() => {
+        setErrorMessage("Er ging iets mis bij het laden van de gedeelde route.");
+        setStep("error");
+      });
+  }, []);
+
+  /** "Delen"-knop: bouwt de link en gebruikt de iPhone-deelfunctie (WhatsApp etc.), met een
+   *  kopieer-terugval als `navigator.share` niet beschikbaar is (bijv. desktop-Safari). */
+  async function shareRoute(saved: SavedRoute) {
+    const url = buildShareUrl({ n: saved.nodeIds, e: saved.edgeIds, d: saved.datasetVersionId, nm: saved.name }, window.location.origin);
+    const routeName = saved.name ?? defaultSavedRouteName(saved.savedAt);
+    const shareText = `🚲 ${routeName}\n${formatKm(saved.distanceM)} km\n\nOpen deze GoKnoop-route:\n${url}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: routeName, text: shareText, url });
+      } catch {
+        // Gebruiker annuleerde het deelvenster -- geen foutmelding nodig, normaal gedrag.
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(shareText);
+        alert("Link gekopieerd naar het klembord.");
+      } catch {
+        alert(url);
+      }
+    }
+  }
   const [savedRoutesVersion, setSavedRoutesVersion] = useState(0); // bumpen om de Mijn-routes-lijst opnieuw te lezen
   const [showSaveNamePrompt, setShowSaveNamePrompt] = useState(false);
   const [routeNameInput, setRouteNameInput] = useState("");
@@ -287,6 +367,35 @@ export default function Home() {
       datasetVersionId: ridden.datasetVersionId,
     });
     setSavedRoutesVersion((v) => v + 1);
+  }
+
+  /** Gedeelde-link-voorbeeldscherm (sectie 9.33): starten gebeurt met de al opgehaalde data,
+   *  geen nieuwe /api/route/resolve-aanroep nodig. */
+  function startSharedPreview() {
+    if (!sharedPreview) return;
+    setActiveSavedRoute({
+      edges: sharedPreview.edges,
+      nodeSequence: sharedPreview.nodeSequence,
+      nodeDisplayNumbers: sharedPreview.nodeDisplayNumbers,
+      datasetVersionId: sharedPreview.datasetVersionId,
+    });
+    setSharedPreview(null);
+    window.history.replaceState({}, "", window.location.pathname); // ?share= uit de URL, voorkomt opnieuw openen bij verversen
+    setStep("navigating");
+  }
+
+  function saveSharedPreviewToMyRoutes() {
+    if (!sharedPreview) return;
+    saveRoute({
+      name: sharedPreview.name,
+      edgeIds: sharedPreview.edges.map((e) => e.id),
+      nodeIds: sharedPreview.nodeSequence,
+      startNodeId: sharedPreview.nodeSequence[0],
+      distanceM: sharedPreview.distanceM,
+      datasetVersionId: sharedPreview.datasetVersionId,
+    });
+    setSavedRoutesVersion((v) => v + 1);
+    window.history.replaceState({}, "", window.location.pathname);
   }
 
   /**
@@ -555,6 +664,7 @@ export default function Home() {
     setActiveTab("kaart");
     setActiveSavedRoute(null);
     setActiveBackToStartRoute(null);
+    setSharedPreview(null);
     setPlaceName("");
     setDestinationInput("");
     setStartLocation(null);
@@ -731,21 +841,38 @@ export default function Home() {
                           Verwijder
                         </button>
                       </div>
-                      <button
-                        onClick={() => startSavedRoute(saved)}
-                        style={{
-                          width: "100%",
-                          minHeight: 44,
-                          background: "var(--color-knoop-green)",
-                          color: "white",
-                          border: "none",
-                          borderRadius: 8,
-                          fontSize: 15,
-                          fontWeight: 600,
-                        }}
-                      >
-                        Start route
-                      </button>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => startSavedRoute(saved)}
+                          style={{
+                            flex: 1,
+                            minHeight: 44,
+                            background: "var(--color-knoop-green)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: 8,
+                            fontSize: 15,
+                            fontWeight: 600,
+                          }}
+                        >
+                          Start route
+                        </button>
+                        <button
+                          onClick={() => shareRoute(saved)}
+                          style={{
+                            minHeight: 44,
+                            padding: "0 16px",
+                            background: "white",
+                            color: "var(--color-knoop-green)",
+                            border: "2px solid var(--color-knoop-green)",
+                            borderRadius: 8,
+                            fontSize: 15,
+                            fontWeight: 600,
+                          }}
+                        >
+                          Delen
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -1008,6 +1135,60 @@ export default function Home() {
                 });
               })()}
             </div>
+          </section>
+        )}
+
+        {step === "sharedPreview" && sharedPreview && (
+          <section>
+            <h2 style={{ fontSize: 22, marginBottom: 4 }}>Gedeelde route</h2>
+            <p style={{ fontSize: 14, opacity: 0.65, marginBottom: "1.5rem" }}>
+              Iemand deelde deze route met je -- bekijk 'm, en start of bewaar 'm als je wilt.
+            </p>
+            <div
+              style={{
+                background: "white",
+                border: "2px solid var(--color-sand)",
+                borderRadius: "var(--radius-card)",
+                padding: 16,
+                marginBottom: 20,
+              }}
+            >
+              <div style={{ fontSize: 20, fontWeight: 700 }}>{sharedPreview.name ?? "Gedeelde route"}</div>
+              <div style={{ fontSize: 15, opacity: 0.7, marginTop: 4 }}>
+                {formatKm(sharedPreview.distanceM)} km · {sharedPreview.nodeSequence.length} knooppunten
+              </div>
+            </div>
+            <button
+              onClick={startSharedPreview}
+              style={{
+                width: "100%",
+                minHeight: 52,
+                background: "var(--color-knoop-green)",
+                color: "white",
+                border: "none",
+                borderRadius: "var(--radius-card)",
+                fontSize: 17,
+                fontWeight: 600,
+                marginBottom: 12,
+              }}
+            >
+              Start deze route
+            </button>
+            <button
+              onClick={saveSharedPreviewToMyRoutes}
+              style={{
+                width: "100%",
+                minHeight: 52,
+                background: "white",
+                color: "var(--color-knoop-green)",
+                border: "2px solid var(--color-knoop-green)",
+                borderRadius: "var(--radius-card)",
+                fontSize: 17,
+                fontWeight: 600,
+              }}
+            >
+              ♡ Bewaar in Mijn routes
+            </button>
           </section>
         )}
 

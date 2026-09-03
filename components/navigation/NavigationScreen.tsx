@@ -284,6 +284,19 @@ export default function NavigationScreen({
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
 
+    // Attributie onderaan GECENTREERD i.p.v. rechtsonder in de hoek (op verzoek, 30-8-2026).
+    // MapLibre kent geen ingebouwde "bottom-center"-positie voor besturingselementen (alleen
+    // de vier hoeken) -- dit herpositioneert het element zelf via CSS, met behoud van
+    // exact dezelfde, vereiste attributie-inhoud (alleen WAAR die getoond wordt verandert).
+    map.once("load", () => {
+      const attribContainer = map.getContainer().querySelector<HTMLElement>(".maplibregl-ctrl-bottom-right");
+      if (attribContainer) {
+        attribContainer.style.left = "50%";
+        attribContainer.style.right = "auto";
+        attribContainer.style.transform = "translateX(-50%)";
+      }
+    });
+
     map.on("load", () => {
       map.addSource("goknoop-route-line", { type: "geojson", data: geoJson.line as GeoJSON.Feature });
       map.addLayer({

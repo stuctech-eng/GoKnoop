@@ -1957,3 +1957,38 @@ een derde keer aan hetzelfde getal te draaien.
 **Openstaande vraag aan de gebruiker (nog niet gebouwd)**: attributie-icoontje ook
 gecentreerd tonen -- moet dat letterlijk midden op het scherm (over de kaartinhoud heen), of
 onderaan gecentreerd (i.p.v. rechtsonder in de hoek)? Antwoord nog niet ontvangen.
+
+### 9.33 Deelbare route-link — ✅ GEBOUWD (30-8-2026)
+
+**Architectuurkeuze, expliciet zo besloten**: de route wordt RECHTSTREEKS in de URL
+gecodeerd, geen backend-opslag met een Route-ID. GoKnoop heeft bewust geen server-side
+gebruikersopslag (geen account-systeem, alles lokaal in `localStorage`) -- een link die naar
+een server-ID verwijst zou die architectuur doorbreken en nieuwe privacy-/misbruik-vragen
+introduceren. Een link die de route zelf BEVAT levert voor de ontvanger exact hetzelfde
+resultaat op (dezelfde route, geen nieuwe berekening), zonder die kosten.
+
+**Gebouwd:**
+- `lib/sharing/route-share-link.ts` -- `encodeRouteShareCode`/`decodeRouteShareCode`/
+  `buildShareUrl`. URL-veilige base64 (geen `+`/`/`/`=`-tekens die geëscaped zouden moeten
+  worden), UTF-8-veilig (Nederlandse namen met bijzondere tekens blijven intact). 6 tests,
+  incl. een test die specifiek een payload construeert die anders wél `+`/`/`/`=` zou
+  bevatten, om de URL-veilige vervanging daadwerkelijk te bewijzen, niet toevallig te missen.
+- **"Delen"-knop** naast "Start route" bij elke opgeslagen route in "Mijn routes" -- gebruikt
+  `navigator.share()` (de native iOS-deelfunctie, inclusief WhatsApp), met een
+  klembord-kopieer-terugval voor omgevingen zonder die API (bijv. desktop).
+- **Landingsflow**: `app/page.tsx` checkt bij het laden op een `?share=`-parameter, decodeert
+  'm, resolvet de route via het bestaande `/api/route/resolve` (zelfde patroon als opgeslagen/
+  gereden routes -- geen nieuwe server-logica nodig), en toont een VOORBEELDSCHERM -- NIET
+  automatisch starten of opslaan. De ontvanger kiest zelf: "Start deze route" of "♡ Bewaar in
+  Mijn routes".
+- `window.history.replaceState()` na starten/bewaren -- haalt `?share=` uit de URL, voorkomt
+  dat verversen de link opnieuw opent.
+
+**Nog NIET gebouwd, bewust apart vervolgtraject (op verzoek)**: automatische, herkenbare
+routenaam op basis van plaatsnamen langs de route (bijv. "Rondje Edam -- Volendam"). Vereist
+eerst een technische verkenning van een geschikte reverse-geocoding-oplossing (coördinaten →
+plaatsnaam -- het omgekeerde van de bestaande plaatsnaam-zoekfunctie) voordat er iets gebouwd
+wordt. Voor nu gebruikt de deelbare link de handmatig ingevoerde naam (indien aanwezig) of
+toont "Gedeelde route".
+
+Geen wijziging aan `lib/route-engine/`. 393/393 tests (387 + 6 nieuw), `tsc` schoon.

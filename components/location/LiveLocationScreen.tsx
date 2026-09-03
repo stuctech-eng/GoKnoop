@@ -95,6 +95,15 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
     map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
 
     map.on("load", () => {
+      // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026) -- zelfde
+      // aanpak als NavigationScreen.tsx, zie de uitgebreide toelichting daar.
+      const attribContainer = map.getContainer().querySelector<HTMLElement>(".maplibregl-ctrl-bottom-right");
+      if (attribContainer) {
+        attribContainer.style.left = "50%";
+        attribContainer.style.right = "auto";
+        attribContainer.style.transform = "translateX(-50%)";
+      }
+
       map.addSource("goknoop-live-position", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
