@@ -96,7 +96,7 @@ describe("generateLoopRoutesWithScoring — kiest de BESTE kandidaat, niet de ee
     await provider.load();
     const result = generateLoopRoutesWithScoring(provider, "v-test", [{ logicalNodeId: "isolated", distanceM: 10 }], 4000, OPTIONS);
     expect("ok" in result && result.ok === false).toBe(true);
-    if ("ok" in result && result.ok === false) {
+    if ("ok" in result) {
       expect(result.reason).toBe("no_usable_candidate");
       expect(result.candidateScores).toHaveLength(1);
       expect(result.candidateScores[0].score).toBe(Infinity);
@@ -117,11 +117,11 @@ describe("generateLoopRoutesWithScoring — kiest de BESTE kandidaat, niet de ee
     }
   });
 
-  it("standaardgewichten zijn zoals gedocumenteerd (uitgangspunt, nog niet definitief)", () => {
+  it("standaardgewichten zijn zoals gedocumenteerd (uitgangspunt, nog niet definitief -- bijgesteld 30-8-2026 na een echte regressie)", () => {
     expect(DEFAULT_START_NODE_SCORE_WEIGHTS).toEqual({
       distancePenaltyPerMeter: 1,
-      availabilityBonusPerRoute: 500,
-      qualityPenaltyPerPercent: 20,
+      availabilityBonusPerRoute: 50,
+      qualityPenaltyPerPercent: 50,
     });
   });
 });

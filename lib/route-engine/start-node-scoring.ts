@@ -36,10 +36,21 @@ export type StartNodeScoreWeights = {
  * wegen dan een paar honderd meter extra aanrijafstand, maar afstand blijft
  * meetellen bij verder vergelijkbare kandidaten.
  */
+/**
+ * Uitgangspuntgewichten, nog niet definitief (zelfde discipline als sectie
+ * 8A). BIJGESTELD (30-8-2026, echte regressie gevonden: "20km vroeg, kreeg
+ * routes van 30km+"): de oorspronkelijke `availabilityBonusPerRoute: 500`
+ * kon te zwaar wegen t.o.v. `qualityPenaltyPerPercent: 20` -- een kandidaat
+ * met 4 matige routes (bijv. 40% afwijking) kon zo een kandidaat met 1
+ * uitstekende route (5% afwijking) verslaan, puur omdat "meer opties"
+ * te zwaar meetelde. Nu omgedraaid: kwaliteit (hoe dicht bij de gevraagde
+ * afstand) is DOMINANT, beschikbaarheid van extra routes is een kleine
+ * tie-breaker, geen doorslaggevende factor.
+ */
 export const DEFAULT_START_NODE_SCORE_WEIGHTS: StartNodeScoreWeights = {
   distancePenaltyPerMeter: 1,
-  availabilityBonusPerRoute: 500,
-  qualityPenaltyPerPercent: 20,
+  availabilityBonusPerRoute: 50,
+  qualityPenaltyPerPercent: 50,
 };
 
 export type StartNodeCandidateScore = {

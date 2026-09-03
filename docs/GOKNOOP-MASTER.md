@@ -1726,3 +1726,26 @@ nodig.
 
 Geen wijziging aan `lib/route-engine/`. 385/385 tests ongewijzigd (pure UI-zichtbaarheids-
 wijziging).
+
+### 9.26 Twee echte fixes uit een echte testrit: score-regressie + pauzeknop-positie (30-8-2026)
+
+**Bug 1 (belangrijk): "20km vroeg, kreeg routes van 30km+".** Bevestigde regressie in
+`generateLoopRoutesWithScoring` (sectie 8C/9.11's opvolger): `availabilityBonusPerRoute: 500`
+woog te zwaar t.o.v. `qualityPenaltyPerPercent: 20` -- een kandidaat met 4 matige routes
+(bijv. 40% afwijking) kon een kandidaat met 1 uitstekende route (5% afwijking) verslaan, puur
+omdat "meer opties" te zwaar meetelde. **Fix**: gewichten omgedraaid --
+`qualityPenaltyPerPercent: 50` (was 20), `availabilityBonusPerRoute: 50` (was 500). Kwaliteit
+(afstand tot de gevraagde doelafstand) is nu dominant, extra opties zijn een kleine
+tie-breaker. De bestaande test die bewijst dat een verder-maar-beter-passende kandidaat kan
+winnen bleef ongewijzigd slagen (de kernlogica klopte, alleen de balans was scheef) -- alleen
+de test die de exacte gewichten hardcoded had is bijgewerkt.
+
+**Bug 2 (kleiner, UX): pauzeknop-positie voelde inconsistent.** Stond `marginTop: 12` direct
+onder de richtingkaart -- daardoor verschoof de knop per fase (TO_START/START_GUIDANCE/
+NAVIGATING hebben elk een andere kaarthoogte), wat "zwevend"/inconsistent aanvoelde. **Fix**:
+vaste `position: absolute`-plek rechtsonder (boven de voortgangsbalk, die bij `bottom:164`
+begint, dus geen overlap), onafhankelijk van de richtingkaart -- altijd op dezelfde plek,
+ongeacht de fase.
+
+385/385 tests ongewijzigd (bug 1 raakte alleen configuratiewaarden binnen een al bestaande,
+geteste functie; bug 2 is pure UI-positionering).

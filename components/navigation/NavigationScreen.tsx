@@ -937,8 +937,13 @@ export default function NavigationScreen({
 
         {running && onPause && (
           // Back to Start staat nu UITSLUITEND in het pauzemenu (op verzoek: "alles in het
-          // pauzemenu, is tevens controlekamer") -- hier alleen nog de Pauze-knop, nu als eigen,
-          // herkenbare ronde knop i.p.v. een klein pilletje naast een andere knop.
+          // pauzemenu, is tevens controlekamer") -- hier alleen nog de Pauze-knop.
+          //
+          // BIJGESTELD (30-8-2026, "geen betere plek?"): stond eerst inline direct onder de
+          // richtingkaart (`marginTop`) -- daardoor verschoof de knop per fase, want elke fase
+          // (TO_START/START_GUIDANCE/NAVIGATING) heeft een andere kaarthoogte. Nu een VASTE
+          // positie rechtsonder, onafhankelijk van de richtingkaart, en boven de voortgangsbalk
+          // (die begint bij bottom:164) zodat ze nooit overlappen.
           <button
             onClick={() => {
               const rideTimeS = sessionStartedAtMsRef.current ? (Date.now() - sessionStartedAtMsRef.current) / 1000 : 0;
@@ -951,7 +956,10 @@ export default function NavigationScreen({
             }}
             aria-label="Pauzeer navigatie"
             style={{
-              marginTop: 12,
+              position: "absolute",
+              bottom: 190,
+              right: 12,
+              zIndex: 10,
               width: 60,
               height: 60,
               borderRadius: 30,
