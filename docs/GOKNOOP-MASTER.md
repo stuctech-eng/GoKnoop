@@ -1593,3 +1593,88 @@ Geen wijziging aan `lib/route-engine/`'s KERN (Dijkstra/GraphProvider zelf) -- a
 nieuw, dun bestand eromheen + een additieve responsuitbreiding.
 
 **385/385 tests (381 + 4 nieuw), `tsc` schoon.** Nog geen echte iPhone-validatie.
+
+---
+
+## 9.22 ECHTE VERCEL-BUILDFOUT + gat in eigen verificatieproces gevonden (30-8-2026)
+
+**De fout zelf:** `app/api/route/to-destination/route.ts` faalde op Vercel met "Property
+'selectedDestinationNodeId' does not exist" -- een TypeScript-type-versmallingsfout. De code
+gebruikte `if ("ok" in knotResult && knotResult.ok === false) { ... }`, waarna de rest van de
+functie aannam dat `knotResult` het succesvolle type was. Deze samengestelde conditie bleek
+niet betrouwbaar genoeg voor Next.js' striktere build-time typecontrole om te versmallen.
+
+**Fix:** vereenvoudigd naar `if ("ok" in knotResult) { ... }` -- betrouwbaarder, want alleen
+het faal-type heeft ÜBERHAUPT een `ok`-veld; de aanwezigheid van het veld alleen is al
+voldoende om te onderscheiden. Toegepast op alle drie de endpoints met hetzelfde patroon
+(`/api/route/loop`, `/api/route/back-to-start`, `/api/route/to-destination`) plus de
+brondefinitie in `route-between-candidates.ts` zelf, uit voorzorg vóór een volgende build
+hierop zou struikelen.
+
+**Belangrijker: een gat in mijn eigen verificatieproces gevonden en gedicht.** Mijn sandbox-
+`tsconfig.json` had `"include": ["lib/**/*.ts", "app/**/*.tsx", ...]` -- **alleen `.tsx`, niet
+`.ts`, onder `app/`**. API-route-bestanden (`app/api/.../route.ts`) zijn `.ts`-bestanden --
+dit betekent dat mijn lokale `tsc --noEmit`-controles gedurende (een deel van) deze sessie
+API-routes NIET daadwerkelijk hebben meegecontroleerd, wat precies verklaart waarom deze fout
+lokaal niet werd gevonden maar wel bij de echte Vercel-build. **Rechtgezet**: sandbox-
+`tsconfig.json` nu bijgewerkt naar exact hetzelfde `include`-patroon als de echte repo
+(`"**/*.ts", "**/*.tsx"`). Een volledige hercontrole met deze gecorrigeerde configuratie gaf
+verder geen andere fouten (alleen 4 valse meldingen in oude, losstaande scratch-bestanden
+buiten de echte repo-structuur, die zijn opgeruimd).
+
+**Les voor volgende sessies**: bij het opzetten van een verificatie-sandbox altijd eerst de
+ECHTE `tsconfig.json`/`package.json` (TypeScript-versie) van de repo ophalen en gebruiken,
+niet een handmatig samengestelde variant -- ook al lijkt die functioneel gelijk.
+
+385/385 tests ongewijzigd (pure typefix, geen gedragsverandering), `tsc` schoon (nu met een
+betrouwbaarder controle-opzet).
+
+---
+
+## 9.23 Vastgelegd voor de volgende sessie: parkeerplaats-zoekfunctie via Overpass API
+
+**Nog NIET gebouwd -- expliciet als plan vastgelegd, op verzoek.**
+
+**Gewenste flow** (aansluitend op de "route naar een adres"-functie, sectie 9.21):
+```
+Route naar Hilversum gezocht
+      ↓
+GoKnoop toont ook: parkeerplaatsen in de buurt van de bestemming
+      ↓
+Gebruiker kiest een parkeerplaats
+      ↓
+Link naar Google/Apple Maps (zelfde patroon als sectie 9.6 -- geen eigen autorouting)
+      ↓
+Gebruiker rijdt er met de auto naartoe
+      ↓
+GoKnoop pakt het op zodra de gebruiker weer in de app is (fase A, zoals nu al werkt)
+```
+
+**Onderzocht, met geverifieerde cijfers (webzoekopdracht, 30-8-2026):** Overpass API
+(`overpass-api.de`), de gratis, publieke query-dienst van de OpenStreetMap-gemeenschap zelf.
+Parkeerplaatsen staan al standaard getagd in OSM-data (`amenity=parking`).
+- **Geen API-key nodig, geen registratie**
+- **Zachte richtlijn: ~10.000 aanvragen/dag** per applicatie op de publieke server -- ruim
+  voldoende voor incidenteel gebruik (een paar zoekopdrachten per fietser, niet per
+  GPS-update)
+- 2 gelijktijdige aanvragen per IP-adres (zachte limiet, geen probleem voor dit gebruik)
+
+**Architectuur, zelfde patroon als `LocalBikeRouter` (sectie 9.11):**
+```
+Navigation
+    ↓
+PlacesFinder (nieuwe, dunne laag)
+    ↓
+PlacesProvider (interface)
+    ↓
+OverpassPlacesAdapter (concrete implementatie)
+```
+
+**Belangrijk, bewust afgebakend:** dit is SPECIFIEK voor parkeerplaatsen, nauw verwant aan
+`PhysicalAnchor`/Fase 4-5. De BREDERE "plaatsen zoeken"-functie (restaurants, terrassen,
+koffie -- voor het latere Ritdagboek, sectie 9.19's uitgestelde scope) blijft een APART, later
+traject, ook al zou die dezelfde onderliggende Overpass-dienst kunnen gebruiken. Niet
+samenvoegen, ook al is de techniek gedeeld.
+
+**Nog te bepalen bij het bouwen:** exacte zoekstraal rond de bestemming, hoeveel resultaten
+tonen, of/hoe de link naar Kaarten per parkeerplaats verschijnt.

@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
 
     // Been 1 (Layer A, beide kanten met fallback): herkomst-knooppunt -> bestemmings-knooppunt.
     const knotResult = computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, fromCandidates, toCandidates);
-    if ("ok" in knotResult && knotResult.ok === false) {
+    if ("ok" in knotResult) {
       return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot" }, { status: 404 });
     }
 

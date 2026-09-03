@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
       avoidRouteEdgeSets,
     });
 
-    if ("ok" in result && result.ok === false) {
+    if ("ok" in result) {
       return NextResponse.json(
         {
           error: result.message,

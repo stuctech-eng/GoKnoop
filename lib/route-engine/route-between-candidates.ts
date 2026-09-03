@@ -41,7 +41,7 @@ export function computeRouteBetweenCandidatesWithFallback(
     if (!provider.getNode(toCandidate.logicalNodeId)) continue; // onbekend knooppunt -- volgende bestemmingskandidaat
 
     const result = computeRouteWithFallback(provider, datasetVersionId, fromCandidates, toCandidate.logicalNodeId, constraints);
-    if ("ok" in result && result.ok === false) continue; // deze bestemmingskandidaat leverde niets op -- volgende proberen
+    if ("ok" in result) continue; // deze bestemmingskandidaat leverde niets op -- volgende proberen
 
     const success = result as RouteToPointWithFallbackResult;
     return {
