@@ -1840,3 +1840,49 @@ wél begrensd blijft zonder de volledige opslag aan te tasten. 387/387 tests tot
 (386 + 1 netto), `tsc` schoon.
 
 Geen wijziging aan `lib/route-engine/`'s kern (Dijkstra/GraphProvider zelf).
+
+### 9.29 Eerste echte testrit (adres-navigatie) — drie bevindingen (30-8-2026)
+
+**Positieve bevestiging**: de "route naar een adres"-functie (sectie 9.21) werkte in de
+praktijk goed -- adres ingevoerd, GoKnoop bracht de gebruiker er correct naartoe, GPS-verlies
+onderweg herstelde vanzelf, en de "Open in Kaarten"-link bij het laatste knooppunt (sectie
+9.18's `lastMileInfo`) werkte zeer goed.
+
+**Bevinding 1 -- pauzeknop-overlap, opgelost**: de vaste positie (`bottom: 190`) overlapte
+alsnog met de voortgangsbalk (`bottom: 164`) tijdens NAVIGATING, waardoor de knop daar
+onzichtbaar was -- pas zichtbaar bij ARRIVED (als de voortgangsbalk wegvalt). Pauzeknop
+verplaatst naar `bottom: 280`, ruim boven de voortgangsbalk.
+
+**Bevinding 2 -- voortgangsbalk dichter naar de rand**: op verzoek verplaatst van
+`bottom: 164` naar `bottom: 20` -- meer kaartruimte zichtbaar. De kaartattributie (compacte
+"i", sectie 9.20) kan hierdoor tijdens NAVIGATING onder de balk vallen -- expliciet
+geaccepteerd door de gebruiker ("die is ook gelijk weg, haha"), geen zorg.
+
+**Bevinding 3 -- ECHT ONTBREKEND, NIET NU GEBOUWD, apart vervolgpunt**: "Hervat rit" in het
+pauzemenu start nu de HELE oorspronkelijke route opnieuw vanaf fase A (rijd naar het eerste
+knooppunt), niet "ga verder vanaf de laatst bekende voortgang". Bij een rondje valt dit
+zelden op (begin/eind liggen dicht bij elkaar); bij een punt-naar-punt-adres-rit (bijv.
+Hilversum) is dit een echt probleem -- "hervatten" na bijna-aankomst probeerde de gebruiker
+terug naar het OORSPRONKELIJKE startpunt (Volendam) te sturen. Dit vereist daadwerkelijk
+"instappen op de juiste plek in de route", niet simpelweg de route opnieuw beginnen -- een
+groter, apart te plannen stuk werk, bewust NIET nu gebouwd (net als de echte reroute-wiring,
+sectie 8F).
+
+### 9.30 "Open in Kaarten" ook tijdens fase A (30-8-2026)
+
+Op verzoek: naast de bestaande eigen weergave (afstand + pijl naar het startpunt) staat er nu
+ook een "Open in Kaarten"-link tijdens fase A -- ALS AANVULLING, niet als vervanging (de
+gebruiker koos zelf per rit). Zelfde Apple Maps-deeplink-patroon als elders al gebruikt
+(`lastMileInfo`'s kaart, sectie 9.6/9.18).
+
+**Waarom dit geen verlies van functionaliteit betekent**: de aankomstdetectie werkt op basis
+van de live GPS-positie, ongeacht of de gebruiker via Kaarten of de eigen weergave rijdt --
+zolang GoKnoop actief blijft (wat sowieso al nodig is), blijft automatische herkenning gewoon
+werken.
+
+**Technische kanttekening**: `model` (de route-progress-model) zit in de effect-closure,
+niet bereikbaar vanuit de render-body -- een nieuwe `startNodeWgs84Ref` toegevoegd, gevuld op
+het moment dat `model` wél in scope is, zodat de render-laag de coördinaten kan gebruiken.
+
+Geen wijziging aan `lib/route-engine/`. 387/387 tests ongewijzigd (pure UI-toevoeging/-tuning,
+geen nieuwe testbare pure logica).

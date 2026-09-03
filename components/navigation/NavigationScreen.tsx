@@ -209,6 +209,10 @@ export default function NavigationScreen({
   const hasFitBoundsToStartRef = useRef(false);
   /** Meest recente live positie -- gebruikt door de Back to Start-knop (sectie 9.18). */
   const lastSampleRef = useRef<{ lat: number; lon: number } | null>(null);
+  /** Startknooppunt-coördinaten (WGS84) -- voor de "Open in Kaarten"-link tijdens fase A
+   *  (sectie 9.29). `model` zelf zit in een andere scope (de effect-closure), niet
+   *  bereikbaar vanuit de render -- daarom hier apart bewaard. */
+  const startNodeWgs84Ref = useRef<{ lat: number; lon: number } | null>(null);
   /** Wanneer de sessie daadwerkelijk startte (device-tijd) -- voor rijtijd bij pauzeren (sectie 9.19). */
   const sessionStartedAtMsRef = useRef<number | null>(null);
 
@@ -241,6 +245,7 @@ export default function NavigationScreen({
     let geoJson: ReturnType<typeof buildRouteGeoJson>;
     try {
       const model = buildRouteProgressModel(edges, nodeSequence);
+      startNodeWgs84Ref.current = rdToWgs84(model.geometry[0].x, model.geometry[0].y);
       geoJson = buildRouteGeoJson(model, nodeDisplayNumbers);
     } catch (err) {
       setMapStatus("error");
@@ -851,6 +856,24 @@ export default function NavigationScreen({
               </div>
             )}
 
+            {phase === "TO_START" && startInfo && startNodeWgs84Ref.current && (
+              <a
+                href={`https://maps.apple.com/?daddr=${startNodeWgs84Ref.current.lat},${startNodeWgs84Ref.current.lon}&dirflg=b`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: "block",
+                  marginTop: 12,
+                  textAlign: "center",
+                  fontSize: 13,
+                  color: "#9FE1CB",
+                  textDecoration: "underline",
+                }}
+              >
+                Open in Kaarten
+              </a>
+            )}
+
             {phase === "START_GUIDANCE" && (
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 12, color: "#9FE1CB", marginBottom: 4 }}>Je staat bij het startpunt</div>
@@ -958,7 +981,7 @@ export default function NavigationScreen({
             aria-label="Pauzeer navigatie"
             style={{
               position: "absolute",
-              bottom: 190,
+              bottom: 280,
               right: 12,
               zIndex: 10,
               width: 60,
@@ -1020,7 +1043,7 @@ export default function NavigationScreen({
         <div
           style={{
             position: "absolute",
-            bottom: 164,
+            bottom: 20,
             left: 12,
             right: 12,
             background: "rgba(255,255,255,0.95)",
