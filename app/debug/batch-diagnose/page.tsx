@@ -22,8 +22,8 @@ type Pair = {
 };
 
 export default function BatchDiagnosePage() {
-  const [originLat, setOriginLat] = useState("52.5"); // Volendam-gebied, ruw
-  const [originLon, setOriginLon] = useState("5.07");
+  const [originLat, setOriginLat] = useState("52.37833"); // Amsterdam Centraal
+  const [originLon, setOriginLon] = useState("4.90000");
   const [destLat, setDestLat] = useState("52.23159"); // Hilversum
   const [destLon, setDestLon] = useState("5.17349");
   const [loading, setLoading] = useState(false);
