@@ -2752,3 +2752,27 @@ van het gat gevonden -- de IJ-oversteek ontbreekt in de graph-connectiviteit, on
 knooppunten aan weerszijden gekozen worden.
 
 437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
+
+### 9.62 Nieuwe, verbonden ontdekking: rondje-generator koos knooppunt 53 i.p.v. verwacht knooppunt 45 bij Hilversum (30-8-2026)
+
+**Gemeld**: bij "Plaats zoeken" → Hilversum (optie A, "auto naar startpunt" voor een los rondje,
+niet "route naar een adres") koos de rondje-generator knooppunt 53 als startpunt, met een
+"Rijd naar het startpunt"-afstand van 95.000m -- de gebruiker verwachtte knooppunt 45,
+kennelijk dichter bij Hilversum gelegen.
+
+**Werkhypothese, aansluitend bij de rest van vandaag**: als knooppunt 45 dichterbij ligt maar
+NIET gekozen werd, waarschijnlijk omdat de generator 'm wel probeerde maar er geen bruikbaar
+rondje van kon maken (zelfde soort connectiviteitsprobleem als de rest van vandaag) -- viel
+terug op knooppunt 53, dat verder weg ligt maar wél werkte.
+
+**Testtool ingesteld** om dit te verifiëren: Volendam-kant (bekend goed, exact ID) → knooppunt
+45 bij Hilversum (via nabijheid gevonden). Als dit OOK een enorme, onlogische afstand geeft
+(vergelijkbaar met sectie 9.57's 349-350 km), bevestigt dat: knooppunt 45 heeft hetzelfde
+connectiviteitsgat, en de rondje-generator week daarom terecht uit naar 53.
+
+**Belang van deze vondst**: dit zou bevestigen dat het gevonden gat niet uniek is voor
+"route naar een adres" (sectie 9.21/9.49), maar OOK de rondje-generator (sectie 6, de
+oorspronkelijke hoofdfunctie van de app) raakt bij zoekopdrachten in dit gebied -- breder
+dan eerder gedacht.
+
+437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.

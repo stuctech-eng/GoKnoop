@@ -30,14 +30,14 @@ type DirectRouteResult = {
 };
 
 export default function DirectRoutePage() {
-  const [fromNodeId, setFromNodeId] = useState("");
+  const [fromNodeId, setFromNodeId] = useState("7fmSWIHYsKu3Wb3yOtM2"); // Volendam-kant, bekend goed
   const [toNodeId, setToNodeId] = useState("");
-  const [fromDisplay, setFromDisplay] = useState(""); // leeg = dichtstbijzijnde knooppunt bij het referentiepunt, ongeacht nummer
-  const [toDisplay, setToDisplay] = useState(""); // leeg = dichtstbijzijnde knooppunt bij Amsterdam Centraal
-  const [nearFromLat, setNearFromLat] = useState("52.3860"); // Buiksloterweg, NOORDkant van het IJ, bij het pontje
-  const [nearFromLon, setNearFromLon] = useState("4.9115");
-  const [nearToLat, setNearToLat] = useState("52.37833"); // Amsterdam Centraal, ZUIDkant van het IJ
-  const [nearToLon, setNearToLon] = useState("4.90000");
+  const [fromDisplay, setFromDisplay] = useState("");
+  const [toDisplay, setToDisplay] = useState("45"); // het knooppunt dat de gebruiker verwachtte, i.p.v. 53
+  const [nearFromLat, setNearFromLat] = useState("");
+  const [nearFromLon, setNearFromLon] = useState("");
+  const [nearToLat, setNearToLat] = useState("52.23159"); // Hilversum
+  const [nearToLon, setNearToLon] = useState("5.17349");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DirectRouteResult | null>(null);
@@ -83,7 +83,7 @@ export default function DirectRoutePage() {
     <div style={{ padding: 20, fontFamily: "sans-serif" }}>
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>Directe node-naar-node-test</h1>
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>
-        Vooraf ingevuld: dichtstbijzijnde knooppunt bij Buiksloterweg (noordkant IJ, bij het pontje) → dichtstbijzijnde knooppunt bij Amsterdam Centraal (zuidkant IJ). Test de oversteek zelf, zo krap mogelijk.
+        Vooraf ingevuld: Volendam-kant (bekend goed) → knooppunt 45 bij Hilversum. Test of het knooppunt dat de rondje-generator NIET koos (45, verwacht) hetzelfde connectiviteitsgat heeft als kandidaat 53 (wél gekozen).
       </p>
 
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Van: exact ID (leeg = weergavenummer + referentiepunt eronder)</p>
