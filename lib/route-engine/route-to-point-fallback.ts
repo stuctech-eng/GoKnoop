@@ -39,6 +39,19 @@ export function computeRouteWithFallback(
   toLogicalNodeId: string,
   constraints: RouteConstraints = {}
 ): RouteToPointWithFallbackResult | RouteToPointFallbackFailure {
+  // BUGFIX (30-8-2026, vervolg op sectie 9.50 -- de bestemmingskant-fix loste het gemelde
+  // probleem NIET volledig op): als de EERST geprobeerde herkomstkandidaat (dichtstbijzijnde
+  // knooppunt) toevallig slecht verbonden is (bijv. aan de verkeerde kant van een gracht/dijk
+  // zonder directe oversteek), forceert dat een omweg ONGEACHT welke bestemmingskandidaat
+  // gekozen wordt -- sectie 9.50's fix (vergelijken tussen bestemmingen) helpt dan niet, want
+  // ALLE bestemmingen zouden via diezelfde slechte herkomst-keuze moeten. Nu ook hier: alle
+  // kandidaten proberen, de kortste kiezen i.p.v. de eerst-werkende.
+  //
+  // Bewust risicoarm voor de bestaande gebruikers van deze functie (Fase 4 "navigeer naar
+  // startpunt", Back to Start): "kortste van alle geprobeerde kandidaten" kan nooit slechter
+  // zijn dan "eerste die toevallig werkt" -- in het slechtste geval identiek, typisch beter.
+  let best: RouteToPointWithFallbackResult | null = null;
+
   for (let i = 0; i < fromCandidates.length; i++) {
     const candidate = fromCandidates[i];
     if (!provider.getNode(candidate.logicalNodeId)) continue; // onbekend knooppunt -- volgende proberen
@@ -46,7 +59,7 @@ export function computeRouteWithFallback(
     const result = computeRoute(provider, datasetVersionId, candidate.logicalNodeId, toLogicalNodeId, constraints);
     if ("reason" in result) continue; // deze kandidaat leverde geen route op -- volgende proberen
 
-    return {
+    const candidateResult: RouteToPointWithFallbackResult = {
       route: result,
       resolvedEdges: resolveRouteEdges(provider, result),
       nodeDisplayNumbers: result.nodes.map((nodeId) => provider.getNode(nodeId)?.displayNumber ?? nodeId),
@@ -54,7 +67,13 @@ export function computeRouteWithFallback(
       selectedStartNodeDisplayNumber: provider.getNode(candidate.logicalNodeId)?.displayNumber ?? candidate.logicalNodeId,
       selectedCandidateRank: i + 1,
     };
+
+    if (!best || candidateResult.route.distanceM < best.route.distanceM) {
+      best = candidateResult;
+    }
   }
+
+  if (best) return best;
 
   return {
     ok: false,

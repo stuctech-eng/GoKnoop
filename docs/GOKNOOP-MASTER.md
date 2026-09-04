@@ -2465,3 +2465,35 @@ gekozen wordt, niet A.
 
 Geen wijziging aan de kern van `lib/route-engine/` (Dijkstra zelf, `computeRoute`) -- puur de
 KEUZELOGICA tussen kandidaten. 436/436 tests (435 + 1 nieuw), `tsc` schoon.
+
+### 9.51 Zelfde fix ook aan de herkomst-kant — ✅ GEFIXT (30-8-2026)
+
+**Bevestigd: de fix van sectie 9.50 (alleen bestemmingskant) loste het probleem NIET
+volledig op** -- de gebruiker meldde precies hetzelfde probleem opnieuw, ná bevestiging dat
+de vorige fix wel degelijk live stond.
+
+**Verklaring**: als de EERST geprobeerde herkomstkandidaat (het dichtstbijzijnde knooppunt bij
+de live GPS-positie) toevallig slecht verbonden is (bijv. aan de verkeerde kant van een
+gracht/dijk zonder directe oversteek), forceert dat een omweg ONGEACHT welke
+bestemmingskandidaat uiteindelijk gekozen wordt -- sectie 9.50's fix (vergelijken tussen
+bestemmingen) kan dat niet oplossen, want ALLE bestemmingen zouden dan via diezelfde
+slechte herkomst-keuze moeten.
+
+**Fix**: dezelfde "evalueer alle kandidaten, kies de daadwerkelijk kortste" i.p.v. "eerste die
+werkt"-aanpak nu ook toegepast op `computeRouteWithFallback` (de herkomst-kant, `route-to-
+point-fallback.ts`) -- eerder bewust ongewijzigd gelaten uit voorzichtigheid, nu alsnog
+aangepast omdat dit waarschijnlijk de daadwerkelijke resterende oorzaak was.
+
+**Risico-afweging, expliciet**: deze functie wordt ook gebruikt door Fase 4 ("navigeer naar
+startpunt") en Back to Start. Beargumenteerd or dat dit GEEN risico voor die flows vormt:
+"kortste van alle geprobeerde kandidaten" kan nooit slechter zijn dan "eerste die toevallig
+werkt" -- in het slechtste geval identiek resultaat, typisch beter. Bevestigd met de volledige
+testsuite: 437/437 tests slagen, INCLUSIEF alle bestaande Fase-4/Back-to-Start-tests, zonder
+één regressie.
+
+**Bewezen met een gerichte regressietest**, zelfde opzet als sectie 9.50's test maar dan voor
+de herkomst-kant: kandidaat A eerst geprobeerd en werkt (lange omweg, 10.000m), kandidaat B
+pas daarna geprobeerd maar veel korter (100m) -- bevestigd dat nu B gekozen wordt.
+
+Geen wijziging aan de kern van `lib/route-engine/` (Dijkstra zelf). 437/437 tests (436 + 1
+nieuw), `tsc` schoon.

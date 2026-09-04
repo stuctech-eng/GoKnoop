@@ -67,4 +67,35 @@ describe("computeRouteWithFallback", () => {
       expect(result.candidatesAttempted).toBe(1);
     }
   });
+
+  it("[VERPLICHTE REGRESSIETEST, vervolg op sectie 9.50] kiest de daadwerkelijk KORTSTE herkomstkandidaat, niet zomaar de eerst-geprobeerde die werkt", async () => {
+    // Herkomstkandidaat A wordt EERST geprobeerd en werkt -- maar levert een lange omweg op
+    // (10.000m). Kandidaat B (tweede geprobeerd) is veel korter (100m). De oude, foute logica
+    // koos A; de fix moet B kiezen.
+    const nodes: GraphNode[] = [
+      { id: "originA", x: 0, y: 10000, displayNumber: "1" }, // eerst geprobeerd, maar ver via een omweg
+      { id: "detourMid", x: 0, y: 5000, displayNumber: "2" },
+      { id: "target", x: 0, y: 0, displayNumber: "3" },
+      { id: "originB", x: 100, y: 0, displayNumber: "4" }, // tweede geprobeerd, maar dichtbij
+    ];
+    const edges: GraphEdge[] = [
+      { id: "e1", fromLogicalNodeId: "originA", toLogicalNodeId: "detourMid", distanceM: 5000, directionality: "unknown", geometry: [{ x: 0, y: 10000 }, { x: 0, y: 5000 }] },
+      { id: "e2", fromLogicalNodeId: "detourMid", toLogicalNodeId: "target", distanceM: 5000, directionality: "unknown", geometry: [{ x: 0, y: 5000 }, { x: 0, y: 0 }] },
+      { id: "e3", fromLogicalNodeId: "originB", toLogicalNodeId: "target", distanceM: 100, directionality: "unknown", geometry: [{ x: 100, y: 0 }, { x: 0, y: 0 }] },
+    ];
+    const provider = new InMemoryGraphProvider(nodes, edges);
+    await provider.load();
+
+    const fromCandidates = [
+      { logicalNodeId: "originA", distanceM: 50 }, // hemelsbreed dichterbij, maar EERST geprobeerd, echte route lang
+      { logicalNodeId: "originB", distanceM: 300 }, // hemelsbreed verder, maar de ECHTE route is korter
+    ];
+
+    const result = computeRouteWithFallback(provider, "v-test", fromCandidates, "target");
+    expect("selectedStartNodeId" in result).toBe(true);
+    if ("selectedStartNodeId" in result) {
+      expect(result.selectedStartNodeId).toBe("originB"); // de daadwerkelijk kortere, niet de eerst-geprobeerde
+      expect(result.route.distanceM).toBe(100);
+    }
+  });
 });
