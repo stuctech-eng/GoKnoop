@@ -2858,3 +2858,11 @@ of dit de ENIGE ontbrekende verbinding is, of dat er meer bruggen/pontjes in het
 hetzelfde probleem hebben, zoals bij sectie 9.63 als hypothese genoemd).
 
 437/437 tests ongewijzigd, `tsc` schoon.
+
+### 9.65 Patch bevestigd toegepast (30-8-2026)
+
+`/debug/patch-ferry-edge` uitgevoerd -- resultaat: `"status": "created"`, edgeId
+`2Lrl1MrOHrCI5g8qRSdB`, knooppunt 61 → knooppunt 5, 1600m. De verbinding staat nu in
+Firestore. Wacht nog op een verse deploy om de `CachedGraphProvider`-cache te verversen
+(vandaar deze zip, puur om die deploy te forceren) voordat dit daadwerkelijk in
+routeberekeningen meetelt.
