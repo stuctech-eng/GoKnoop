@@ -36,6 +36,17 @@ export function computeRouteBetweenCandidatesWithFallback(
   toCandidates: readonly LoopStartCandidate[],
   constraints: RouteConstraints = {}
 ): RouteBetweenCandidatesResult | RouteBetweenCandidatesFailure {
+  // BUGFIX (30-8-2026, echte, bevestigde regressie: "snelste route" naar Hilversum bleek een
+  // gigantische omweg via Zwolle): eerder werd hier gestopt bij de EERSTE werkende combinatie
+  // (bestemmingskandidaat + de bijbehorende herkomst-fallback) -- dat is prima voor Back to
+  // Start (er is maar één, vaste bestemming, "een bruikbare route" is het enige criterium),
+  // maar FOUT voor "route naar een adres": als de eerste combinatie toevallig een omweg
+  // oplevert (bijv. een candidate die alleen via een lange, indirecte route bereikbaar is),
+  // werd die gewoon geaccepteerd zonder te checken of een andere combinatie korter was. Nu
+  // ALLE bestemmingskandidaten geprobeerd, de KORTSTE (laagste `route.distanceM`) van alle
+  // succesvolle combinaties gekozen.
+  let best: RouteBetweenCandidatesResult | null = null;
+
   for (let i = 0; i < toCandidates.length; i++) {
     const toCandidate = toCandidates[i];
     if (!provider.getNode(toCandidate.logicalNodeId)) continue; // onbekend knooppunt -- volgende bestemmingskandidaat
@@ -44,13 +55,19 @@ export function computeRouteBetweenCandidatesWithFallback(
     if ("ok" in result) continue; // deze bestemmingskandidaat leverde niets op -- volgende proberen
 
     const success = result as RouteToPointWithFallbackResult;
-    return {
+    const candidateResult: RouteBetweenCandidatesResult = {
       ...success,
       selectedDestinationNodeId: toCandidate.logicalNodeId,
       selectedDestinationNodeDisplayNumber: provider.getNode(toCandidate.logicalNodeId)?.displayNumber ?? toCandidate.logicalNodeId,
       selectedDestinationCandidateRank: i + 1,
     };
+
+    if (!best || candidateResult.route.distanceM < best.route.distanceM) {
+      best = candidateResult;
+    }
   }
+
+  if (best) return best;
 
   return {
     ok: false,

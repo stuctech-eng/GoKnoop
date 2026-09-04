@@ -99,4 +99,37 @@ describe("computeRouteBetweenCandidatesWithFallback", () => {
       expect(result.destinationCandidatesAttempted).toBe(1);
     }
   });
+
+  it("[VERPLICHTE REGRESSIETEST, exacte gerapporteerde bug: 'snelste route' naar Hilversum bleek een gigantische omweg] kiest de daadwerkelijk KORTSTE bestemmingskandidaat, niet zomaar de eerste die werkt", async () => {
+    // Bestemmingskandidaat A wordt EERST geprobeerd en werkt (levert een route op) -- maar
+    // die route is een grote omweg (10.000m). Kandidaat B (tweede geprobeerd) is veel
+    // korter (100m). De oude, foute logica zou A kiezen (eerste die werkt); de fix moet B
+    // kiezen (daadwerkelijk de kortste).
+    const nodes = [
+      { id: "origin", x: 0, y: 0, displayNumber: "1" },
+      { id: "detourMid", x: 0, y: 5000, displayNumber: "2" },
+      { id: "destA", x: 0, y: 10000, displayNumber: "3" }, // via een lange omweg bereikbaar
+      { id: "destB", x: 100, y: 0, displayNumber: "4" }, // vlak bij origin, korte route
+    ];
+    const edges = [
+      { id: "e1", fromLogicalNodeId: "origin", toLogicalNodeId: "detourMid", distanceM: 5000, directionality: "unknown" as const, geometry: [{ x: 0, y: 0 }, { x: 0, y: 5000 }] },
+      { id: "e2", fromLogicalNodeId: "detourMid", toLogicalNodeId: "destA", distanceM: 5000, directionality: "unknown" as const, geometry: [{ x: 0, y: 5000 }, { x: 0, y: 10000 }] },
+      { id: "e3", fromLogicalNodeId: "origin", toLogicalNodeId: "destB", distanceM: 100, directionality: "unknown" as const, geometry: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+    ];
+    const provider = new InMemoryGraphProvider(nodes, edges);
+    await provider.load();
+
+    const fromCandidates = [{ logicalNodeId: "origin", distanceM: 10 }];
+    const toCandidates = [
+      { logicalNodeId: "destA", distanceM: 200 }, // dichterbij hemelsbreed, maar EERST geprobeerd
+      { logicalNodeId: "destB", distanceM: 500 }, // verder hemelsbreed, maar de ECHTE route is korter
+    ];
+
+    const result = computeRouteBetweenCandidatesWithFallback(provider, "v-test", fromCandidates, toCandidates);
+    expect("selectedDestinationNodeId" in result).toBe(true);
+    if ("selectedDestinationNodeId" in result) {
+      expect(result.selectedDestinationNodeId).toBe("destB"); // de daadwerkelijk kortere, niet de eerst-geprobeerde
+      expect(result.route.distanceM).toBe(100);
+    }
+  });
 });

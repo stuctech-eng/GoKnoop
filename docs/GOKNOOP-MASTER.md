@@ -2429,3 +2429,39 @@ garantie. Nog niet toegepast op Back to Start (bewust, op verzoek "voor nu allee
 Geen wijziging aan de kern van `lib/route-engine/` (Dijkstra/GraphProvider zelf) -- puur
 nieuwe, dunne bestanden eromheen. 435/435 tests (425 + 10 nieuw), `tsc` schoon. Nog geen
 live iPhone-validatie van deze specifieke feature.
+
+### 9.50 ECHTE BUG GEVONDEN: "snelste route" koos eerste werkende kandidaat, niet de kortste — ✅ GEFIXT (30-8-2026)
+
+**Gemeld probleem**: "route naar een adres" met "Snelste" geselecteerd (dus GEEN plus-lusje,
+sectie 9.49 stond expliciet uit) gaf een enorme, absurde omweg (Volendam-gebied naar
+Hilversum via een lus helemaal om het IJsselmeer heen via Zwolle). Bevestigd door de
+gebruiker dat "Snelste" daadwerkelijk geselecteerd was -- dus geen samenhang met de nieuwe
+lusje-functie.
+
+**Root cause, bevestigd in de code**: `computeRouteBetweenCandidatesWithFallback`
+(`route-between-candidates.ts`, sectie 9.21) stopte bij de EERSTE bestemmingskandidaat die
+een werkende route opleverde -- zonder te vergelijken of een LATERE kandidaat een kortere
+route zou geven. Dit was oorspronkelijk bedoeld om het Volendam-probleem op te lossen ("de
+dichtstbijzijnde kandidaat heeft soms geen bruikbare route") -- maar loste dat op door
+simpelweg "iets wat werkt" te accepteren, niet "het beste wat beschikbaar is". Voor Back to
+Start (vaste bestemming, geen keuze) maakt dat niet uit; voor "route naar een adres" (waar
+meerdere bestemmingskandidaten realistisch sterk kunnen verschillen in werkelijke
+routeafstand) is dat een echte bug.
+
+**Fix**: alle bestemmingskandidaten worden nu geprobeerd (niet gestopt bij de eerste), en de
+kandidaat met de daadwerkelijk KORTSTE `route.distanceM` wordt gekozen.
+
+**Bewust NIET aangepast**: `computeRouteWithFallback` (de HERKOMST-kant, `route-to-point-
+fallback.ts`) heeft dezelfde "eerste werkende, niet per se kortste"-eigenschap, maar is
+bewust ONGEWIJZIGD gelaten -- die functie wordt ook door Fase 4 ("navigeer naar startpunt")
+en Back to Start gebruikt, die al goed getest en werkend zijn. De fix aan de
+BESTEMMINGS-kant (waar de bug concreet gemeld werd) lost het gerapporteerde probleem al op
+zonder extra risico te introduceren bij al werkende functionaliteit.
+
+**Bewezen met een gerichte regressietest**: een fixture waarbij bestemmingskandidaat A EERST
+geprobeerd wordt en werkt (10.000m, via een lange omweg), en kandidaat B pas DAARNA
+geprobeerd wordt maar veel korter is (100m) -- de test bevestigt dat nu daadwerkelijk B
+gekozen wordt, niet A.
+
+Geen wijziging aan de kern van `lib/route-engine/` (Dijkstra zelf, `computeRoute`) -- puur de
+KEUZELOGICA tussen kandidaten. 436/436 tests (435 + 1 nieuw), `tsc` schoon.
