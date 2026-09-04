@@ -2192,3 +2192,40 @@ afhankelijk van waar je daadwerkelijk was toen je pauzeerde.
 
 Geen wijziging aan `lib/route-engine/`. 411/411 tests ongewijzigd (bestaande
 `paused-ride-store`-tests blijven groen dankzij het optionele veld, geen breaking change).
+
+### 9.42 Parkeerplaats-zoekfunctie — ✅ GEBOUWD (30-8-2026)
+
+Vervolg op het plan/onderzoek uit sectie 9.23, nu daadwerkelijk gebouwd -- op verzoek, niet
+langer uitgesteld naar een volgende sessie.
+
+**Architectuur, zelfde patroon als `LocalBikeRouter` (sectie 9.11):**
+```
+Zoeken-tab → PlacesFinder → PlacesProvider (interface) → OverpassPlacesAdapter
+```
+
+**Gebouwd:**
+- `lib/places/places-provider.ts` -- de interface (`PlacesProvider`), types (`PlaceResult`,
+  `PlacesProviderError`).
+- `lib/places/overpass-places-adapter.ts` -- concrete implementatie voor de Overpass API
+  (OpenStreetMap). Query-vorm bevestigd via webzoekopdracht naar echte, werkende voorbeelden
+  (niet uit het geheugen gegokt): `nwr["amenity"="parking"](around:R,LAT,LON)` -- `nwr`
+  (node/way/relation) i.p.v. alleen `node`, want parkeerterreinen staan vaak als vlak (way) in
+  OSM. `out center` geeft een representatief punt terug voor ways/relations. 7 tests, incl.
+  aparte tests voor node- vs. way-resultaten (verschillende responsvorm) en sortering op
+  afstand.
+- `lib/places/places-finder.ts` -- app-facing laag met dezelfde soort in-memory cache als
+  `LocalBikeRouter`. 4 tests.
+- Nieuw endpoint `POST /api/places/parking` -- `radiusM` standaard 1500m, hard begrensd op
+  maximaal 3000m (voorkomt te brede/trage aanvragen).
+- **UI**: nieuwe knop "🅿️ Toon parkeerplaatsen bij dit adres" in de "Route naar een
+  adres"-sectie (Zoeken-tab) -- BEWUST LOS van "Route hierheen vanaf mijn locatie", niet
+  verplicht in die volgorde. Geocodet eerst het ingetypte adres (hergebruikt dezelfde
+  plaatsnaam-geocoding als de route-naar-adres-functie), zoekt dan parkeerplaatsen eromheen,
+  en toont een lijst met afstand + een Apple Kaarten-deeplink per resultaat (`daddr=lat,lon`)
+  -- zelfde "geen eigen autorouting bouwen"-principe als overal elders (sectie 9.6/9.18).
+
+**Wat dit NIET doet (bewust, gescheiden van de bredere "plaatsen zoeken"-functie voor het
+latere Ritdagboek, sectie 9.19/9.23)**: geen restaurants/terrassen/koffie -- uitsluitend
+parkeerplaatsen, zoals afgesproken.
+
+Geen wijziging aan `lib/route-engine/`. 422/422 tests (411 + 11 nieuw), `tsc` schoon.

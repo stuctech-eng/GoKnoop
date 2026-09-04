@@ -219,6 +219,9 @@ export default function Home() {
   /** Sectie 9.21 ("route naar een adres") -- eigen, apart veld/state van de bestaande plaatsnaam-zoekfunctie. */
   const [destinationInput, setDestinationInput] = useState("");
   const [routeToDestinationLoading, setRouteToDestinationLoading] = useState(false);
+  /** Parkeerplaats-zoekfunctie (sectie 9.42, 30-8-2026). */
+  const [parkingOptions, setParkingOptions] = useState<{ name: string | null; lat: number; lon: number; distanceM: number }[] | null>(null);
+  const [parkingLoading, setParkingLoading] = useState(false);
   const [startLocation, setStartLocation] = useState<LocationCandidate | null>(null);
   const [locationCandidates, setLocationCandidates] = useState<LocationCandidate[]>([]);
   const [resolvedStartNode, setResolvedStartNode] = useState<{
@@ -602,6 +605,51 @@ export default function Home() {
   }
 
   /**
+   * Parkeerplaats-zoekfunctie (sectie 9.42, 30-8-2026, oorspronkelijk vastgelegd/onderzocht in
+   * sectie 9.23). Geocodet het ingetypte adres (hergebruikt `/api/location/resolve`'s
+   * plaatsnaam-geocoding, precies zoals `startRouteToDestination` al doet), en zoekt dan
+   * parkeerplaatsen rond die coördinaten -- los van het daadwerkelijk starten van een route,
+   * puur informatief zodat de gebruiker zelf een parkeerplek kan kiezen en ernaartoe kan
+   * navigeren (Kaarten-link per resultaat), voordat/naast het fietsen zelf.
+   */
+  async function showParkingNearDestination() {
+    if (!destinationInput.trim()) return;
+    setParkingLoading(true);
+    setParkingOptions(null);
+    try {
+      const destRes = await fetch("/api/location/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ placeName: destinationInput, limit: 1 }),
+      });
+      const destData = await destRes.json();
+      if (!destRes.ok || destData.geocodedLat == null) {
+        setErrorMessage(`We konden '${destinationInput}' niet vinden.`);
+        setStep("error");
+        return;
+      }
+
+      const parkingRes = await fetch("/api/places/parking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: destData.geocodedLat, lon: destData.geocodedLon }),
+      });
+      const parkingData = await parkingRes.json();
+      if (!parkingRes.ok) {
+        setErrorMessage(parkingData.error ?? "Kon geen parkeerplaatsen vinden bij dit adres.");
+        setStep("error");
+        return;
+      }
+      setParkingOptions(parkingData.results);
+    } catch {
+      setErrorMessage("Er ging iets mis bij het zoeken naar parkeerplaatsen.");
+      setStep("error");
+    } finally {
+      setParkingLoading(false);
+    }
+  }
+
+  /**
    * Geeft de nodes/edges/datasetVersionId van de HUIDIG actieve route terug, ongeacht welke
    * van de drie bronnen (Back to Start-been, opgeslagen route, of normaal gekozen rondje) op
    * dit moment NavigationScreen aandrijft -- nodig om een pauze-snapshot samen te stellen.
@@ -731,6 +779,7 @@ export default function Home() {
     setSharedPreview(null);
     setPlaceName("");
     setDestinationInput("");
+    setParkingOptions(null);
     setStartLocation(null);
     setLocationCandidates([]);
     setResolvedStartNode(null);
@@ -872,6 +921,57 @@ export default function Home() {
                 >
                   {routeToDestinationLoading ? "Bezig..." : "🚴 Route hierheen vanaf mijn locatie"}
                 </button>
+
+                <button
+                  onClick={showParkingNearDestination}
+                  disabled={!destinationInput.trim() || parkingLoading}
+                  style={{
+                    width: "100%",
+                    minHeight: 48,
+                    marginTop: 10,
+                    background: "white",
+                    color: destinationInput.trim() ? "var(--color-knoop-green)" : "var(--color-ink)",
+                    opacity: destinationInput.trim() ? 1 : 0.5,
+                    border: "2px solid var(--color-knoop-green)",
+                    borderRadius: "var(--radius-card)",
+                    fontSize: 15,
+                    fontWeight: 600,
+                  }}
+                >
+                  {parkingLoading ? "Zoeken..." : "🅿️ Toon parkeerplaatsen bij dit adres"}
+                </button>
+
+                {parkingOptions && (
+                  <div style={{ marginTop: 12 }}>
+                    {parkingOptions.length === 0 ? (
+                      <p style={{ fontSize: 14, opacity: 0.6, textAlign: "center" }}>Geen parkeerplaatsen gevonden in de buurt.</p>
+                    ) : (
+                      parkingOptions.map((p, i) => (
+                        <a
+                          key={i}
+                          href={`https://maps.apple.com/?daddr=${p.lat},${p.lon}&dirflg=d`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            background: "white",
+                            border: "1px solid #e5e5e0",
+                            borderRadius: 10,
+                            padding: "10px 14px",
+                            marginBottom: 8,
+                            textDecoration: "none",
+                            color: "var(--color-ink)",
+                          }}
+                        >
+                          <span style={{ fontSize: 14 }}>{p.name ?? "Parkeerplaats"}</span>
+                          <span style={{ fontSize: 13, opacity: 0.6 }}>{Math.round(p.distanceM)} m →</span>
+                        </a>
+                      ))
+                    )}
+                  </div>
+                )}
               </section>
             )}
 
