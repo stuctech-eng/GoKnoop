@@ -12,9 +12,19 @@ import type { LatLon, PlaceResult, PlacesProviderError, PlacesProvider } from ".
  * staan vaak als vlak (way) in OSM, niet als los punt. `out center` geeft een
  * representatief punt terug voor ways/relations (die hebben geen directe
  * lat/lon).
+ *
+ * MIRROR-TERUGVAL (30-8-2026, na een ECHTE, herhaalde timeout op de hoofd-
+ * server): `overpass.kumi.systems` is een gevestigde, onafhankelijk beheerde
+ * alternatieve Overpass-spiegel (bevestigd via meerdere onafhankelijke
+ * bronnen -- GitHub-issues, R-package-documentatie, OSM-communityblogs).
+ * Geen CORS-probleem hier (dat speelt alleen bij browser-JS; dit draait
+ * server-side in een Next.js API-route). Beide pogingen krijgen een kortere
+ * (4s) individuele tijdslimiet dan voorheen (was 6s) zodat TWEE pogingen
+ * samen (4+4=8s) ruim binnen Vercel Hobby's harde 10s-limiet blijven.
  */
 
-const OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter";
+const OVERPASS_ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+const PER_ATTEMPT_TIMEOUT_MS = 4000;
 
 /** Haversine-afstand in meters -- puur voor het sorteren/tonen van resultaten, geen routing. */
 function haversineDistanceM(a: LatLon, b: LatLon): number {
@@ -38,22 +48,32 @@ type OverpassElement = {
 
 export class OverpassPlacesAdapter implements PlacesProvider {
   async findNearby(center: LatLon, category: "parking", radiusM: number, limit: number): Promise<PlaceResult[] | PlacesProviderError> {
-    // BUGFIX (30-8-2026, herhaalde "Vercel Runtime Timeout Error" ook na het verlagen van
-    // Overpass' EIGEN queryinterne `[timeout:X]`): dat interne timeout dekt alleen de tijd
-    // NADAT Overpass de query daadwerkelijk is gaan uitvoeren -- een trage verbinding,
-    // TLS-handshake, of wachtrij aan de kant van Overpass (bevestigd: de publieke server heeft
-    // gedocumenteerde, terugkerende beschikbaarheidsproblemen) valt daar NIET onder. Nu een
-    // eigen, hard afgedwongen `AbortController`-tijdslimiet (6s) rond de HELE aanvraag --
-    // beschermt tegen elke soort traagheid, niet alleen trage query-verwerking, en blijft ruim
-    // binnen Vercel Hobby's harde 10s-limiet.
-    const query = `[out:json][timeout:5];nwr["amenity"="${category}"](around:${radiusM},${center.lat},${center.lon});out center ${limit};`;
+    let lastError: PlacesProviderError = { reason: "provider_error", message: "Geen enkele Overpass-server reageerde op tijd." };
+
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      const result = await this.attemptFindNearby(endpoint, center, category, radiusM, limit);
+      if (!("reason" in result)) return result; // eerste succesvolle poging wint
+      lastError = result;
+    }
+
+    return lastError;
+  }
+
+  private async attemptFindNearby(
+    endpoint: string,
+    center: LatLon,
+    category: "parking",
+    radiusM: number,
+    limit: number
+  ): Promise<PlaceResult[] | PlacesProviderError> {
+    const query = `[out:json][timeout:3];nwr["amenity"="${category}"](around:${radiusM},${center.lat},${center.lon});out center ${limit};`;
 
     const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), 6000);
+    const timeoutHandle = setTimeout(() => controller.abort(), PER_ATTEMPT_TIMEOUT_MS);
 
     let res: Response;
     try {
-      res = await fetch(OVERPASS_ENDPOINT, {
+      res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: `data=${encodeURIComponent(query)}`,
@@ -64,15 +84,15 @@ export class OverpassPlacesAdapter implements PlacesProvider {
       return {
         reason: "provider_error",
         message: isTimeout
-          ? "Overpass reageerde niet binnen 6 seconden -- de gratis server is soms overbelast. Probeer het opnieuw."
-          : `Kon de Overpass-server niet bereiken (${err instanceof Error ? err.message : String(err)}).`,
+          ? `${endpoint} reageerde niet binnen ${PER_ATTEMPT_TIMEOUT_MS / 1000} seconden.`
+          : `Kon ${endpoint} niet bereiken (${err instanceof Error ? err.message : String(err)}).`,
       };
     } finally {
       clearTimeout(timeoutHandle);
     }
 
     if (!res.ok) {
-      return { reason: "provider_error", message: `Overpass API gaf status ${res.status}.` };
+      return { reason: "provider_error", message: `${endpoint} gaf status ${res.status}.` };
     }
 
     let data: { elements?: OverpassElement[] };

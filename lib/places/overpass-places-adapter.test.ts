@@ -102,4 +102,29 @@ describe("OverpassPlacesAdapter", () => {
     const result = await adapter.findNearby(CENTER, "parking", 1000, 5);
     expect(result).toEqual([]);
   });
+
+  it("[verplichte test] valt terug op de tweede (mirror-)server als de eerste niet reageert", async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { name: "AbortError" })) // eerste server faalt
+      .mockResolvedValueOnce({ ok: true, json: async () => overpassResponse([{ type: "node", lat: 52.301, lon: 5.201, tags: {} }]) }); // tweede lukt
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const adapter = new OverpassPlacesAdapter();
+    const result = await adapter.findNearby(CENTER, "parking", 1000, 5);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondUrl = fetchMock.mock.calls[1][0];
+    expect(secondUrl).toBe("https://overpass.kumi.systems/api/interpreter");
+    expect(Array.isArray(result)).toBe(true);
+    if (Array.isArray(result)) {
+      expect(result[0].lat).toBe(52.301);
+    }
+  });
+
+  it("geeft de laatste fout terug als BEIDE servers falen (geen crash, duidelijke melding)", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("beide down")) as unknown as typeof fetch;
+    const adapter = new OverpassPlacesAdapter();
+    const result = await adapter.findNearby(CENTER, "parking", 1000, 5);
+    expect("reason" in result && result.reason).toBe("provider_error");
+  });
 });

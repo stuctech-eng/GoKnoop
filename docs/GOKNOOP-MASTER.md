@@ -2346,3 +2346,28 @@ grens, ruim onder Vercel Hobby's 10s).
 
 422/422 tests ongewijzigd (bestaande, gemockte tests negeren het nieuwe `signal`-argument
 correct, geen wijziging nodig), `tsc` schoon.
+
+### 9.47 Mirror-terugval: tweede Overpass-server als reserve — ✅ GEBOUWD (30-8-2026)
+
+**Bevestigd door de gebruiker: de eigen 6s-tijdslimiet (sectie 9.46) werkte correct** (nette
+melding i.p.v. een crash), maar de onderliggende hoofdserver reageerde daadwerkelijk te traag
+-- een genuine, actuele beschikbaarheidsissue bij `overpass-api.de`, niet langer een fout in
+GoKnoop's eigen code.
+
+**Fix**: een tweede, onafhankelijk beheerde Overpass-spiegel toegevoegd als automatische
+terugval -- `overpass.kumi.systems`, bevestigd via meerdere onafhankelijke bronnen als
+gevestigd, veelgebruikt alternatief (GitHub-issues, R-package-documentatie,
+OSM-communityblogs). Geen CORS-probleem (dat speelt alleen bij browser-JS, dit draait
+server-side).
+
+**Tijdsbudget herzien voor twee pogingen**: individuele tijdslimiet per poging verlaagd van
+6s naar 4s (Overpass' eigen interne `[timeout:X]` van 5 naar 3), zodat twee sequentiële
+pogingen samen (4+4=8s) ruim binnen Vercel Hobby's harde 10s-limiet blijven, met marge voor
+overige overhead.
+
+**Bewezen met een gerichte test** (niet alleen aangenomen): een test simuleert expliciet
+"eerste server faalt, tweede server lukt" en controleert dat de tweede aanroep daadwerkelijk
+naar `overpass.kumi.systems` gaat en het resultaat correct doorkomt. Plus een test die bewijst
+dat een nette foutmelding (geen crash) volgt als BEIDE servers falen.
+
+424/424 tests (422 + 2 nieuw), `tsc` schoon.
