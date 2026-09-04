@@ -2815,3 +2815,46 @@ eenmalige fout.
   vermoedelijke oversteken te verifiëren.
 
 437/437 tests, `tsc` schoon (ongewijzigd sinds de laatste code-aanpassing in dit traject).
+
+### 9.64 Gerichte datapatch gebouwd: pontje-edge Buiksloterweg ↔ Amsterdam Centraal (30-8-2026)
+
+Op expliciet verzoek ("Los op"): een eenmalige, gerichte reparatie van de exacte ontbrekende
+verbinding die vandaag gevonden is (sectie 9.63), in plaats van dit uit te stellen naar een
+volgende sessie.
+
+**Technisch mogelijk gebleken**: de knooppuntengraaf wordt geladen uit Firestore
+(`FirestoreGraphProvider`) uit een `edges`-collectie met een duidelijk, eenvoudig schema
+(`fromLogicalNodeId`, `toLogicalNodeId`, `distanceM`, `directionality`, `coords`,
+`matchConfidence`). Een edge met `matchConfidence: "matched"` wordt automatisch meegenomen in
+de graaf -- er hoeft geen hele import opnieuw te draaien om één specifieke, ontbrekende
+verbinding toe te voegen.
+
+**Gebouwd**:
+- `POST /api/admin/patch-ferry-edge` -- voegt PRECIES ÉÉN edge toe, tussen de twee
+  hardgecodeerde, vandaag exact geïdentificeerde knooppunt-ID's (knooppunt 61/
+  `bvMw2fsQTTyeJMUfX6wX` bij Buiksloterweg, knooppunt 5/`CJSXBPUMG49vOPmYvhJd` bij Amsterdam
+  Centraal). Geen generieke "voeg edges toe"-functionaliteit -- uitsluitend deze ene, grondig
+  geverifieerde plek.
+  - Controleert vooraf of beide knooppunten bestaan in de actieve dataset.
+  - Controleert of de edge al bestaat (voorkomt duplicaten bij herhaald gebruik).
+  - Afstand: 1600m (de hemelsbrede afstand tussen de twee knooppunten, als redelijke
+    schatting voor de pontje-oversteek zelf).
+  - `directionality: "unknown"` (pontjes zijn tweerichtingsverkeer).
+  - Herkenbaar gemarkeerd (`source: "manual-patch-2026-08-30"`, `patchReason`) voor
+    toekomstige inspectie of eventueel terugdraaien.
+- `/debug/patch-ferry-edge` -- bedieningsscherm MET expliciete bevestigingsstap (zelfde
+  discipline als andere ingrijpende acties in de app, bijv. "rit beëindigen") voordat er
+  daadwerkelijk naar de productiedatabase geschreven wordt.
+
+**Belangrijke kanttekening, expliciet vermeld in de code en hier**: `CachedGraphProvider`'s
+in-memory cache (module-niveau, sectie 4/9.44) ververst niet automatisch na deze patch --
+warme serverless-instances blijven de OUDE graaf (zonder de nieuwe edge) gebruiken totdat een
+koude start plaatsvindt of een nieuwe deploy de instance vervangt. Na het toepassen van de
+patch kan het dus even duren voordat het effect merkbaar is; een nieuwe deploy (bijv. de
+eerstvolgende zip) forceert dit direct.
+
+**Nog niet bevestigd**: of dit daadwerkelijk de Hilversum-route corrigeert (afhankelijk van
+of dit de ENIGE ontbrekende verbinding is, of dat er meer bruggen/pontjes in het gebied
+hetzelfde probleem hebben, zoals bij sectie 9.63 als hypothese genoemd).
+
+437/437 tests ongewijzigd, `tsc` schoon.
