@@ -2866,3 +2866,20 @@ hetzelfde probleem hebben, zoals bij sectie 9.63 als hypothese genoemd).
 Firestore. Wacht nog op een verse deploy om de `CachedGraphProvider`-cache te verversen
 (vandaar deze zip, puur om die deploy te forceren) voordat dit daadwerkelijk in
 routeberekeningen meetelt.
+
+### 9.66 Patch werkt, maar loste het Hilversum-probleem NIET (volledig) op — verder inperken (30-8-2026)
+
+**Bevestigd**: de patch zelf werkt correct (directe test knooppunt 61→5 geeft nu 1,6 km, 1 hop
+-- was "disconnected"). Maar de "route naar een adres"-test naar Hilversum bleef **exact**
+350,4 km -- geen verandering. Dit betekent: de kortste-route-berekening tussen de werkelijke
+Volendam- en Hilversum-kandidaten loopt kennelijk NIET via deze pontje-oversteek, of er zit
+nog minstens één tweede, apart gat verderop.
+
+**Volgende testtool ingesteld**: Volendam-kant (echte herkomst-ID uit de daadwerkelijke
+Hilversum-test, `7fmSWIHYsKu3Wb3yOtM2`) → knooppunt 5/Amsterdam Centraal (`CJSXBPUMG49vOPmYvhJd`,
+de net gepatchte kant). Doel: bevestigen of de patch al helpt voor DIT stuk van de reis (Volendam
+tot aan Amsterdam Centraal) -- als dat nu kort is, ligt het resterende probleem specifiek tussen
+Amsterdam Centraal en Hilversum (een ANDER stuk dan we eerder dachten, aangezien Amsterdam
+Amstel-Hilversum al goed bleek, sectie 9.58).
+
+437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
