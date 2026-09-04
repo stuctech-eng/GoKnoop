@@ -21,15 +21,21 @@ type DirectRouteResult = {
   computeTimeMs: number;
   fromNodeIdsFound: number;
   toNodeIdsFound: number;
+  fromDisplayNumber: string;
+  fromLat: number;
+  fromLon: number;
+  toDisplayNumber: string;
+  toLat: number;
+  toLon: number;
 };
 
 export default function DirectRoutePage() {
   const [fromNodeId, setFromNodeId] = useState("");
   const [toNodeId, setToNodeId] = useState("");
-  const [fromDisplay, setFromDisplay] = useState("60");
+  const [fromDisplay, setFromDisplay] = useState(""); // leeg = dichtstbijzijnde knooppunt bij het referentiepunt, ongeacht nummer
   const [toDisplay, setToDisplay] = useState("36");
-  const [nearFromLat, setNearFromLat] = useState("52.3844"); // Schellingwoude/Amsterdam-Noord
-  const [nearFromLon, setNearFromLon] = useState("4.9661");
+  const [nearFromLat, setNearFromLat] = useState("52.34639"); // Amsterdam Amstel-station, TEN ZUIDEN van het IJ
+  const [nearFromLon, setNearFromLon] = useState("4.91778");
   const [nearToLat, setNearToLat] = useState("52.23159"); // Hilversum
   const [nearToLon, setNearToLon] = useState("5.17349");
   const [loading, setLoading] = useState(false);
@@ -77,7 +83,7 @@ export default function DirectRoutePage() {
     <div style={{ padding: 20, fontFamily: "sans-serif" }}>
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>Directe node-naar-node-test</h1>
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>
-        Vooraf ingevuld: knooppunt 60 bij Amsterdam-Noord → knooppunt 36 bij Hilversum (test rechtstreeks tussen twee al bevestigd-goede gebieden).
+        Vooraf ingevuld: dichtstbijzijnde knooppunt bij Amsterdam Amstel-station (TEN ZUIDEN van het IJ) → knooppunt 36 bij Hilversum. Test of de IJ-oversteek zelf het gat is.
       </p>
 
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Van: exact ID (leeg = weergavenummer + referentiepunt eronder)</p>
@@ -106,6 +112,8 @@ export default function DirectRoutePage() {
         <div style={{ marginTop: 16, padding: 14, border: "1px solid #ccc", borderRadius: 8, fontSize: 14, fontFamily: "monospace" }}>
           <div style={{ wordBreak: "break-all", marginBottom: 8 }}>{result.fromNodeId} → {result.toNodeId}</div>
           <div style={{ marginBottom: 8, opacity: 0.7 }}>
+            Knooppunt {result.fromDisplayNumber} → Knooppunt {result.toDisplayNumber}
+            <br />
             ({result.fromNodeIdsFound} kandidaat/kandidaten voor herkomst, {result.toNodeIdsFound} voor bestemming)
           </div>
           {result.result === "ok" ? (

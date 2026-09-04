@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { computeRoute } from "@/lib/route-engine/route-engine";
-import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
+import { wgs84ToRd, rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
 import type { GraphProvider } from "@/lib/route-engine/types";
 
 export const maxDuration = 10;
@@ -32,21 +32,42 @@ function resolveNode(
   if (exactId) {
     return { nodeId: provider.getNode(exactId) ? exactId : null, candidatesFound: provider.getNode(exactId) ? 1 : 0 };
   }
-  if (!displayNumber) return { nodeId: null, candidatesFound: 0 };
 
-  const matches = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === displayNumber);
-  if (matches.length === 0) return { nodeId: null, candidatesFound: 0 };
-
-  if (nearPointRd) {
-    matches.sort((a, b) => {
-      const na = provider.getNode(a)!;
-      const nb = provider.getNode(b)!;
-      const da = (na.x - nearPointRd.x) ** 2 + (na.y - nearPointRd.y) ** 2;
-      const db = (nb.x - nearPointRd.x) ** 2 + (nb.y - nearPointRd.y) ** 2;
-      return da - db;
-    });
+  if (displayNumber) {
+    const matches = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === displayNumber);
+    if (matches.length === 0) return { nodeId: null, candidatesFound: 0 };
+    if (nearPointRd) {
+      matches.sort((a, b) => {
+        const na = provider.getNode(a)!;
+        const nb = provider.getNode(b)!;
+        const da = (na.x - nearPointRd.x) ** 2 + (na.y - nearPointRd.y) ** 2;
+        const db = (nb.x - nearPointRd.x) ** 2 + (nb.y - nearPointRd.y) ** 2;
+        return da - db;
+      });
+    }
+    return { nodeId: matches[0], candidatesFound: matches.length };
   }
-  return { nodeId: matches[0], candidatesFound: matches.length };
+
+  // GEEN weergavenummer opgegeven, WEL een referentiepunt (30-8-2026, "we gaan door tot het
+  // gefixt is"): het dichtstbijzijnde knooppunt bij dit punt, ongeacht weergavenummer -- veel
+  // flexibeler voor het snel testen van willekeurige plekken tijdens het inperken van het gat,
+  // zonder eerst een specifiek nummer daar te hoeven opzoeken.
+  if (nearPointRd) {
+    let closest: string | null = null;
+    let closestDistSq = Infinity;
+    for (const id of provider.getAllNodeIds()) {
+      const node = provider.getNode(id);
+      if (!node) continue;
+      const distSq = (node.x - nearPointRd.x) ** 2 + (node.y - nearPointRd.y) ** 2;
+      if (distSq < closestDistSq) {
+        closestDistSq = distSq;
+        closest = id;
+      }
+    }
+    return { nodeId: closest, candidatesFound: closest ? 1 : 0 };
+  }
+
+  return { nodeId: null, candidatesFound: 0 };
 }
 
 export async function POST(req: NextRequest) {
@@ -104,6 +125,16 @@ export async function POST(req: NextRequest) {
     const fromNode = provider.getNode(from.nodeId)!;
     const toNode = provider.getNode(to.nodeId)!;
     const geographicDistanceM = Math.hypot(toNode.x - fromNode.x, toNode.y - fromNode.y);
+    const fromWgs84 = rdToWgs84(fromNode.x, fromNode.y);
+    const toWgs84 = rdToWgs84(toNode.x, toNode.y);
+    const resolvedInfo = {
+      fromDisplayNumber: fromNode.displayNumber,
+      fromLat: fromWgs84.lat,
+      fromLon: fromWgs84.lon,
+      toDisplayNumber: toNode.displayNumber,
+      toLat: toWgs84.lat,
+      toLon: toWgs84.lon,
+    };
 
     const t0 = Date.now();
     const result = computeRoute(provider, datasetVersionId, from.nodeId, to.nodeId);
@@ -119,6 +150,7 @@ export async function POST(req: NextRequest) {
         computeTimeMs,
         fromNodeIdsFound: from.candidatesFound,
         toNodeIdsFound: to.candidatesFound,
+        ...resolvedInfo,
       });
     }
 
@@ -132,6 +164,7 @@ export async function POST(req: NextRequest) {
       computeTimeMs,
       fromNodeIdsFound: from.candidatesFound,
       toNodeIdsFound: to.candidatesFound,
+      ...resolvedInfo,
     });
   } catch (err) {
     return NextResponse.json(

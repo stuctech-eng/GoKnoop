@@ -2688,3 +2688,22 @@ ook honderden kilometers oplevert, zit het gat specifiek tussen Amsterdam en het
 veel kleiner gebied om verder te onderzoeken.
 
 437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
+
+### 9.59 IJ-oversteek-hypothese: testtool uitgebreid met "dichtstbijzijnde knooppunt, ongeacht nummer" (30-8-2026)
+
+Vervolg op sectie 9.58's bevestiging (gat zit specifiek tussen Amsterdam en het Gooi, 22,4 km
+hemelsbreed vs. 362,8 km netwerk). Nieuwe hypothese: de IJ-oversteek zelf ontbreekt in de
+data (Amsterdam-Noord is fysiek afgesneden door het IJ, normaal via tunnel/pontjes
+overgestoken, niet per se via een fietsknooppunten-verbinding).
+
+**Testtool uitgebreid**: `resolveNode()` ondersteunt nu een DERDE modus -- geen weergavenummer
+nodig, gewoon het dichtstbijzijnde knooppunt bij een opgegeven referentiepunt, ongeacht
+nummer. Flexibeler voor het snel testen van willekeurige plekken tijdens het inperken, zonder
+eerst een specifiek nummer te moeten opzoeken. Response toont nu ook het weergavenummer en de
+coördinaten van het daadwerkelijk gekozen knooppunt.
+
+**Vooraf ingevulde vervolgtest**: dichtstbijzijnde knooppunt bij Amsterdam Amstel-station
+(52,34639 / 4,91778, TEN ZUIDEN van het IJ) → knooppunt 36 bij Hilversum. Als dit een normale
+afstand oplevert (i.p.v. honderden kilometers), is de IJ-oversteek zelf bevestigd als het gat.
+
+437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
