@@ -219,6 +219,8 @@ export default function Home() {
   /** Sectie 9.21 ("route naar een adres") -- eigen, apart veld/state van de bestaande plaatsnaam-zoekfunctie. */
   const [destinationInput, setDestinationInput] = useState("");
   const [routeToDestinationLoading, setRouteToDestinationLoading] = useState(false);
+  /** "Plus lusje" (sectie 9.49, 30-8-2026): 0 = geen omweg, gewoon de kortste route. */
+  const [extraKm, setExtraKm] = useState(0);
   /** Parkeerplaats-zoekfunctie (sectie 9.42, 30-8-2026). */
   const [parkingOptions, setParkingOptions] = useState<{ name: string | null; lat: number; lon: number; distanceM: number }[] | null>(null);
   /** Tijdelijk diagnostisch (30-8-2026, "geen parkeerplaatsen" bij Hilversum -- om te zien of
@@ -569,6 +571,7 @@ export default function Home() {
               destinationCandidateDistancesM: destData.candidates.map((c: { distanceM: number }) => c.distanceM),
               destinationLat: destData.geocodedLat,
               destinationLon: destData.geocodedLon,
+              extraM: extraKm > 0 ? extraKm * 1000 : undefined,
             }),
           });
           const routeData = await routeRes.json();
@@ -911,6 +914,29 @@ export default function Home() {
                     background: "white",
                   }}
                 />
+
+                <p style={{ fontSize: 13, opacity: 0.65, margin: "12px 0 6px" }}>Plus lusje (extra kilometers, optioneel)</p>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[0, 5, 10, 15].map((km) => (
+                    <button
+                      key={km}
+                      onClick={() => setExtraKm(km)}
+                      style={{
+                        flex: 1,
+                        minHeight: 44,
+                        background: extraKm === km ? "var(--color-knoop-green)" : "white",
+                        color: extraKm === km ? "white" : "var(--color-ink)",
+                        border: `2px solid ${extraKm === km ? "var(--color-knoop-green)" : "var(--color-sand)"}`,
+                        borderRadius: 10,
+                        fontSize: 14,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {km === 0 ? "Snelste" : `+${km} km`}
+                    </button>
+                  ))}
+                </div>
+
                 <button
                   onClick={startRouteToDestination}
                   disabled={!destinationInput.trim() || routeToDestinationLoading}

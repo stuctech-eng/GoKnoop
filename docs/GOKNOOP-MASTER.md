@@ -2390,3 +2390,42 @@ tijdelijk, probeer het over een minuutje opnieuw") in plaats van de generieke "g
 
 **Aanbeveling aan de gebruiker**: een paar minuten wachten voordat opnieuw getest wordt, laat
 zien of dit inderdaad tijdelijk was.
+
+### 9.49 "Plus lusje" — extra kilometers bij "route naar een adres" — ✅ GEBOUWD (30-8-2026)
+
+Op verzoek: een keuzemenu (Snelste / +5 / +10 / +15 km) bij "route naar een adres" -- voor nu
+bewust alleen hier, niet bij Back to Start.
+
+**Kernidee**: i.p.v. de kortste weg (herkomst → bestemming) een TUSSENPUNT kiezen dat opzij
+van de directe lijn ligt, zodat herkomst → tussenpunt → bestemming ongeveer de gevraagde
+extra afstand toevoegt. Hergebruikt de bestaande knooppunten-Dijkstra (`computeRoute
+BetweenCandidatesWithFallback`) gewoon TWEE keer i.p.v. één keer -- geen nieuwe routing-motor.
+
+**Gebouwd:**
+- `lib/route-engine/detour-waypoint.ts` (`computeDetourOffsetPoint`) -- pure, wiskundig
+  onderbouwde functie: voor een gevraagde extra afstand `extraM`, bereken het punt loodrecht
+  op het midden van de herkomst-bestemming-lijn zodat de driehoeksomweg ERDOORHEEN precies
+  die extra afstand oplevert (ellips-eigenschap: |origin-P| + |P-bestemming| = L + extraM).
+  Inclusief een `circuityFactor`-correctie (zelfde soort correctie als de rondje-generator,
+  sectie 6B) omdat een ECHTE route via het netwerk nooit zo recht is als een rechte lijn. 6
+  tests, incl. het KERNBEWIJS dat de rechte-lijn-wiskunde daadwerkelijk klopt (binnen ~1m).
+- `lib/route-engine/combine-route-legs.ts` (`combineRouteLegs`) -- pure functie die twee
+  losse route-benen (herkomst→tussenpunt, tussenpunt→bestemming) samenvoegt tot één
+  doorlopende route, zonder het gedeelde tussenpunt te dupliceren in nodes/geometrie/
+  weergavenummers. 4 tests.
+- `/api/route/to-destination` uitgebreid met optioneel `extraM`: probeert (LICHT gehouden,
+  na de recente Vercel-Hobby-10s-lessen, sectie 9.43-9.48) maximaal 3 tussenpunt-kandidaten
+  per kant (links/rechts van de lijn) = maximaal 6 kandidaten × 2 Dijkstra-benen = 12 extra
+  berekeningen, ruim binnen budget op de al gecachte graaf. Kiest de kandidaat die het dichtst
+  bij de gevraagde totale afstand komt. **Val terug op de directe route** (geen harde fout)
+  als geen enkele kandidaat een bruikbare omweg oplevert.
+- **UI**: knoppenrij "Snelste / +5 km / +10 km / +15 km" tussen het adresveld en de bestaande
+  "Route hierheen"-knop.
+
+**Bewust NIET gedaan**: exacte overeenkomst met de gevraagde extra afstand garanderen -- net
+als bij de rondje-generator is dit een "~zo dicht mogelijk bij"-benadering, geen harde
+garantie. Nog niet toegepast op Back to Start (bewust, op verzoek "voor nu alleen deze").
+
+Geen wijziging aan de kern van `lib/route-engine/` (Dijkstra/GraphProvider zelf) -- puur
+nieuwe, dunne bestanden eromheen. 435/435 tests (425 + 10 nieuw), `tsc` schoon. Nog geen
+live iPhone-validatie van deze specifieke feature.
