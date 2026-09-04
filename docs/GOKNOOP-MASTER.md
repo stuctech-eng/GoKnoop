@@ -2954,3 +2954,118 @@ dat knooppunt 5 een geïsoleerd "eiland" is, los van het grote netwerk.
 437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
 CSEOF
 echo toegevoegd
+---
+
+## SESSIE-AFSLUITING 4 september 2026 — volledige samenvatting voor de volgende sessie
+
+Dit was een zeer lange sessie (Fase 4/5-navigatie-verfijningen, meerdere nieuwe features, en
+een diepgaande, meerdaagse-waardige diagnose van een structureel netwerkprobleem). Deze
+sectie vat alles samen wat een volgende sessie moet weten om meteen door te kunnen gaan.
+
+### Wat vandaag GEBOUWD en AFGEROND is (klaar, werkend, getest)
+
+1. **Automatische routenaam** (sectie 9.34) -- Nominatim reverse-geocoding, 2 punten per route.
+2. **"Gedeelde routes"-sectie** in Mijn Routes (sectie 9.35) -- datum + optioneel "met wie".
+3. **Dubbeltikken om richtingkaart/voortgangsbalk te vergroten** (sectie 9.36/9.38) -- eerst
+   lange-druk geprobeerd, bleek onbetrouwbaar, vervangen door dubbeltik.
+4. **Pauzeknop verplaatst + topbalk vereenvoudigd** (sectie 9.37/9.39) -- "✕" en "⏸ Pauze",
+   geen aparte "Stop" meer (Pauze dekt dat nu met bevestiging).
+5. **Fase A (rijd naar startpunt) draait en volgt nu ook mee** (sectie 9.40) -- zelfde gedrag
+   als de Kaart-hometab en fase C.
+6. **BUGFIX: "Hervat rit" werkte alleen als navigatie al begonnen was** (sectie 9.41) --
+   `hasSessionStarted` toegevoegd aan de pauze-snapshot, fase A/B wordt nu correct opnieuw
+   doorlopen als je nog onderweg was toen je pauzeerde.
+7. **Parkeerplaats-zoekfunctie via Overpass API** (sectie 9.42) -- later grotendeels vervangen
+   door een simpelere, betrouwbaardere Apple Kaarten-aanpak (zie punt 12).
+8. **BUGFIXES rond Vercel Hobby's 10s-limiet** (sectie 9.43-9.48) -- meerdere endpoints
+   hadden een te hoge `maxDuration` gedeclareerd; een lichter geocode-only endpoint gebouwd;
+   uiteindelijk een eigen, hard afgedwongen `AbortController`-tijdslimiet (6s) + een tweede
+   Overpass-mirror als terugval. Belangrijke, herbruikbare les voor toekomstige externe-
+   dienst-integraties.
+9. **"Plus lusje" -- extra kilometers bij "route naar een adres"** (sectie 9.49) --
+   wiskundig onderbouwde omweg-berekening (ellips-eigenschap), keuzemenu +5/+10/+15 km.
+10. **ECHTE BUG: kandidaat-selectie koos eerste werkende optie, niet de kortste** (sectie
+    9.50/9.51) -- gefixt aan zowel de bestemmings- als de herkomstkant van
+    `route-between-candidates.ts`/`route-to-point-fallback.ts`. Bewezen met regressietests.
+    **Blijft een terechte, blijvende verbetering**, ook al loste dit het Hilversum-probleem
+    niet volledig op (zie hieronder).
+11. **Diagnosetools gebouwd** (sectie 9.52-9.69) -- `/debug/direct-route` (test tussen twee
+    exacte knooppunten of via weergavenummer+referentiepunt, of "dichtstbijzijnde knooppunt
+    bij een punt"), `/debug/batch-diagnose` (test tot 36 combinaties tegelijk, markeert
+    anomalieën automatisch), `/debug/component-size` (BFS: hoeveel knooppunten zijn
+    daadwerkelijk bereikbaar vanaf een gegeven knooppunt). **Deze tools blijven waardevol
+    voor toekomstig gebruik**, niet alleen voor dit ene onderzoek.
+12. **Parkeren/koffie/eten via Apple Kaarten's eigen zoekfunctie** (sectie 9.60) -- `q=` +
+    `near=`-parameters (officieel gedocumenteerd), GEEN eigen zoekdienst meer nodig. Fase A's
+    "Open in Kaarten" is nu twee keuzes (fiets ernaartoe / zoek parkeren in de buurt);
+    pauzemenu heeft "☕ Koffie/eten in de buurt".
+13. **Eén bevestigde, toegepaste datapatch**: de Buiksloterweg-pontje-oversteek (knooppunt
+    61 ↔ knooppunt 5, Amsterdam-Noord ↔ Amsterdam Centraal) is toegevoegd aan de graafdata
+    (sectie 9.64/9.65) -- bevestigd werkend (was "disconnected", nu 1,6 km/1 hop).
+
+### Het Hilversum/Waterland-Gooi-probleem: status aan het einde van de sessie
+
+**Kernconclusie, met sterk bewijs**: het probleem is NIET routeringscode (die is grondig
+getest en waar nodig gefixt, zie punt 10 hierboven) -- het is een STRUCTUREEL gat in de
+knooppunten-BRONDATA, specifiek rond de IJ-oversteek bij Amsterdam. Bevestigd: Amsterdam
+heeft minstens drie officiële, gratis fiets-/voetgangerspontjes vlak bij Centraal Station
+(F2 IJplein, F3 Buiksloterweg, F4 NDSM) -- de GoKnoop-import heeft er kennelijk minstens één
+gemist (Buiksloterweg, nu gepatcht).
+
+**Wat de patch WEL en NIET oploste:**
+- ✅ Volendam → Amsterdam Centraal: nu goed (25,2 km, was disconnected/omweg)
+- ❌ Amsterdam Centraal → Hilversum blijft slecht (366,9 km i.p.v. een verwachte ~50-60 km)
+- Bevestigd via `/debug/component-size`: knooppunt 5 is GEEN klein geïsoleerd eiland (76% van
+  het hele netwerk is bereikbaar) -- het probleem is dus niet "één node volledig afgesneden",
+  maar "meerdere korte, directe verbindingen in dit gebied ontbreken nog, waardoor zelfs
+  bereikbare punten alleen via een enorme omweg te bereiken zijn".
+- Een tweede pontje (F2, IJplein) bleek bij navraag naar hetzelfde, reeds-gepatchte
+  knooppunt-paar te herleiden (61↔5) -- dus WELLICHT is deze al gedekt, maar dat is niet
+  volledig zeker; de exacte aanlandingslocatie van de IJpleinveer (bij "De Ruijterkade",
+  niet exact hetzelfde punt als Buiksloterweg) is niet apart geverifieerd.
+
+### CONCRETE VERVOLGSTAPPEN voor de volgende sessie (in aanbevolen volgorde)
+
+1. **F4 (NDSM-pontje) nog niet getest.** NDSM-kant ligt rond 52,3970 / 4,8930 (ruwe schatting,
+   nog niet bevestigd) -- test met `/debug/direct-route` (nearFromLat/Lon op dat punt, nearTo
+   op Amsterdam Centraal, 52,37833/4,90000) of het ook ontbreekt.
+2. **Verifieer of de IJpleinveer (F2) daadwerkelijk al gedekt is** door de Buiksloterweg-patch,
+   of dat de exacte aanlandingsplek (De Ruijterkade, mogelijk een ander knooppunt dan 61)
+   een aparte patch nodig heeft.
+3. **Test daarna opnieuw Amsterdam Centraal → Hilversum** (`/debug/direct-route`, knooppunt 5
+   of 56 → knooppunt 55/36) -- met alle bekende pontjes gepatcht, zou dit nu een normale
+   afstand moeten geven. Zo niet: gebruik `/debug/batch-diagnose` om verder in te perken
+   waar het volgende gat zit.
+4. **Bredere blik overwegen**: is dit patroon (ontbrekende pontjes/bruggen) uniek voor
+   Amsterdam, of komt het vaker voor in de dataset? Een systematische blik op hoe
+   `route=ferry`-achtige OSM-tags zijn behandeld tijdens de oorspronkelijke import (Fase 1)
+   zou dit definitief kunnen bevestigen/uitsluiten, in plaats van steeds handmatig gebied
+   voor gebied te controleren.
+5. **Bekende node-ID's, klaar voor hergebruik** (bespaart tijd bij vervolgtests):
+   - Volendam-kant (herkomst, bekend goed): `7fmSWIHYsKu3Wb3yOtM2` (knooppunt 95)
+   - Knooppunt 5, Amsterdam Centraal: `CJSXBPUMG49vOPmYvhJd`
+   - Knooppunt 61, Buiksloterweg: `bvMw2fsQTTyeJMUfX6wX`
+   - Knooppunt 55, Hilversum-kandidaat: `ZYuO6ZfzSa2iim0HcUbn`
+   - Knooppunt 36, Hilversum (goed lokaal netwerk): via weergavenummer + referentiepunt
+     52,23159/5,17349 vinden (niet uniek, dus geen vast ID hier vastgelegd)
+
+### Belangrijke, herbruikbare lessen uit deze sessie
+
+- **Vercel Hobby-plan: harde 10s-limiet per serverfunctie**, ongeacht wat `maxDuration`
+  declareert. Extern-dienst-timeouts moeten ALTIJD zelf afgedwongen worden (`AbortController`,
+  ruim onder 10s), nooit vertrouwen op de externe dienst se eigen timeout-instelling.
+- **Knooppunt-weergavenummers zijn NIET landelijk uniek** (106x "60", 109x "36" gevonden) --
+  regionale hernummering. Bij diagnose/tests altijd exacte interne node-ID's gebruiken, of
+  weergavenummer + geografisch referentiepunt.
+- **"Kortste route" bij meerdere kandidaten**: altijd ALLE kandidaten vergelijken op
+  daadwerkelijke afstand, nooit stoppen bij de eerste die toevallig werkt (gold voor zowel
+  herkomst- als bestemmingskant).
+- **Bij het diagnosticeren van dit soort netwerkproblemen**: hemelsbrede afstand vs.
+  netwerkafstand vergelijken is een sterke, snelle eerste indicator van een structureel gat
+  (ratio's van 10x+ zijn zeer verdacht, normale fietsknooppunten-circuity ligt rond 1,3-3x).
+- **Directe datapatches zijn mogelijk en soms gerechtvaardigd** (Firestore `edges`-collectie,
+  schema: `datasetVersionId`/`matchConfidence`/`fromLogicalNodeId`/`toLogicalNodeId`/
+  `distanceM`/`directionality`/`coords`) -- mits grondig geverifieerd vooraf, zeer gericht
+  (nooit bulk), en met expliciete bevestigingsstap.
+
+**Teststand aan het einde van de sessie**: 437/437 tests slagen, `tsc --noEmit` schoon.
