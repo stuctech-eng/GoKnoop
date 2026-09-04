@@ -2737,3 +2737,18 @@ Hilversum-probleem (zie sectie 9.57-9.59).
 
 Geen wijziging aan `lib/route-engine/`. 437/437 tests ongewijzigd (pure UI/deeplink-
 toevoeging, geen nieuwe testbare pure logica).
+
+### 9.61 IJ-oversteek zelf getest: Buiksloterweg → Amsterdam Centraal (30-8-2026)
+
+Vervolg op sectie 9.58/9.59's bevestiging (Amsterdam Amstel-Hilversum werkt goed, Amsterdam-
+Noord-Hilversum niet) -- testtool nu ingesteld op een veel krappere test, direct over de
+IJ-oversteek zelf: Buiksloterweg (52,3860 / 4,9115, NOORDkant van het IJ, bij het bekende
+voetgangers-/fietspontje) → Amsterdam Centraal (52,37833 / 4,90000, ZUIDkant van het IJ).
+Beide kanten gebruiken de "dichtstbijzijnde knooppunt"-modus (sectie 9.59), geen specifiek
+weergavenummer nodig.
+
+**Doel**: als DEZE korte oversteek zelf al honderden kilometers oplevert, is de exacte plek
+van het gat gevonden -- de IJ-oversteek ontbreekt in de graph-connectiviteit, ongeacht welke
+knooppunten aan weerszijden gekozen worden.
+
+437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.

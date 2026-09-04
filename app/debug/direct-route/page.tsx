@@ -33,11 +33,11 @@ export default function DirectRoutePage() {
   const [fromNodeId, setFromNodeId] = useState("");
   const [toNodeId, setToNodeId] = useState("");
   const [fromDisplay, setFromDisplay] = useState(""); // leeg = dichtstbijzijnde knooppunt bij het referentiepunt, ongeacht nummer
-  const [toDisplay, setToDisplay] = useState("36");
-  const [nearFromLat, setNearFromLat] = useState("52.34639"); // Amsterdam Amstel-station, TEN ZUIDEN van het IJ
-  const [nearFromLon, setNearFromLon] = useState("4.91778");
-  const [nearToLat, setNearToLat] = useState("52.23159"); // Hilversum
-  const [nearToLon, setNearToLon] = useState("5.17349");
+  const [toDisplay, setToDisplay] = useState(""); // leeg = dichtstbijzijnde knooppunt bij Amsterdam Centraal
+  const [nearFromLat, setNearFromLat] = useState("52.3860"); // Buiksloterweg, NOORDkant van het IJ, bij het pontje
+  const [nearFromLon, setNearFromLon] = useState("4.9115");
+  const [nearToLat, setNearToLat] = useState("52.37833"); // Amsterdam Centraal, ZUIDkant van het IJ
+  const [nearToLon, setNearToLon] = useState("4.90000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DirectRouteResult | null>(null);
@@ -83,7 +83,7 @@ export default function DirectRoutePage() {
     <div style={{ padding: 20, fontFamily: "sans-serif" }}>
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>Directe node-naar-node-test</h1>
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>
-        Vooraf ingevuld: dichtstbijzijnde knooppunt bij Amsterdam Amstel-station (TEN ZUIDEN van het IJ) → knooppunt 36 bij Hilversum. Test of de IJ-oversteek zelf het gat is.
+        Vooraf ingevuld: dichtstbijzijnde knooppunt bij Buiksloterweg (noordkant IJ, bij het pontje) → dichtstbijzijnde knooppunt bij Amsterdam Centraal (zuidkant IJ). Test de oversteek zelf, zo krap mogelijk.
       </p>
 
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Van: exact ID (leeg = weergavenummer + referentiepunt eronder)</p>
