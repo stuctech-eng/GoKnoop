@@ -2707,3 +2707,33 @@ coördinaten van het daadwerkelijk gekozen knooppunt.
 afstand oplevert (i.p.v. honderden kilometers), is de IJ-oversteek zelf bevestigd als het gat.
 
 437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
+
+### 9.60 Parkeren + koffie/eten via Apple Kaarten's eigen zoekfunctie (30-8-2026)
+
+Op verzoek, na het teruglezen van GPT's bredere voorstel: het bruikbare kernidee daaruit
+("Apple Kaarten stuurt ons naar een parkeerplek nabij het knooppunt") geïsoleerd en gebouwd,
+zonder de rest van dat voorstel (grote Regional Node Registry) over te nemen.
+
+**Technisch bevestigd** (Apple's officiële documentatie, geverifieerd via webzoekopdracht):
+Apple Kaarten ondersteunt `q=` (zoekterm) gecombineerd met `near=` (locatie) --
+`maps.apple.com/?q=Parkeren&near=LAT,LON` laat Apple Kaarten zelf zoeken naar parkeerplekken
+IN DE BUURT van een punt, i.p.v. te navigeren naar het exacte punt zelf.
+
+**Gebouwd:**
+- Fase A's "Open in Kaarten"-link (die eerder ALTIJD fietsroutebeschrijving gaf, ook al was 'm
+  bedoeld voor mogelijk autogebruik -- een klein bestaand euvel, en passant meegepakt) is nu
+  TWEE keuzes: "🚲 Fiets ernaartoe" (ongewijzigd, fietsrouteschrijving naar het exacte punt) en
+  "🚗 Zoek parkeren in de buurt" (nieuw, Apple's zoek-nabij-truc, autorouteschrijving).
+- Pauzemenu: nieuwe knop "☕ Koffie/eten in de buurt" -- zelfde truc, gebruikt de laatst bekende
+  positie uit de pauze-snapshot.
+
+**Bewuste, herhaalde architectuurkeuze**: GEEN eigen restaurant-/parkeerplaats-database of
+-zoekdienst gebouwd (zelfde reden als bij de parkeerplaats-Overpass-ervaring van vandaag,
+sectie 9.42-9.48 -- betrouwbaarheidsproblemen bij een gratis, zelfbeheerde zoekdienst) --
+Apple Kaarten doet dit al betrouwbaar, GoKnoop stuurt alleen door. Dit is bewust een MOMENT-
+OPNAME van het bruikbare deel van GPT's voorstel, niet de volledige "Regional Node
+Registry" -- die blijft afgewezen als te groot/ontoereikend voor het daadwerkelijke
+Hilversum-probleem (zie sectie 9.57-9.59).
+
+Geen wijziging aan `lib/route-engine/`. 437/437 tests ongewijzigd (pure UI/deeplink-
+toevoeging, geen nieuwe testbare pure logica).

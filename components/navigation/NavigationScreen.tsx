@@ -990,21 +990,30 @@ export default function NavigationScreen({
             )}
 
             {phase === "TO_START" && startInfo && startNodeWgs84Ref.current && (
-              <a
-                href={`https://maps.apple.com/?daddr=${startNodeWgs84Ref.current.lat},${startNodeWgs84Ref.current.lon}&dirflg=b`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "block",
-                  marginTop: 12,
-                  textAlign: "center",
-                  fontSize: 13,
-                  color: "#9FE1CB",
-                  textDecoration: "underline",
-                }}
-              >
-                Open in Kaarten
-              </a>
+              <div style={{ display: "flex", justifyContent: "center", gap: 16, marginTop: 12 }}>
+                <a
+                  href={`https://maps.apple.com/?daddr=${startNodeWgs84Ref.current.lat},${startNodeWgs84Ref.current.lon}&dirflg=b`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: 13, color: "#9FE1CB", textDecoration: "underline" }}
+                >
+                  🚲 Fiets ernaartoe
+                </a>
+                {/* "Auto naar startpunt" (30-8-2026, op verzoek): zoekt parkeren IN DE BUURT van
+                    het startknooppunt, i.p.v. met de fiets-routebeschrijving naar het EXACTE punt
+                    te navigeren (dat klopte sowieso niet voor autogebruik). Apple's officiële
+                    q=+near=-parameters (gedocumenteerd, geverifieerd) laten Apple Kaarten zelf de
+                    beschikbare parkeerplekken tonen -- GoKnoop hoeft daar geen eigen zoekdienst
+                    voor te bouwen/onderhouden (zie sectie 9.42-9.48's ervaring met Overpass). */}
+                <a
+                  href={`https://maps.apple.com/?q=Parkeren&near=${startNodeWgs84Ref.current.lat},${startNodeWgs84Ref.current.lon}&dirflg=d`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: 13, color: "#9FE1CB", textDecoration: "underline" }}
+                >
+                  🚗 Zoek parkeren in de buurt
+                </a>
+              </div>
             )}
 
             {phase === "START_GUIDANCE" && (

@@ -60,6 +60,21 @@ export default function PauseScreen({ snapshot, onResume, onBackToStart, onViewM
             <button onClick={onViewMap} style={buttonStyle("white", "var(--color-ink, #1A1A1A)")}>
               🗺️ Kaart bekijken
             </button>
+            {snapshot.lastKnownPosition && (
+              // "Zoek koffie/eten in de buurt" (30-8-2026, op verzoek) -- zelfde Apple
+              // Kaarten-truc als de parkeerplek-zoekfunctie tijdens fase A: GoKnoop bouwt hier
+              // GEEN eigen restaurant-/koffiedatabase voor (zelfde reden als bij parkeren,
+              // sectie 9.42-9.48's ervaring met een eigen Overpass-zoekdienst) -- Apple Kaarten
+              // doet dit al betrouwbaar, GoKnoop stuurt alleen door.
+              <a
+                href={`https://maps.apple.com/?q=Koffie&near=${snapshot.lastKnownPosition.lat},${snapshot.lastKnownPosition.lon}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ ...buttonStyle("white", "var(--color-ink, #1A1A1A)"), display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}
+              >
+                ☕ Koffie/eten in de buurt
+              </a>
+            )}
             <div style={{ flex: 1 }} />
             <button onClick={() => setShowEndConfirm(true)} style={buttonStyle("white", "#b00020")}>
               🏁 Rit beëindigen
