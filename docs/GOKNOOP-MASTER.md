@@ -2606,3 +2606,69 @@ Dijkstra zelf -- en hoort de oplossing dan in de kandidaat-selectie/netwerk-conn
 vóór Dijkstra aangeroepen wordt. Nog niet uitgevoerd/bevestigd.
 
 437/437 tests ongewijzigd, `tsc` schoon.
+
+### 9.57 BEVESTIGDE BEVINDING, VASTGELEGD VOOR DE VOLGENDE SESSIE: gat in netwerkdata tussen Waterland/Volendam en het Gooi (30-8-2026)
+
+**KERNCONCLUSIE, DEFINITIEF BEVESTIGD MET DE BESLISSENDE TEST**: er zit een echt gat in de
+knooppunten-BRONDATA tussen het Waterland/Volendam-gebied en het Gooi (Naarden/Bussum/
+Hilversum/'s-Graveland) -- geen routeringsfout, geen kandidaat-selectiefout. **Voor de
+volgende sessie: NIET verder zoeken in Dijkstra of kandidaatselectie. Eerst de
+brondata/import en de ontbrekende netwerkverbinding onderzoeken.**
+
+**Volledige bewijsketen, chronologisch:**
+
+1. **Gemeld probleem**: "Route naar een adres" naar Hilversum gaf een gigantische omweg
+   (350,4 km) via Lelystad/Zwolle/Apeldoorn/Utrecht i.p.v. een verwachte, directe route van
+   30-50 km.
+
+2. **Twee echte, bevestigde codefouten gevonden en gefixt** (terecht, maar NIET de oorzaak van
+   dit specifieke geval): de kandidaat-selectielogica (zowel herkomst- als bestemmingskant,
+   `route-to-point-fallback.ts`/`route-between-candidates.ts`) stopte bij de eerste werkende
+   kandidaat i.p.v. de daadwerkelijk kortste te kiezen. Gefixt, bewezen met regressietests,
+   437/437 tests groen, geen enkele regressie bij Fase 4/Back to Start.
+
+3. **Na beide fixes: probleem blijft EXACT hetzelfde** -- bewijs dat kandidaat-selectie niet de
+   (enige) oorzaak is.
+
+4. **Amsterdam-richting werkt wel goed** (screenshot bevestigd) -- routeringscode werkt in het
+   algemeen correct.
+
+5. **Hilversum-gebied heeft zelf een dicht, goed verbonden lokaal netwerk** (screenshot
+   bevestigd: Naarden/Bussum/'s-Graveland/Kortenhoef, knooppunten 10/11/12/26/28/30/31/36/
+   50/54/74/86) -- geen algeheel datagat rond Hilversum zelf.
+
+6. **Belangrijke tussenontdekking**: knooppunt-weergavenummers zijn NIET landelijk uniek --
+   106 knooppunten heten "60", 109 heten "36" (regionale hernummering, de norm, niet de
+   uitzondering). Testtools aangepast om hiermee om te gaan (exacte interne ID's, of zoeken op
+   weergavenummer MET een geografisch referentiepunt om het juiste treffer te kiezen).
+
+7. **Eerste directe test**: Volendam-kant (exact intern ID) → Hilversum-kandidaat #5 (exact
+   intern ID) gaf **exact dezelfde 350,4 km** als de oorspronkelijke "route naar een
+   adres"-uitkomst -- bevestigt dat Dijkstra zelf correct rekent voor dit specifieke paar.
+
+8. **DE BESLISSENDE TEST**: Volendam-kant (exact ID) → het daadwerkelijk goed-verbonden
+   knooppunt "36" bij Hilversum (gekozen via geografische nabijheid tot de Hilversum-
+   coördinaten, niet een willekeurige "36" elders):
+   - **Hemelsbrede afstand: 29,0 km** (volkomen normaal/verwacht)
+   - **Netwerkafstand: 349,2 km, 180 hops** (vrijwel identiek aan de eerdere 350,4 km)
+
+   Dit weerlegt de hypothese "kandidaat-selectie kiest een slecht verbonden hoekje" --
+   ZELFS het bewezen goed-verbonden knooppunt 36 heeft zelf geen kortere weg naar Volendam.
+
+**Conclusie**: het gat zit dieper dan kandidaat-selectie of Dijkstra -- ergens tussen
+Waterland/Volendam en het Gooi ontbreekt een daadwerkelijke netwerkverbinding in de
+BRONDATA (waarschijnlijk iets rond Amsterdam zelf -- een brug, fietspad, of IJ-oversteek die
+niet correct is meegenomen bij de oorspronkelijke import, Fase 1 van dit project).
+
+**Voor de volgende sessie**:
+- Begin met het onderzoeken van de brondata/het importproces (Fase 1), NIET de
+  routeringsalgoritmes (Fase 2, vandaag grondig getest en waar nodig gefixt).
+- Gebruik de bestaande diagnosetools (`/debug/direct-route`, met `nearLat`/`nearLon`-
+  ondersteuning) om de exacte locatie van het gat verder in te perken -- bijvoorbeeld door
+  vanuit steeds dichter bij Amsterdam gelegen knooppunten te testen, tot het punt gevonden is
+  waar de doorgang breekt.
+- Overweeg de daadwerkelijke, officiële fietsknooppuntenkaart te raadplegen voor dit gebied
+  om te bevestigen welke fysieke verbinding er zou moeten zijn maar ontbreekt in de
+  geïmporteerde data.
+
+437/437 tests, `tsc` schoon (ongewijzigd sinds de laatste code-aanpassing in dit traject).
