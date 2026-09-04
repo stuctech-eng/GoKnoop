@@ -20,6 +20,8 @@ import { useEffect, useState } from "react";
 const AMSTERDAM_CENTRAAL_NODE_ID = "CJSXBPUMG49vOPmYvhJd"; // knooppunt 5
 const BUIKSLOTERWEG_NODE_ID = "bvMw2fsQTTyeJMUfX6wX"; // knooppunt 61
 const HILVERSUM_55_NODE_ID = "ZYuO6ZfzSa2iim0HcUbn"; // knooppunt 55
+const KNPT_56_KANDIDAAT_A = "FmigRklKKPsXEPrDsrIb"; // 1 edge, 3385m van De Ruijterkade
+const KNPT_56_KANDIDAAT_B = "4dtfleeX25UH7UYrDWqt"; // 2 edges, 3741m van De Ruijterkade
 
 type TestCase = {
   label: string;
@@ -52,6 +54,21 @@ const TEST_CASES: TestCase[] = [
     label: "Centraal (5) → Hilversum (36, via referentiepunt)",
     toelichting: "Weergavenummer 36 is niet landelijk uniek (109x gevonden) -- referentiepunt noodzakelijk.",
     body: { fromNodeId: AMSTERDAM_CENTRAAL_NODE_ID, toDisplayNumber: "36", nearToLat: 52.23159, nearToLon: 5.17349 },
+  },
+  {
+    label: "Buiksloterweg (61) → Hilversum (55) [zonder knooppunt 5]",
+    toelichting: "Isoleert of de omweg al begint bij 61 (die al 9 edges heeft), of pas verderop -- knooppunt 5 heeft zelf maar 1 edge (de patch), dus dat kan een rode haring zijn.",
+    body: { fromNodeId: BUIKSLOTERWEG_NODE_ID, toNodeId: HILVERSUM_55_NODE_ID },
+  },
+  {
+    label: "Buiksloterweg (61) → knooppunt 56-kandidaat A (1 edge)",
+    toelichting: "Gevonden via nearest-nodes-scan bij De Ruijterkade. Weinig edges -- mogelijk zelf ook slecht verbonden.",
+    body: { fromNodeId: BUIKSLOTERWEG_NODE_ID, toNodeId: KNPT_56_KANDIDAAT_A },
+  },
+  {
+    label: "Buiksloterweg (61) → knooppunt 56-kandidaat B (2 edges)",
+    toelichting: "Tweede 56-kandidaat bij De Ruijterkade, iets verder weg.",
+    body: { fromNodeId: BUIKSLOTERWEG_NODE_ID, toNodeId: KNPT_56_KANDIDAAT_B },
   },
 ];
 
