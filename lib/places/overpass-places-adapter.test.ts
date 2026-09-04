@@ -127,4 +127,14 @@ describe("OverpassPlacesAdapter", () => {
     const result = await adapter.findNearby(CENTER, "parking", 1000, 5);
     expect("reason" in result && result.reason).toBe("provider_error");
   });
+
+  it("geeft een herkenbare 'even geduld'-melding bij status 429, geen algemene foutmelding", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429 }) as unknown as typeof fetch;
+    const adapter = new OverpassPlacesAdapter();
+    const result = await adapter.findNearby(CENTER, "parking", 1000, 5);
+    expect("reason" in result).toBe(true);
+    if ("reason" in result) {
+      expect(result.message).toContain("te veel aanvragen");
+    }
+  });
 });

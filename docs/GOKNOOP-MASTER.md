@@ -2371,3 +2371,22 @@ naar `overpass.kumi.systems` gaat en het resultaat correct doorkomt. Plus een te
 dat een nette foutmelding (geen crash) volgt als BEIDE servers falen.
 
 424/424 tests (422 + 2 nieuw), `tsc` schoon.
+
+### 9.48 Duidelijkere melding bij 429 "te veel aanvragen" (30-8-2026)
+
+**Gemeld: `overpass.kumi.systems gaf status 429`** -- de terugval-server (sectie 9.47) werd
+zelf ook geraakt door rate-limiting. **Vermoeden, expliciet als zodanig benoemd (niet
+bevestigd als enige oorzaak)**: waarschijnlijk het gevolg van herhaald, snel achter elkaar
+testen van dezelfde functie tijdens het debuggen van sectie 9.43-9.47 -- geen bevestigd
+structureel probleem met de dienst zelf. Bewust GEEN derde server toegevoegd als reactie
+hierop (zou symptoombestrijding worden zonder de daadwerkelijke oorzaak te kennen).
+
+**Fix**: status 429 krijgt nu een eigen, herkenbare melding ("te veel aanvragen, waarschijnlijk
+tijdelijk, probeer het over een minuutje opnieuw") in plaats van de generieke "gaf status
+429"-tekst -- maakt het verschil duidelijk tussen "de dienst is stuk" en "even geduld nodig".
+
+10/10 tests in `overpass-places-adapter.test.ts` (9 + 1 nieuw, specifiek voor het
+429-scenario), 425/425 totaal, `tsc` schoon.
+
+**Aanbeveling aan de gebruiker**: een paar minuten wachten voordat opnieuw getest wordt, laat
+zien of dit inderdaad tijdelijk was.

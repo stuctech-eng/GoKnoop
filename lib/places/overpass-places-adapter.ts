@@ -92,7 +92,13 @@ export class OverpassPlacesAdapter implements PlacesProvider {
     }
 
     if (!res.ok) {
-      return { reason: "provider_error", message: `${endpoint} gaf status ${res.status}.` };
+      return {
+        reason: "provider_error",
+        message:
+          res.status === 429
+            ? `${endpoint} geeft momenteel "te veel aanvragen" (429) -- waarschijnlijk tijdelijk, probeer het over een minuutje opnieuw.`
+            : `${endpoint} gaf status ${res.status}.`,
+      };
     }
 
     let data: { elements?: OverpassElement[] };
