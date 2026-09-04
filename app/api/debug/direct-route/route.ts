@@ -2,32 +2,69 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { computeRoute } from "@/lib/route-engine/route-engine";
+import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
+import type { GraphProvider } from "@/lib/route-engine/types";
 
 export const maxDuration = 10;
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/debug/direct-route
- * Body: { fromDisplayNumber, toDisplayNumber }
- * Response: { attempts: {fromNodeId, toNodeId, result: "ok"|"failed", distanceM?, reason?}[], computeTimeMs }
+ * Body: { fromNodeId?, toNodeId?, fromDisplayNumber?, toDisplayNumber?, nearLat?, nearLon? }
+ * Response: { fromNodeId, toNodeId, result: "ok"|"failed", distanceM?, hopCount?, reason?,
+ *             geographicDistanceM, computeTimeMs, fromNodeIdsFound, toNodeIdsFound }
  *
- * Diagnose-tool (30-8-2026, "Hilversum doet een omweg", sectie 9.52) -- test DIRECT tussen
- * twee weergavenummers, ZONDER geocoding of kandidaat-selectie ertussen. Zoekt knooppunten
- * die het gevraagde weergavenummer hebben (er kunnen duplicaten zijn, al eerder gezien bij
- * "98"/"98" rond Volendam) en test de EERSTE combinatie -- ÉÉN per aanvraag (sectie 9.54:
- * meerdere combinaties tegelijk testen kan zelf traag genoeg zijn om tegen Vercel Hobby's
- * 10s-limiet aan te lopen, als er geen verbinding bestaat en Dijkstra het hele bereikbare
- * netwerkdeel moet doorzoeken). `computeTimeMs` laat zien of de berekening zelf traag was.
+ * Diagnose-tool (sectie 9.52/9.55/9.56, 30-8-2026, "Hilversum doet een omweg" -- gerichte
+ * vervolgtest op verzoek). UITGEBREID: `nearLat`/`nearLon` -- als een weergavenummer meerdere
+ * treffers heeft (bevestigd: dat is de NORM, niet de uitzondering, sectie 9.55), kies dan het
+ * knooppunt met dat nummer dat het DICHTST bij dit referentiepunt ligt, niet zomaar het eerste.
+ * Toont nu ook `hopCount` (aantal knooppunten in de route) en `geographicDistanceM`
+ * (hemelsbrede afstand tussen de twee gekozen knooppunten) -- om netwerkafstand vs.
+ * geografische afstand te kunnen vergelijken (de kernvraag van deze test).
  */
+
+function resolveNode(
+  provider: GraphProvider,
+  exactId: string | undefined,
+  displayNumber: string | undefined,
+  nearPointRd: { x: number; y: number } | null
+): { nodeId: string | null; candidatesFound: number } {
+  if (exactId) {
+    return { nodeId: provider.getNode(exactId) ? exactId : null, candidatesFound: provider.getNode(exactId) ? 1 : 0 };
+  }
+  if (!displayNumber) return { nodeId: null, candidatesFound: 0 };
+
+  const matches = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === displayNumber);
+  if (matches.length === 0) return { nodeId: null, candidatesFound: 0 };
+
+  if (nearPointRd) {
+    matches.sort((a, b) => {
+      const na = provider.getNode(a)!;
+      const nb = provider.getNode(b)!;
+      const da = (na.x - nearPointRd.x) ** 2 + (na.y - nearPointRd.y) ** 2;
+      const db = (nb.x - nearPointRd.x) ** 2 + (nb.y - nearPointRd.y) ** 2;
+      return da - db;
+    });
+  }
+  return { nodeId: matches[0], candidatesFound: matches.length };
+}
+
 export async function POST(req: NextRequest) {
-  let body: { fromDisplayNumber?: string; toDisplayNumber?: string; fromNodeId?: string; toNodeId?: string };
+  let body: {
+    fromNodeId?: string;
+    toNodeId?: string;
+    fromDisplayNumber?: string;
+    toDisplayNumber?: string;
+    nearLat?: number;
+    nearLon?: number;
+  };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
   }
 
-  const { fromDisplayNumber, toDisplayNumber, fromNodeId: exactFromNodeId, toNodeId: exactToNodeId } = body;
+  const { fromNodeId: exactFromNodeId, toNodeId: exactToNodeId, fromDisplayNumber, toDisplayNumber, nearLat, nearLon } = body;
 
   try {
     const db = getDb();
@@ -40,54 +77,50 @@ export async function POST(req: NextRequest) {
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
 
-    // BIJGESTELD (30-8-2026): weergavenummers bleken NIET landelijk uniek (106x "60", 109x
-    // "36" gevonden in de hele dataset -- regionale hernummering) -- zoeken op weergavenummer
-    // alleen kan dus een willekeurig, mogelijk volledig ongerelateerd knooppunt ergens anders
-    // in Nederland treffen. Geef daarom de voorkeur aan EXACTE, interne node-ID's als die
-    // meegegeven zijn (bijv. rechtstreeks overgenomen uit de diagnose-melding van "route naar
-    // een adres") -- weergavenummer blijft een terugvaloptie, met de expliciete waarschuwing
-    // dat het eerste (willekeurige) resultaat gebruikt wordt.
-    let fromNodeId: string;
-    let toNodeId: string;
-    let fromNodeIdsFound = 1;
-    let toNodeIdsFound = 1;
+    const nearPointRd = nearLat !== undefined && nearLon !== undefined ? wgs84ToRd(nearLat, nearLon) : null;
 
-    if (exactFromNodeId && exactToNodeId) {
-      if (!provider.getNode(exactFromNodeId) || !provider.getNode(exactToNodeId)) {
-        return NextResponse.json({ error: "Eén van de opgegeven exacte node-ID's bestaat niet." }, { status: 404 });
-      }
-      fromNodeId = exactFromNodeId;
-      toNodeId = exactToNodeId;
-    } else if (fromDisplayNumber && toDisplayNumber) {
-      const fromNodeIds = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === fromDisplayNumber);
-      const toNodeIds = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === toDisplayNumber);
-      if (fromNodeIds.length === 0 || toNodeIds.length === 0) {
-        return NextResponse.json({
-          error: `Weergavenummer niet gevonden: ${fromNodeIds.length === 0 ? fromDisplayNumber : toDisplayNumber}.`,
-        }, { status: 404 });
-      }
-      fromNodeId = fromNodeIds[0];
-      toNodeId = toNodeIds[0];
-      fromNodeIdsFound = fromNodeIds.length;
-      toNodeIdsFound = toNodeIds.length;
-    } else {
+    const from = resolveNode(provider, exactFromNodeId, fromDisplayNumber, nearPointRd);
+    const to = resolveNode(provider, exactToNodeId, toDisplayNumber, nearPointRd);
+
+    if (!from.nodeId || !to.nodeId) {
       return NextResponse.json(
-        { error: "Geef ofwel fromNodeId+toNodeId (exact, aanbevolen) ofwel fromDisplayNumber+toDisplayNumber op." },
-        { status: 400 }
+        { error: `Knooppunt niet gevonden: ${!from.nodeId ? fromDisplayNumber ?? exactFromNodeId : toDisplayNumber ?? exactToNodeId}.` },
+        { status: 404 }
       );
     }
 
-    const attempts: { fromNodeId: string; toNodeId: string; result: "ok" | "failed"; distanceM?: number; reason?: string }[] = [];
+    const fromNode = provider.getNode(from.nodeId)!;
+    const toNode = provider.getNode(to.nodeId)!;
+    const geographicDistanceM = Math.hypot(toNode.x - fromNode.x, toNode.y - fromNode.y);
+
     const t0 = Date.now();
-    const result = computeRoute(provider, datasetVersionId, fromNodeId, toNodeId);
+    const result = computeRoute(provider, datasetVersionId, from.nodeId, to.nodeId);
     const computeTimeMs = Date.now() - t0;
+
     if ("reason" in result) {
-      attempts.push({ fromNodeId, toNodeId, result: "failed", reason: result.reason });
-    } else {
-      attempts.push({ fromNodeId, toNodeId, result: "ok", distanceM: result.distanceM });
+      return NextResponse.json({
+        fromNodeId: from.nodeId,
+        toNodeId: to.nodeId,
+        result: "failed",
+        reason: result.reason,
+        geographicDistanceM,
+        computeTimeMs,
+        fromNodeIdsFound: from.candidatesFound,
+        toNodeIdsFound: to.candidatesFound,
+      });
     }
 
-    return NextResponse.json({ attempts, fromNodeIdsFound, toNodeIdsFound, computeTimeMs });
+    return NextResponse.json({
+      fromNodeId: from.nodeId,
+      toNodeId: to.nodeId,
+      result: "ok",
+      distanceM: result.distanceM,
+      hopCount: result.nodes.length - 1,
+      geographicDistanceM,
+      computeTimeMs,
+      fromNodeIdsFound: from.candidatesFound,
+      toNodeIdsFound: to.candidatesFound,
+    });
   } catch (err) {
     return NextResponse.json(
       { error: "Diagnose mislukt.", details: err instanceof Error ? err.message : String(err) },

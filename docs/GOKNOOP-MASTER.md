@@ -2582,3 +2582,27 @@ bijgestelde testtool invoeren -- dat geeft dan wél een betekenisvol antwoord ov
 daadwerkelijke Amsterdam↔Hilversum-verbinding.
 
 437/437 tests ongewijzigd, `tsc` schoon.
+
+### 9.56 Gerichte vervolgtest opgezet (op advies van GPT-review) (30-8-2026)
+
+Op basis van de volledige diagnose die aan GPT is voorgelegd, kwam een gerichte, beslissende
+vervolgtest: Volendam → de daadwerkelijke, goed-verbonden interne node "36" bij Hilversum
+(niet een willekeurige "36" elders in Nederland), vergeleken met Volendam → de huidige
+Hilversum-kandidaat #5 (bevestigd 350,4 km) -- plus hop-aantal en geografische afstand ter
+vergelijking.
+
+**Gebouwd**: `/api/debug/direct-route` uitgebreid met `nearLat`/`nearLon` -- bij een
+weergavenummer-zoekopdracht wordt nu het treffer DICHTST BIJ dit referentiepunt gekozen
+(i.p.v. het eerste, willekeurige treffer, sectie 9.55's probleem). Response bevat nu ook
+`hopCount` (aantal knooppunten in de route) en `geographicDistanceM` (hemelsbrede afstand) --
+precies de drie metingen die gevraagd zijn. Debugpagina vooraf ingevuld met de bekende
+situatie: Volendam-kant exact ID (uit de eerdere diagnose) → weergavenummer "36" met de
+Hilversum-coördinaten als referentiepunt.
+
+**Waarom dit de beslissende test is**: als Volendam → node 36 een normale afstand oplevert
+(~30-50 km) terwijl kandidaat #5 350,4 km geeft, is het probleem exact gelokaliseerd bij de
+KANDIDAAT-SELECTIE (kiest geografisch dichtbij, maar netwerkmatig slecht verbonden), niet bij
+Dijkstra zelf -- en hoort de oplossing dan in de kandidaat-selectie/netwerk-connectiviteit,
+vóór Dijkstra aangeroepen wordt. Nog niet uitgevoerd/bevestigd.
+
+437/437 tests ongewijzigd, `tsc` schoon.
