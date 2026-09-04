@@ -2262,3 +2262,37 @@ overwogen) -- zou de 10s-limiet met een extra poging alsnog kunnen overschrijden
 eventuele nieuwe poging gebeurt nu gewoon door opnieuw op de knop te tikken.
 
 422/422 tests ongewijzigd, `tsc` schoon.
+
+### 9.44 ECHTE OORZAAK gevonden: onnodige zware graaf-laadstap voor puur geocoden — ✅ GEFIXT (30-8-2026)
+
+**Bevestigd door de gebruiker via het Vercel-dashboard**: "Vercel Runtime Timeout Error: Task
+timed out after 10 seconds" -- de vorige fix (sectie 9.43, Overpass-timeout) loste dus niet
+alles op; er zat nog een tweede, aparte trage stap in de keten.
+
+**Root cause**: `/api/location/resolve` laadt ALTIJD de volledige knooppuntengraaf (11.000+
+knooppunten, 16.000+ edges, uit Firestore) voordat het ook maar iets anders doet -- ook
+wanneer een aanroeper, zoals de parkeerplaats-zoekfunctie, uitsluitend de geocodede
+coördinaten van het adres nodig heeft en helemaal geen knooppunt-kandidaten gebruikt. Op een
+"koude" serverless-start (`CachedGraphProvider`'s in-memory cache is dan leeg, zie de
+oorspronkelijke ontwerp-comment: "benchmark 26-8-2026") kon die onnodige Firestore-laadstap
+samen met de Nominatim-geocoding-aanroep de 10-seconden-limiet van Vercel's Hobby-plan
+overschrijden -- ook al was de Overpass-aanroep zelf (sectie 9.43's fix) inmiddels ruim
+binnen budget.
+
+**Fix**: nieuw, LICHT endpoint `POST /api/location/geocode` -- doet UITSLUITEND geocoding
+(`geocodePlaceName()`), GEEN Firestore/GraphProvider-aanroep. De parkeerplaats-zoekfunctie
+(`showParkingNearDestination()`, sectie 9.42) gebruikt nu dit lichte endpoint in plaats van
+het zware `/api/location/resolve` -- scheelt de volledige graaf-laadstap voor een taak die
+'m nooit nodig had.
+
+**Belangrijk, niet aangeraakt**: `/api/location/resolve` zelf blijft ONGEWIJZIGD -- die wordt
+elders (de normale plaatsnaam-zoekfunctie, "route naar een adres") wél gebruikt op een manier
+waarbij de knooppunt-kandidaten daadwerkelijk nodig zijn, dus daar is de graaf-laadstap wél
+gerechtvaardigd.
+
+**Les, in lijn met sectie 9.27's eerdere ervaring**: een gemelde storing bleek de EERSTE keer
+niet volledig verholpen door de eerste (wel-terechte) fix -- er kunnen meerdere, onafhankelijke
+oorzaken tegelijk spelen. Blijven doorvragen/verifiëren (Vercel-logs) i.p.v. aannemen dat de
+eerste fix voldoende was, bracht de tweede, onderliggende oorzaak alsnog aan het licht.
+
+422/422 tests ongewijzigd, `tsc` schoon.

@@ -617,13 +617,17 @@ export default function Home() {
     setParkingLoading(true);
     setParkingOptions(null);
     try {
-      const destRes = await fetch("/api/location/resolve", {
+      // BUGFIX (30-8-2026, "Vercel Runtime Timeout Error", sectie 9.44): hergebruikte eerst
+      // /api/location/resolve -- dat laadt ALTIJD de volledige knooppuntengraaf, ook al is hier
+      // uitsluitend de geocodede coördinaat nodig, geen knooppunt-kandidaten. Nu het lichte,
+      // geocoding-only endpoint, geen onnodige Firestore-graafload meer.
+      const destRes = await fetch("/api/location/geocode", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ placeName: destinationInput, limit: 1 }),
+        body: JSON.stringify({ placeName: destinationInput }),
       });
       const destData = await destRes.json();
-      if (!destRes.ok || destData.geocodedLat == null) {
+      if (!destRes.ok || destData.lat == null) {
         setErrorMessage(`We konden '${destinationInput}' niet vinden.`);
         setStep("error");
         return;
@@ -632,7 +636,7 @@ export default function Home() {
       const parkingRes = await fetch("/api/places/parking", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lat: destData.geocodedLat, lon: destData.geocodedLon }),
+        body: JSON.stringify({ lat: destData.lat, lon: destData.lon }),
       });
       const parkingData = await parkingRes.json();
       if (!parkingRes.ok) {
