@@ -2554,3 +2554,31 @@ berekening zelf traag was (bevestigt de timeout-hypothese) of snel faalde (wijst
 anders).
 
 437/437 tests ongewijzigd, `tsc` schoon.
+
+### 9.55 GROTE ONTDEKKING: weergavenummers zijn NIET landelijk uniek — testaanpak herzien (30-8-2026)
+
+**Bevinding**: het directe test-tool (sectie 9.53/9.54) toonde bij het testen van "60" → "36":
+**106 knooppunten met nummer "60", 109 met nummer "36"** in de hele dataset. Dit betekent dat
+Nederlandse fietsknooppunt-nummers regionaal hergebruikt worden -- nummer "60" bestaat dus
+tientallen keren, verspreid over totaal verschillende, ongerelateerde delen van het land. De
+eerdere test (die simpelweg de EERSTE trof) testte daardoor waarschijnlijk twee volledig
+willekeurige, ongerelateerde knooppunten -- het `no_traversable_edges`-resultaat bewees dus
+NIETS over de daadwerkelijke Amsterdam↔Hilversum-verbinding.
+
+**Rechtgezet**:
+- De diagnose-melding bij "route naar een adres" (sectie 9.52) toont nu ook de ECHTE, interne
+  `logicalNodeId`'s (niet alleen het weergavenummer) van het gekozen start-/bestemmings-
+  knooppunt.
+- `/api/debug/direct-route` accepteert nu bij voorkeur EXACTE node-ID's (`fromNodeId`/
+  `toNodeId`) -- ondubbelzinnig, geen risico op een willekeurig verkeerd knooppunt. Zoeken op
+  weergavenummer blijft als terugvaloptie bestaan, met een expliciete waarschuwing in de UI
+  dat dit een willekeurig knooppunt met dat nummer ergens in Nederland kan treffen.
+- De debugpagina heeft nu twee aparte invoervelden-groepen (exacte ID's bovenaan, aanbevolen;
+  weergavenummer als terugval eronder).
+
+**Volgende stap**: de gebruiker moet de Hilversum-zoekopdracht opnieuw doen om de ECHTE
+node-ID's uit de (nu bijgestelde) diagnose-melding te krijgen, en die vervolgens in het
+bijgestelde testtool invoeren -- dat geeft dan wél een betekenisvol antwoord over de
+daadwerkelijke Amsterdam↔Hilversum-verbinding.
+
+437/437 tests ongewijzigd, `tsc` schoon.

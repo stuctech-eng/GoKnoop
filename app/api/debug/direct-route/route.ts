@@ -20,17 +20,14 @@ export const dynamic = "force-dynamic";
  * netwerkdeel moet doorzoeken). `computeTimeMs` laat zien of de berekening zelf traag was.
  */
 export async function POST(req: NextRequest) {
-  let body: { fromDisplayNumber?: string; toDisplayNumber?: string };
+  let body: { fromDisplayNumber?: string; toDisplayNumber?: string; fromNodeId?: string; toNodeId?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
   }
 
-  const { fromDisplayNumber, toDisplayNumber } = body;
-  if (!fromDisplayNumber || !toDisplayNumber) {
-    return NextResponse.json({ error: "fromDisplayNumber en toDisplayNumber zijn verplicht." }, { status: 400 });
-  }
+  const { fromDisplayNumber, toDisplayNumber, fromNodeId: exactFromNodeId, toNodeId: exactToNodeId } = body;
 
   try {
     const db = getDb();
@@ -43,23 +40,43 @@ export async function POST(req: NextRequest) {
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
 
-    const fromNodeIds = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === fromDisplayNumber);
-    const toNodeIds = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === toDisplayNumber);
+    // BIJGESTELD (30-8-2026): weergavenummers bleken NIET landelijk uniek (106x "60", 109x
+    // "36" gevonden in de hele dataset -- regionale hernummering) -- zoeken op weergavenummer
+    // alleen kan dus een willekeurig, mogelijk volledig ongerelateerd knooppunt ergens anders
+    // in Nederland treffen. Geef daarom de voorkeur aan EXACTE, interne node-ID's als die
+    // meegegeven zijn (bijv. rechtstreeks overgenomen uit de diagnose-melding van "route naar
+    // een adres") -- weergavenummer blijft een terugvaloptie, met de expliciete waarschuwing
+    // dat het eerste (willekeurige) resultaat gebruikt wordt.
+    let fromNodeId: string;
+    let toNodeId: string;
+    let fromNodeIdsFound = 1;
+    let toNodeIdsFound = 1;
 
-    if (fromNodeIds.length === 0 || toNodeIds.length === 0) {
-      return NextResponse.json({
-        error: `Weergavenummer niet gevonden: ${fromNodeIds.length === 0 ? fromDisplayNumber : toDisplayNumber}.`,
-      }, { status: 404 });
+    if (exactFromNodeId && exactToNodeId) {
+      if (!provider.getNode(exactFromNodeId) || !provider.getNode(exactToNodeId)) {
+        return NextResponse.json({ error: "Eén van de opgegeven exacte node-ID's bestaat niet." }, { status: 404 });
+      }
+      fromNodeId = exactFromNodeId;
+      toNodeId = exactToNodeId;
+    } else if (fromDisplayNumber && toDisplayNumber) {
+      const fromNodeIds = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === fromDisplayNumber);
+      const toNodeIds = provider.getAllNodeIds().filter((id) => provider.getNode(id)?.displayNumber === toDisplayNumber);
+      if (fromNodeIds.length === 0 || toNodeIds.length === 0) {
+        return NextResponse.json({
+          error: `Weergavenummer niet gevonden: ${fromNodeIds.length === 0 ? fromDisplayNumber : toDisplayNumber}.`,
+        }, { status: 404 });
+      }
+      fromNodeId = fromNodeIds[0];
+      toNodeId = toNodeIds[0];
+      fromNodeIdsFound = fromNodeIds.length;
+      toNodeIdsFound = toNodeIds.length;
+    } else {
+      return NextResponse.json(
+        { error: "Geef ofwel fromNodeId+toNodeId (exact, aanbevolen) ofwel fromDisplayNumber+toDisplayNumber op." },
+        { status: 400 }
+      );
     }
 
-    // BUGFIX (30-8-2026, "Er ging iets mis" bij het testen): een NIET-bestaande verbinding kan
-    // Dijkstra dwingen het HELE bereikbare netwerkdeel te doorzoeken voordat "geen route"
-    // geconcludeerd wordt -- mogelijk traag genoeg om zelf tegen Vercel Hobby's 10s-limiet aan
-    // te lopen (ironisch: het diagnose-tool zou dan precies vastlopen op het probleem dat het
-    // probeert te bewijzen). Daarom: ÉÉN combinatie per aanvraag, niet alle tegelijk -- de
-    // client kan meerdere aanvragen doen als er duplicaten zijn.
-    const fromNodeId = fromNodeIds[0];
-    const toNodeId = toNodeIds[0];
     const attempts: { fromNodeId: string; toNodeId: string; result: "ok" | "failed"; distanceM?: number; reason?: string }[] = [];
     const t0 = Date.now();
     const result = computeRoute(provider, datasetVersionId, fromNodeId, toNodeId);
@@ -70,7 +87,7 @@ export async function POST(req: NextRequest) {
       attempts.push({ fromNodeId, toNodeId, result: "ok", distanceM: result.distanceM });
     }
 
-    return NextResponse.json({ attempts, fromNodeIdsFound: fromNodeIds.length, toNodeIdsFound: toNodeIds.length, computeTimeMs });
+    return NextResponse.json({ attempts, fromNodeIdsFound, toNodeIdsFound, computeTimeMs });
   } catch (err) {
     return NextResponse.json(
       { error: "Diagnose mislukt.", details: err instanceof Error ? err.message : String(err) },

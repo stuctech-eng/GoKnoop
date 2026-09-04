@@ -611,8 +611,12 @@ export default function Home() {
           // Tijdelijk, puur diagnostisch (30-8-2026, "Hilversum doet een omweg") -- blokkerende
           // melding zodat dit gegarandeerd zichtbaar is vóórdat het navigatiescherm het
           // overneemt, zonder een heel nieuw tussenscherm te bouwen voor iets tijdelijks.
+          // BIJGESTELD: ook de ECHTE, interne knooppunt-ID's tonen -- weergavenummers bleken
+          // NIET landelijk uniek (106x "60", 109x "36" in de hele dataset -- regionale
+          // hernummering), dus alleen een weergavenummer is niet genoeg om een specifiek
+          // knooppunt terug te vinden voor een directe test.
           alert(
-            `Diagnose:\nGezocht: ${destData.geocodedAs ?? destinationInput}\nGeocoded: ${destData.geocodedLat.toFixed(5)}, ${destData.geocodedLon.toFixed(5)}\nStart: knooppunt ${routeData.knotLeg.selectedStartNodeDisplayNumber} (kandidaat #${routeData.knotLeg.selectedCandidateRank})\nBestemming: knooppunt ${routeData.knotLeg.selectedDestinationNodeDisplayNumber} (kandidaat #${routeData.knotLeg.selectedDestinationCandidateRank})\nTotale afstand: ${(routeData.knotLeg.route.distanceM / 1000).toFixed(1)} km`
+            `Diagnose:\nGezocht: ${destData.geocodedAs ?? destinationInput}\nGeocoded: ${destData.geocodedLat.toFixed(5)}, ${destData.geocodedLon.toFixed(5)}\nStart: knooppunt ${routeData.knotLeg.selectedStartNodeDisplayNumber} / ID ${routeData.knotLeg.selectedStartNodeId} (kandidaat #${routeData.knotLeg.selectedCandidateRank})\nBestemming: knooppunt ${routeData.knotLeg.selectedDestinationNodeDisplayNumber} / ID ${routeData.knotLeg.selectedDestinationNodeId} (kandidaat #${routeData.knotLeg.selectedDestinationCandidateRank})\nTotale afstand: ${(routeData.knotLeg.route.distanceM / 1000).toFixed(1)} km`
           );
 
           setActiveBackToStartRoute({
