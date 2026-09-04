@@ -2883,3 +2883,31 @@ Amsterdam Centraal en Hilversum (een ANDER stuk dan we eerder dachten, aangezien
 Amstel-Hilversum al goed bleek, sectie 9.58).
 
 437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
+
+### 9.67 Geautomatiseerde batch-diagnose (op verzoek: "kun je niet iets automatiseren") (30-8-2026)
+
+**Bevestigd**: Amsterdam Centraal → knooppunt 55 (de echte Hilversum-bestemmingskandidaat)
+geeft nog steeds 366,9 km (201 hops) -- het tweede, resterende gat zit dus specifiek tussen
+Amsterdam Centraal en DEZE knooppunt-kandidaat bij Hilversum (niet dezelfde als knooppunt 36,
+die al bevestigd goed was vanaf Amsterdam Amstel, sectie 9.58).
+
+**Op verzoek geautomatiseerd**: in plaats van steeds handmatig één paar knooppunten te testen,
+kan nu in één aanvraag ALLE combinaties tussen de dichtstbijzijnde kandidaten bij twee punten
+tegelijk getest worden.
+
+**Gebouwd**:
+- `POST /api/debug/batch-diagnose` -- neemt twee punten (lat/lon), zoekt de N (standaard 5,
+  max 6) dichtstbijzijnde kandidaten bij elk, en test ALLE combinaties (tot 36) in één
+  aanvraag. Elke combinatie krijgt: netwerkafstand, hop-aantal, hemelsbrede afstand, de
+  verhouding ertussen, en een automatische `anomaly`-markering (verhouding >3x, of
+  `disconnected`). Resultaten gesorteerd op netwerkafstand -- de beste combinatie staat
+  bovenaan.
+- `/debug/batch-diagnose` -- overzichtelijke lijst, anomalieën in het rood gemarkeerd, geen
+  handmatig paar-voor-paar testen en heen-en-weer-schuiven met de andere debugpagina meer
+  nodig voor dit soort verkennend werk.
+- Tijdsbudget bewust begrensd (max 36 combinaties) om ruim binnen Vercel Hobby's 10s te
+  blijven -- elke individuele `computeRoute`-aanroep bleek vandaag doorgaans ruim onder de
+  150ms.
+
+Geen wijziging aan `lib/route-engine/`'s kern -- puur een nieuw, dun diagnose-endpoint eromheen.
+437/437 tests ongewijzigd, `tsc` schoon.
