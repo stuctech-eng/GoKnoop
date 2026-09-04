@@ -67,7 +67,11 @@ type DirectRouteResult = {
   fromNodeIdsFound: number;
   toNodeIdsFound: number;
   fromDisplayNumber: string;
+  fromLat: number;
+  fromLon: number;
   toDisplayNumber: string;
+  toLat: number;
+  toLon: number;
 };
 
 type RunResult = {
@@ -94,20 +98,28 @@ export default function NetworkGapScanPage() {
       next[i] = { ...next[i], status: "bezig" };
       setRuns([...next]);
 
-      try {
-        const res = await fetch("/api/debug/direct-route", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(TEST_CASES[i].body),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          next[i] = { ...next[i], status: "fout", error: data.error ?? "Onbekende fout." };
-        } else {
-          next[i] = { ...next[i], status: "klaar", data };
+      let attempt = 0;
+      const maxAttempts = 2; // 1 automatische retry bij netwerkfout (cold-start-robuustheid)
+      while (attempt < maxAttempts) {
+        attempt++;
+        try {
+          const res = await fetch("/api/debug/direct-route", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(TEST_CASES[i].body),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            next[i] = { ...next[i], status: "fout", error: data.error ?? "Onbekende fout." };
+          } else {
+            next[i] = { ...next[i], status: "klaar", data };
+          }
+          break;
+        } catch {
+          if (attempt >= maxAttempts) {
+            next[i] = { ...next[i], status: "fout", error: `Netwerkfout tijdens test (na ${attempt} poging(en)).` };
+          }
         }
-      } catch {
-        next[i] = { ...next[i], status: "fout", error: "Netwerkfout tijdens test." };
       }
       setRuns([...next]);
     }
@@ -133,11 +145,14 @@ export default function NetworkGapScanPage() {
             `OK -- ${(d.distanceM! / 1000).toFixed(1)} km netwerk, ${d.hopCount} hops, hemelsbreed ${(d.geographicDistanceM / 1000).toFixed(1)} km (ratio ${(d.distanceM! / d.geographicDistanceM).toFixed(1)}x)`
           );
         } else {
-          lines.push(`FAILED -- ${d.reason}`);
+          const isolated = d.reason === "no_traversable_edges";
+          lines.push(`FAILED -- ${d.reason}${isolated ? "  [EILAND-NODE: 0 bruikbare edges]" : ""}`);
         }
         lines.push(
-          `Knooppunt ${d.fromDisplayNumber} (${d.fromNodeIdsFound} kandidaten) -> Knooppunt ${d.toDisplayNumber} (${d.toNodeIdsFound} kandidaten)`
+          `Knooppunt ${d.fromDisplayNumber || "(geen)"} (${d.fromNodeIdsFound} kandidaten) -> Knooppunt ${d.toDisplayNumber || "(geen)"} (${d.toNodeIdsFound} kandidaten)`
         );
+        lines.push(`Van-ID:  ${d.fromNodeId}  (${d.fromLat.toFixed(5)}, ${d.fromLon.toFixed(5)})`);
+        lines.push(`Naar-ID: ${d.toNodeId}  (${d.toLat.toFixed(5)}, ${d.toLon.toFixed(5)})`);
       } else if (run.status === "fout") {
         lines.push(`FOUT -- ${run.error}`);
       } else {
@@ -202,11 +217,19 @@ export default function NetworkGapScanPage() {
                   {(run.data.distanceM! / run.data.geographicDistanceM).toFixed(1)}x
                 </div>
               ) : (
-                <div style={{ color: "red", fontWeight: "bold" }}>❌ {run.data.reason}</div>
+                <div style={{ color: "red", fontWeight: "bold" }}>
+                  ❌ {run.data.reason}
+                  {run.data.reason === "no_traversable_edges" ? " (eiland-node)" : ""}
+                </div>
               )}
               <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4 }}>
-                Knpt {run.data.fromDisplayNumber} → Knpt {run.data.toDisplayNumber} · hemelsbreed{" "}
+                Knpt {run.data.fromDisplayNumber || "(geen)"} → Knpt {run.data.toDisplayNumber || "(geen)"} · hemelsbreed{" "}
                 {(run.data.geographicDistanceM / 1000).toFixed(1)} km
+              </div>
+              <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4, wordBreak: "break-all" }}>
+                {run.data.fromNodeId} ({run.data.fromLat.toFixed(5)}, {run.data.fromLon.toFixed(5)})
+                <br />
+                {run.data.toNodeId} ({run.data.toLat.toFixed(5)}, {run.data.toLon.toFixed(5)})
               </div>
             </div>
           )}
