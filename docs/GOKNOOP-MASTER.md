@@ -2520,3 +2520,21 @@ de totale afstand. Puur om te zien of de geocoding/kandidaat-keuze zelf ergens v
 -- geen permanente UX-toevoeging, makkelijk weer te verwijderen zodra de oorzaak gevonden is.
 
 437/437 tests ongewijzigd, `tsc` schoon.
+
+### 9.53 Direct node-naar-node-testgereedschap gebouwd (30-8-2026)
+
+Vervolg op sectie 9.52's diagnose: nieuw, puur diagnostisch endpoint `POST /api/debug/direct-
+route` + bijbehorende debugpagina `/debug/direct-route`. Test DIRECT tussen twee opgegeven
+weergavenummers, zonder geocoding of kandidaat-selectie ertussen -- zoekt ALLE knooppunten met
+het gevraagde weergavenummer (er kunnen duplicaten zijn, al eerder gezien bij Volendam's
+dubbele "98") en probeert elke combinatie via de kale `computeRoute()`.
+
+**Waarom dit nodig was**: twee screenshots (sectie 9.52) toonden dat zowel het Amsterdam-
+gebied als het Hilversum-gebied ELK op zich een dicht, goed verbonden lokaal netwerk hebben --
+wat het eerdere vermoeden ("gat in de data rond Hilversum") tegenspreekt. Nieuwe hypothese: het
+gat zit specifiek in de VERBINDING tussen die twee, elk op zich goede gebieden (bijv. rond het
+IJmeer/de Vecht bij Amsterdam-Naarden). Dit tool test dat exact, met concrete
+knooppuntnummers (60 bij Amsterdam, 36 bij Hilversum) die de gebruiker al aanleverde.
+
+Geen wijziging aan `lib/route-engine/`'s kern. 437/437 tests ongewijzigd (puur diagnostisch
+debug-endpoint, geen nieuwe pure logica die apart getest hoeft te worden).
