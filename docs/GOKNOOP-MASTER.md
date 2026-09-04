@@ -2320,3 +2320,29 @@ coördinaten) of in de PARKEERPLAATS-ZOEKOPDRACHT zelf (juiste coördinaten, maa
 gevonden). Nodig om de volgende diagnosestap gericht te kunnen zetten i.p.v. verder te gokken.
 
 422/422 tests ongewijzigd, `tsc` schoon.
+
+### 9.46 Zelf afgedwongen tijdslimiet i.p.v. vertrouwen op de externe dienst — ✅ GEFIXT (30-8-2026)
+
+**Herhaalde melding, ná bevestiging dat de vorige fix (sectie 9.44, lichte geocode-endpoint)
+al live stond**: "Vercel Runtime Timeout Error" bleef optreden. Dit wees erop dat het interne
+`[timeout:X]` van een Overpass-query niet voldoende bescherming biedt -- dat dekt namelijk
+uitsluitend de tijd NADAT Overpass de query daadwerkelijk is gaan uitvoeren. Een trage
+verbinding, TLS-handshake, of wachtrij aan Overpass' kant (bevestigd: de publieke server heeft
+gedocumenteerde, terugkerende beschikbaarheidsproblemen) valt daar niet onder -- de aanvraag
+kan alsnog blijven hangen tot Vercel's platform de hele functie hardhandig afbreekt.
+
+**Fix, structureel steviger dan de vorige poging**: een eigen, zelf afgedwongen
+`AbortController`-tijdslimiet (6 seconden) rond de VOLLEDIGE aanvraag, niet alleen de
+querytekst. Toegepast op zowel `OverpassPlacesAdapter` als beide Nominatim-functies
+(`geocodePlaceName`/`reverseGeocode`, `lib/route-engine/geocode.ts`) -- dezelfde klasse van
+kwetsbaarheid gold daar ook, nog niet eerder aangepakt. Bij een echte timeout krijgt de
+gebruiker nu een duidelijke, eigen foutmelding ("Overpass reageerde niet binnen 6 seconden --
+probeer het opnieuw") in plaats van een onduidelijke platform-crash.
+
+**Les, aansluitend bij sectie 9.44's eerdere notitie**: vertrouwen op een EXTERNE dienst om
+zijn eigen tijdslimiet te respecteren is onvoldoende bescherming -- de eigen code moet zelf
+een harde grens afdwingen, altijd ruim binnen het eigen platform se limiet (hier: 6s eigen
+grens, ruim onder Vercel Hobby's 10s).
+
+422/422 tests ongewijzigd (bestaande, gemockte tests negeren het nieuwe `signal`-argument
+correct, geen wijziging nodig), `tsc` schoon.

@@ -4,6 +4,12 @@ export type GeocodeResult = { lat: number; lon: number; displayName: string };
  * Vertaalt een plaatsnaam naar coördinaten via Nominatim (OpenStreetMap).
  * Gratis, geen API-key nodig -- wel een duidelijke User-Agent verplicht
  * volgens Nominatim's gebruiksvoorwaarden, en gelimiteerd tot NL.
+ *
+ * BUGFIX (30-8-2026, herhaalde "Vercel Runtime Timeout Error" bij parkeerplaats-zoeken):
+ * eigen, hard afgedwongen `AbortController`-tijdslimiet (6s) toegevoegd -- zelfde reden als
+ * `OverpassPlacesAdapter` (sectie 9.42): zonder dit kan een trage/hangende externe aanvraag
+ * de hele serverfunctie tot Vercel Hobby's harde 10s-limiet laten lopen, met een onduidelijke
+ * platform-crash i.p.v. een nette foutmelding als gevolg.
  */
 export async function geocodePlaceName(placeName: string): Promise<GeocodeResult | null> {
   const params = new URLSearchParams({
@@ -13,11 +19,22 @@ export async function geocodePlaceName(placeName: string): Promise<GeocodeResult
     limit: "1",
   });
 
-  const res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
-    headers: {
-      "User-Agent": "GoKnoop/1.0 (+https://go-knoop.vercel.app)",
-    },
-  });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), 6000);
+
+  let res: Response;
+  try {
+    res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+      headers: {
+        "User-Agent": "GoKnoop/1.0 (+https://go-knoop.vercel.app)",
+      },
+      signal: controller.signal,
+    });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 
   if (!res.ok) return null;
 
@@ -35,7 +52,7 @@ export async function geocodePlaceName(placeName: string): Promise<GeocodeResult
  * Vertaalt coördinaten naar een herkenbare plaatsnaam (omgekeerde richting van
  * `geocodePlaceName`) -- Nominatim's `/reverse`-endpoint, GEOCODEN sectie 9.34
  * (30-8-2026, "automatische routenaam"). Zelfde gratis dienst, zelfde
- * User-Agent-verplichting.
+ * User-Agent-verplichting, zelfde 6s-tijdslimiet-bescherming (zie hierboven).
  *
  * BELANGRIJKE GEBRUIKSGRENS (Nominatim's beleid verbiedt expliciet
  * "systematische" bevragingen, incl. "reverse queries in a grid"): deze
@@ -52,15 +69,21 @@ export async function reverseGeocode(lat: number, lon: number): Promise<{ placeN
     zoom: "14", // "town/village"-niveau -- niet te grof (provincie) of te fijn (straatnaam)
   });
 
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), 6000);
+
   let res: Response;
   try {
     res = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
       headers: {
         "User-Agent": "GoKnoop/1.0 (+https://go-knoop.vercel.app)",
       },
+      signal: controller.signal,
     });
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 
   if (!res.ok) return null;

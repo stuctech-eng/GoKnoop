@@ -38,15 +38,18 @@ type OverpassElement = {
 
 export class OverpassPlacesAdapter implements PlacesProvider {
   async findNearby(center: LatLon, category: "parking", radiusM: number, limit: number): Promise<PlaceResult[] | PlacesProviderError> {
-    // BUGFIX (30-8-2026, "de fetch faalde"): de echte oorzaak bleek NIET een storing bij
-    // Overpass, maar een eigen fout -- GoKnoop draait op Vercel's Hobby-plan, met een HARDE
-    // limiet van 10 seconden per serverfunctie. De Overpass-query zelf vroeg om `[timeout:15]`
-    // -- dat overschrijdt die 10 seconden al in z'n eentje, de functie werd simpelweg
-    // afgebroken door het platform vóórdat Overpass ooit kon antwoorden. Verlaagd naar
-    // `[timeout:7]`, met marge voor het versturen/parsen van de respons binnen de 10s.
-    // GEEN herprobeerpoging binnen deze aanroep (zou de 10s-limiet alsnog overschrijden) --
-    // een eventuele nieuwe poging gebeurt door gewoon nog eens op de knop te tikken.
-    const query = `[out:json][timeout:7];nwr["amenity"="${category}"](around:${radiusM},${center.lat},${center.lon});out center ${limit};`;
+    // BUGFIX (30-8-2026, herhaalde "Vercel Runtime Timeout Error" ook na het verlagen van
+    // Overpass' EIGEN queryinterne `[timeout:X]`): dat interne timeout dekt alleen de tijd
+    // NADAT Overpass de query daadwerkelijk is gaan uitvoeren -- een trage verbinding,
+    // TLS-handshake, of wachtrij aan de kant van Overpass (bevestigd: de publieke server heeft
+    // gedocumenteerde, terugkerende beschikbaarheidsproblemen) valt daar NIET onder. Nu een
+    // eigen, hard afgedwongen `AbortController`-tijdslimiet (6s) rond de HELE aanvraag --
+    // beschermt tegen elke soort traagheid, niet alleen trage query-verwerking, en blijft ruim
+    // binnen Vercel Hobby's harde 10s-limiet.
+    const query = `[out:json][timeout:5];nwr["amenity"="${category}"](around:${radiusM},${center.lat},${center.lon});out center ${limit};`;
+
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), 6000);
 
     let res: Response;
     try {
@@ -54,12 +57,18 @@ export class OverpassPlacesAdapter implements PlacesProvider {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: `data=${encodeURIComponent(query)}`,
+        signal: controller.signal,
       });
     } catch (err) {
+      const isTimeout = err instanceof Error && err.name === "AbortError";
       return {
         reason: "provider_error",
-        message: `Kon de Overpass-server niet bereiken (${err instanceof Error ? err.message : String(err)}).`,
+        message: isTimeout
+          ? "Overpass reageerde niet binnen 6 seconden -- de gratis server is soms overbelast. Probeer het opnieuw."
+          : `Kon de Overpass-server niet bereiken (${err instanceof Error ? err.message : String(err)}).`,
       };
+    } finally {
+      clearTimeout(timeoutHandle);
     }
 
     if (!res.ok) {
