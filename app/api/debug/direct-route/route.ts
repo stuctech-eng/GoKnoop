@@ -10,17 +10,17 @@ export const dynamic = "force-dynamic";
 
 /**
  * POST /api/debug/direct-route
- * Body: { fromNodeId?, toNodeId?, fromDisplayNumber?, toDisplayNumber?, nearLat?, nearLon? }
+ * Body: { fromNodeId?, toNodeId?, fromDisplayNumber?, toDisplayNumber?,
+ *         nearFromLat?, nearFromLon?, nearToLat?, nearToLon? }
  * Response: { fromNodeId, toNodeId, result: "ok"|"failed", distanceM?, hopCount?, reason?,
  *             geographicDistanceM, computeTimeMs, fromNodeIdsFound, toNodeIdsFound }
  *
- * Diagnose-tool (sectie 9.52/9.55/9.56, 30-8-2026, "Hilversum doet een omweg" -- gerichte
- * vervolgtest op verzoek). UITGEBREID: `nearLat`/`nearLon` -- als een weergavenummer meerdere
- * treffers heeft (bevestigd: dat is de NORM, niet de uitzondering, sectie 9.55), kies dan het
- * knooppunt met dat nummer dat het DICHTST bij dit referentiepunt ligt, niet zomaar het eerste.
- * Toont nu ook `hopCount` (aantal knooppunten in de route) en `geographicDistanceM`
- * (hemelsbrede afstand tussen de twee gekozen knooppunten) -- om netwerkafstand vs.
- * geografische afstand te kunnen vergelijken (de kernvraag van deze test).
+ * Diagnose-tool (sectie 9.52/9.55/9.56/9.57, 30-8-2026, "gat tussen Waterland en het Gooi").
+ * UITGEBREID (sectie 9.58): APARTE referentiepunten voor herkomst en bestemming
+ * (`nearFromLat`/`nearFromLon` vs. `nearToLat`/`nearToLon`) -- nodig om bijv. "knooppunt 60
+ * dichtbij Amsterdam-Noord" en "knooppunt 36 dichtbij Hilversum" TEGELIJK correct op te lossen
+ * (met een enkel gedeeld referentiepunt zou dat niet lukken, de twee gebieden liggen te ver
+ * uit elkaar).
  */
 
 function resolveNode(
@@ -55,8 +55,10 @@ export async function POST(req: NextRequest) {
     toNodeId?: string;
     fromDisplayNumber?: string;
     toDisplayNumber?: string;
-    nearLat?: number;
-    nearLon?: number;
+    nearFromLat?: number;
+    nearFromLon?: number;
+    nearToLat?: number;
+    nearToLon?: number;
   };
   try {
     body = await req.json();
@@ -64,7 +66,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
   }
 
-  const { fromNodeId: exactFromNodeId, toNodeId: exactToNodeId, fromDisplayNumber, toDisplayNumber, nearLat, nearLon } = body;
+  const {
+    fromNodeId: exactFromNodeId,
+    toNodeId: exactToNodeId,
+    fromDisplayNumber,
+    toDisplayNumber,
+    nearFromLat,
+    nearFromLon,
+    nearToLat,
+    nearToLon,
+  } = body;
 
   try {
     const db = getDb();
@@ -77,10 +88,11 @@ export async function POST(req: NextRequest) {
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
 
-    const nearPointRd = nearLat !== undefined && nearLon !== undefined ? wgs84ToRd(nearLat, nearLon) : null;
+    const nearFromRd = nearFromLat !== undefined && nearFromLon !== undefined ? wgs84ToRd(nearFromLat, nearFromLon) : null;
+    const nearToRd = nearToLat !== undefined && nearToLon !== undefined ? wgs84ToRd(nearToLat, nearToLon) : null;
 
-    const from = resolveNode(provider, exactFromNodeId, fromDisplayNumber, nearPointRd);
-    const to = resolveNode(provider, exactToNodeId, toDisplayNumber, nearPointRd);
+    const from = resolveNode(provider, exactFromNodeId, fromDisplayNumber, nearFromRd);
+    const to = resolveNode(provider, exactToNodeId, toDisplayNumber, nearToRd);
 
     if (!from.nodeId || !to.nodeId) {
       return NextResponse.json(

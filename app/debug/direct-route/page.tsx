@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * Debug-pagina voor /api/debug/direct-route (sectie 9.52/9.55/9.56, "Hilversum doet een
- * omweg"). BIJGESTELD: "nearLat"/"nearLon" -- als een weergavenummer meerdere treffers heeft
- * (de norm, niet de uitzondering), kies het treffer dat het dichtst bij dit referentiepunt
- * ligt. Vooraf ingevuld met de bekende situatie: Volendam-kant (exact ID, uit de eerdere
- * diagnose) -> knooppunt "36" dichtbij Hilversum (geocodede coördinaten, ook al bekend).
+ * Debug-pagina voor /api/debug/direct-route (sectie 9.52-9.58, "gat tussen Waterland en het
+ * Gooi"). Vooraf ingevuld met de gerichte vervolgtest: knooppunt "60" dichtbij Amsterdam-
+ * Noord/Schellingwoude (al bevestigd goed bereikbaar vanaf Volendam) -> knooppunt "36"
+ * dichtbij Hilversum (al bevestigd goed lokaal netwerk) -- test de verbinding tussen deze
+ * twee bevestigd-goede gebieden RECHTSTREEKS, Volendam wordt hier overgeslagen.
  */
 
 import { useState } from "react";
@@ -24,12 +24,14 @@ type DirectRouteResult = {
 };
 
 export default function DirectRoutePage() {
-  const [fromNodeId, setFromNodeId] = useState("7fmSWIHYsKu3Wb3yOtM2"); // Volendam-kant, uit de eerdere diagnose
+  const [fromNodeId, setFromNodeId] = useState("");
   const [toNodeId, setToNodeId] = useState("");
-  const [fromDisplay, setFromDisplay] = useState("");
+  const [fromDisplay, setFromDisplay] = useState("60");
   const [toDisplay, setToDisplay] = useState("36");
-  const [nearLat, setNearLat] = useState("52.23159");
-  const [nearLon, setNearLon] = useState("5.17349");
+  const [nearFromLat, setNearFromLat] = useState("52.3844"); // Schellingwoude/Amsterdam-Noord
+  const [nearFromLon, setNearFromLon] = useState("4.9661");
+  const [nearToLat, setNearToLat] = useState("52.23159"); // Hilversum
+  const [nearToLon, setNearToLon] = useState("5.17349");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DirectRouteResult | null>(null);
@@ -44,9 +46,13 @@ export default function DirectRoutePage() {
       else if (fromDisplay.trim()) body.fromDisplayNumber = fromDisplay.trim();
       if (toNodeId.trim()) body.toNodeId = toNodeId.trim();
       else if (toDisplay.trim()) body.toDisplayNumber = toDisplay.trim();
-      if (nearLat.trim() && nearLon.trim()) {
-        body.nearLat = parseFloat(nearLat);
-        body.nearLon = parseFloat(nearLon);
+      if (nearFromLat.trim() && nearFromLon.trim()) {
+        body.nearFromLat = parseFloat(nearFromLat);
+        body.nearFromLon = parseFloat(nearFromLon);
+      }
+      if (nearToLat.trim() && nearToLon.trim()) {
+        body.nearToLat = parseFloat(nearToLat);
+        body.nearToLon = parseFloat(nearToLon);
       }
 
       const res = await fetch("/api/debug/direct-route", {
@@ -70,21 +76,24 @@ export default function DirectRoutePage() {
   return (
     <div style={{ padding: 20, fontFamily: "sans-serif" }}>
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>Directe node-naar-node-test</h1>
-
-      <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 8 }}>Van: exact ID (leeg = gebruik weergavenummer eronder)</p>
-      <input value={fromNodeId} onChange={(e) => setFromNodeId(e.target.value)} placeholder="Exact van-ID" style={{ width: "100%", padding: 8, fontSize: 14, fontFamily: "monospace", marginBottom: 8, boxSizing: "border-box" }} />
-      <input value={fromDisplay} onChange={(e) => setFromDisplay(e.target.value)} placeholder="Of: van weergavenummer" style={{ width: "100%", padding: 8, fontSize: 16, marginBottom: 16, boxSizing: "border-box" }} />
-
-      <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 8 }}>Naar: exact ID (leeg = gebruik weergavenummer eronder)</p>
-      <input value={toNodeId} onChange={(e) => setToNodeId(e.target.value)} placeholder="Exact naar-ID" style={{ width: "100%", padding: 8, fontSize: 14, fontFamily: "monospace", marginBottom: 8, boxSizing: "border-box" }} />
-      <input value={toDisplay} onChange={(e) => setToDisplay(e.target.value)} placeholder="Of: naar weergavenummer" style={{ width: "100%", padding: 8, fontSize: 16, marginBottom: 16, boxSizing: "border-box" }} />
-
-      <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 8 }}>
-        Bij een weergavenummer: kies het treffer dichtst bij dit punt (leeg = eerste treffer, willekeurig)
+      <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>
+        Vooraf ingevuld: knooppunt 60 bij Amsterdam-Noord → knooppunt 36 bij Hilversum (test rechtstreeks tussen twee al bevestigd-goede gebieden).
       </p>
+
+      <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Van: exact ID (leeg = weergavenummer + referentiepunt eronder)</p>
+      <input value={fromNodeId} onChange={(e) => setFromNodeId(e.target.value)} placeholder="Exact van-ID" style={{ width: "100%", padding: 8, fontSize: 14, fontFamily: "monospace", marginBottom: 4, boxSizing: "border-box" }} />
+      <input value={fromDisplay} onChange={(e) => setFromDisplay(e.target.value)} placeholder="Van weergavenummer" style={{ width: "100%", padding: 8, fontSize: 16, marginBottom: 4, boxSizing: "border-box" }} />
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input value={nearLat} onChange={(e) => setNearLat(e.target.value)} placeholder="Referentie-lat" style={{ flex: 1, padding: 8, fontSize: 16 }} />
-        <input value={nearLon} onChange={(e) => setNearLon(e.target.value)} placeholder="Referentie-lon" style={{ flex: 1, padding: 8, fontSize: 16 }} />
+        <input value={nearFromLat} onChange={(e) => setNearFromLat(e.target.value)} placeholder="Herkomst-referentie lat" style={{ flex: 1, padding: 8, fontSize: 14 }} />
+        <input value={nearFromLon} onChange={(e) => setNearFromLon(e.target.value)} placeholder="Herkomst-referentie lon" style={{ flex: 1, padding: 8, fontSize: 14 }} />
+      </div>
+
+      <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Naar: exact ID (leeg = weergavenummer + referentiepunt eronder)</p>
+      <input value={toNodeId} onChange={(e) => setToNodeId(e.target.value)} placeholder="Exact naar-ID" style={{ width: "100%", padding: 8, fontSize: 14, fontFamily: "monospace", marginBottom: 4, boxSizing: "border-box" }} />
+      <input value={toDisplay} onChange={(e) => setToDisplay(e.target.value)} placeholder="Naar weergavenummer" style={{ width: "100%", padding: 8, fontSize: 16, marginBottom: 4, boxSizing: "border-box" }} />
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <input value={nearToLat} onChange={(e) => setNearToLat(e.target.value)} placeholder="Bestemming-referentie lat" style={{ flex: 1, padding: 8, fontSize: 14 }} />
+        <input value={nearToLon} onChange={(e) => setNearToLon(e.target.value)} placeholder="Bestemming-referentie lon" style={{ flex: 1, padding: 8, fontSize: 14 }} />
       </div>
 
       <button onClick={test} disabled={loading} style={{ width: "100%", padding: 12, fontSize: 16, background: "#085041", color: "white", border: "none", borderRadius: 8 }}>

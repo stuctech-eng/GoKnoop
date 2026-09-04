@@ -2672,3 +2672,19 @@ niet correct is meegenomen bij de oorspronkelijke import, Fase 1 van dit project
   geïmporteerde data.
 
 437/437 tests, `tsc` schoon (ongewijzigd sinds de laatste code-aanpassing in dit traject).
+
+### 9.58 Gat verder inperken: test rechtstreeks tussen Amsterdam-Noord en Hilversum (30-8-2026)
+
+Vervolg op sectie 9.57's bevestigde bevinding. Om het gat verder te lokaliseren: testtool
+uitgebreid met APARTE referentiepunten voor herkomst en bestemming (`nearFromLat`/
+`nearFromLon` vs. `nearToLat`/`nearToLon` -- de eerdere versie had maar één gedeeld
+referentiepunt, onvoldoende voor twee ver uit elkaar liggende gebieden).
+
+**Vooraf ingevulde vervolgtest**: knooppunt "60" bij Amsterdam-Noord/Schellingwoude
+(52,3844 / 4,9661, opgezocht -- coördinaten al eerder bevestigd bereikbaar vanaf Volendam) →
+knooppunt "36" bij Hilversum (52,23159 / 5,17349, al bekend). Test de verbinding tussen deze
+TWEE al bevestigd-goede gebieden rechtstreeks, Volendam wordt hierbij overgeslagen -- als dit
+ook honderden kilometers oplevert, zit het gat specifiek tussen Amsterdam en het Gooi, een
+veel kleiner gebied om verder te onderzoeken.
+
+437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
