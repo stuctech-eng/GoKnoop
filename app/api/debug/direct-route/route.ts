@@ -9,14 +9,15 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/debug/direct-route
  * Body: { fromDisplayNumber, toDisplayNumber }
- * Response: { attempts: {fromNodeId, toNodeId, result: "ok"|"failed", distanceM?, reason?}[] }
+ * Response: { attempts: {fromNodeId, toNodeId, result: "ok"|"failed", distanceM?, reason?}[], computeTimeMs }
  *
  * Diagnose-tool (30-8-2026, "Hilversum doet een omweg", sectie 9.52) -- test DIRECT tussen
- * twee weergavenummers, ZONDER geocoding of kandidaat-selectie ertussen. Zoekt ALLE
- * knooppunten die het gevraagde weergavenummer hebben (er kunnen duplicaten zijn, al eerder
- * gezien bij "98"/"98" rond Volendam) en probeert ELKE combinatie -- geeft een definitief
- * antwoord of er een goede, korte verbinding bestaat tussen deze twee specifieke gebieden,
- * los van welke kandidaat een zoekopdracht toevallig zou kiezen.
+ * twee weergavenummers, ZONDER geocoding of kandidaat-selectie ertussen. Zoekt knooppunten
+ * die het gevraagde weergavenummer hebben (er kunnen duplicaten zijn, al eerder gezien bij
+ * "98"/"98" rond Volendam) en test de EERSTE combinatie -- ÉÉN per aanvraag (sectie 9.54:
+ * meerdere combinaties tegelijk testen kan zelf traag genoeg zijn om tegen Vercel Hobby's
+ * 10s-limiet aan te lopen, als er geen verbinding bestaat en Dijkstra het hele bereikbare
+ * netwerkdeel moet doorzoeken). `computeTimeMs` laat zien of de berekening zelf traag was.
  */
 export async function POST(req: NextRequest) {
   let body: { fromDisplayNumber?: string; toDisplayNumber?: string };
@@ -51,19 +52,25 @@ export async function POST(req: NextRequest) {
       }, { status: 404 });
     }
 
+    // BUGFIX (30-8-2026, "Er ging iets mis" bij het testen): een NIET-bestaande verbinding kan
+    // Dijkstra dwingen het HELE bereikbare netwerkdeel te doorzoeken voordat "geen route"
+    // geconcludeerd wordt -- mogelijk traag genoeg om zelf tegen Vercel Hobby's 10s-limiet aan
+    // te lopen (ironisch: het diagnose-tool zou dan precies vastlopen op het probleem dat het
+    // probeert te bewijzen). Daarom: ÉÉN combinatie per aanvraag, niet alle tegelijk -- de
+    // client kan meerdere aanvragen doen als er duplicaten zijn.
+    const fromNodeId = fromNodeIds[0];
+    const toNodeId = toNodeIds[0];
     const attempts: { fromNodeId: string; toNodeId: string; result: "ok" | "failed"; distanceM?: number; reason?: string }[] = [];
-    for (const fromNodeId of fromNodeIds) {
-      for (const toNodeId of toNodeIds) {
-        const result = computeRoute(provider, datasetVersionId, fromNodeId, toNodeId);
-        if ("reason" in result) {
-          attempts.push({ fromNodeId, toNodeId, result: "failed", reason: result.reason });
-        } else {
-          attempts.push({ fromNodeId, toNodeId, result: "ok", distanceM: result.distanceM });
-        }
-      }
+    const t0 = Date.now();
+    const result = computeRoute(provider, datasetVersionId, fromNodeId, toNodeId);
+    const computeTimeMs = Date.now() - t0;
+    if ("reason" in result) {
+      attempts.push({ fromNodeId, toNodeId, result: "failed", reason: result.reason });
+    } else {
+      attempts.push({ fromNodeId, toNodeId, result: "ok", distanceM: result.distanceM });
     }
 
-    return NextResponse.json({ attempts, fromNodeIdsFound: fromNodeIds.length, toNodeIdsFound: toNodeIds.length });
+    return NextResponse.json({ attempts, fromNodeIdsFound: fromNodeIds.length, toNodeIdsFound: toNodeIds.length, computeTimeMs });
   } catch (err) {
     return NextResponse.json(
       { error: "Diagnose mislukt.", details: err instanceof Error ? err.message : String(err) },

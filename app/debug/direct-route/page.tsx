@@ -15,7 +15,7 @@ export default function DirectRoutePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempts, setAttempts] = useState<Attempt[] | null>(null);
-  const [counts, setCounts] = useState<{ fromNodeIdsFound: number; toNodeIdsFound: number } | null>(null);
+  const [counts, setCounts] = useState<{ fromNodeIdsFound: number; toNodeIdsFound: number; computeTimeMs: number } | null>(null);
 
   async function test() {
     setLoading(true);
@@ -33,7 +33,7 @@ export default function DirectRoutePage() {
         return;
       }
       setAttempts(data.attempts);
-      setCounts({ fromNodeIdsFound: data.fromNodeIdsFound, toNodeIdsFound: data.toNodeIdsFound });
+      setCounts({ fromNodeIdsFound: data.fromNodeIdsFound, toNodeIdsFound: data.toNodeIdsFound, computeTimeMs: data.computeTimeMs });
     } catch {
       setError("Er ging iets mis.");
     } finally {
@@ -57,6 +57,8 @@ export default function DirectRoutePage() {
       {counts && (
         <p style={{ marginTop: 16, fontSize: 14 }}>
           {counts.fromNodeIdsFound} knooppunt(en) gevonden met nummer &quot;{from}&quot;, {counts.toNodeIdsFound} met nummer &quot;{to}&quot;.
+          <br />
+          Rekentijd: {counts.computeTimeMs}ms
         </p>
       )}
 

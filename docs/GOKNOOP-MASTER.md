@@ -2538,3 +2538,19 @@ knooppuntnummers (60 bij Amsterdam, 36 bij Hilversum) die de gebruiker al aanlev
 
 Geen wijziging aan `lib/route-engine/`'s kern. 437/437 tests ongewijzigd (puur diagnostisch
 debug-endpoint, geen nieuwe pure logica die apart getest hoeft te worden).
+
+### 9.54 Diagnosetool zelf gefixt: één combinatie per keer, met rekentijd zichtbaar (30-8-2026)
+
+**Gemeld**: het nieuwe `/debug/direct-route`-tool zelf gaf "Er ging iets mis" bij het testen
+van knooppunt 60 → 36. **Ironische, plausibele verklaring**: als er tussen deze twee
+knooppunten GEEN verbinding bestaat (precies wat we proberen te bewijzen), moet Dijkstra het
+hele bereikbare netwerkdeel doorzoeken voordat "geen route" geconcludeerd wordt -- dat kan
+zelf traag genoeg zijn om tegen Vercel Hobby's 10s-limiet aan te lopen, zeker bij meerdere
+combinaties (duplicaten) na elkaar in dezelfde aanvraag.
+
+**Fix**: test nu ÉÉN combinatie per aanvraag i.p.v. alle mogelijke combinaties tegelijk, en
+toont expliciet de rekentijd (`computeTimeMs`) -- dat laat direct zien of de Dijkstra-
+berekening zelf traag was (bevestigt de timeout-hypothese) of snel faalde (wijst dan op iets
+anders).
+
+437/437 tests ongewijzigd, `tsc` schoon.
