@@ -2911,3 +2911,26 @@ tegelijk getest worden.
 
 Geen wijziging aan `lib/route-engine/`'s kern -- puur een nieuw, dun diagnose-endpoint eromheen.
 437/437 tests ongewijzigd, `tsc` schoon.
+
+### 9.68 Scherpe isolatie: knooppunt 5 lijkt een "eiland", los van het grote netwerk (30-8-2026)
+
+**Batch-diagnose resultaat (Amsterdam Centraal → Hilversum, 5 kandidaten elk)**: een
+opvallend, scherp verschil. Knooppunt 56 (ook vlak bij Amsterdam Centraal) heeft een
+VOLKOMEN NORMALE verbinding naar alle 5 Hilversum-kandidaten (~54-56 km, ×2,4-2,5, 29-33
+hops). Maar knooppunt 5, 60 en 61 (ook allemaal vlak bij Amsterdam Centraal) hebben stuk
+voor stuk de BEKENDE slechte verbinding (~364-368 km, ×14, ~200 hops) -- inclusief knooppunt
+5 zelf, waar de patch van sectie 9.64 juist naartoe liep.
+
+**Nieuwe, scherpere hypothese**: knooppunt 5 (en mogelijk 60/61) is zelf een soort "eiland" --
+wél verbonden naar het noorden (via de pontje-patch naar knooppunt 61), maar NIET goed
+verbonden naar het zuiden/oosten, richting de rest van het grote, goed verbonden
+Amsterdam-netwerk (waar knooppunt 56 wél deel van uitmaakt). De patch loste dus de
+NOORDELIJKE kant van het eiland op, maar er ontbreekt kennelijk ook een verbinding aan de
+ANDERE kant van hetzelfde eiland.
+
+**Testtool ingesteld** om dit direct te bevestigen: knooppunt 5 (exact ID) → knooppunt 56
+(gezocht via weergavenummer + Amsterdam Centraal als referentiepunt, om de juiste "56"
+dichtbij te treffen, niet een willekeurige elders in Nederland). Als DIT ook een grote omweg
+of disconnected geeft, is de eiland-hypothese bevestigd.
+
+437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.

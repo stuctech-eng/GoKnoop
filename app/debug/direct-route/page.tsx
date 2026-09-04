@@ -31,13 +31,13 @@ type DirectRouteResult = {
 
 export default function DirectRoutePage() {
   const [fromNodeId, setFromNodeId] = useState("CJSXBPUMG49vOPmYvhJd"); // Knooppunt 5, Amsterdam Centraal
-  const [toNodeId, setToNodeId] = useState("ZYuO6ZfzSa2iim0HcUbn"); // Knooppunt 55, echte bestemmingskandidaat uit de Hilversum-test
+  const [toNodeId, setToNodeId] = useState("");
   const [fromDisplay, setFromDisplay] = useState("");
-  const [toDisplay, setToDisplay] = useState("");
+  const [toDisplay, setToDisplay] = useState("56");
   const [nearFromLat, setNearFromLat] = useState("");
   const [nearFromLon, setNearFromLon] = useState("");
-  const [nearToLat, setNearToLat] = useState("");
-  const [nearToLon, setNearToLon] = useState("5.17349");
+  const [nearToLat, setNearToLat] = useState("52.37833"); // Amsterdam Centraal
+  const [nearToLon, setNearToLon] = useState("4.90000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DirectRouteResult | null>(null);
@@ -83,7 +83,7 @@ export default function DirectRoutePage() {
     <div style={{ padding: 20, fontFamily: "sans-serif" }}>
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>Directe node-naar-node-test</h1>
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>
-        Vooraf ingevuld: knooppunt 5, Amsterdam Centraal (gepatchte kant, bevestigd goed vanaf Volendam) → knooppunt 55, de echte Hilversum-bestemmingskandidaat. Test het laatste, resterende stuk.
+        Vooraf ingevuld: knooppunt 5 (waar de patch naartoe liep) → knooppunt 56 (vlak ernaast, wél goed verbonden naar Hilversum). Test of knooppunt 5 zelf een eiland is, los van het grote netwerk.
       </p>
 
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Van: exact ID (leeg = weergavenummer + referentiepunt eronder)</p>
