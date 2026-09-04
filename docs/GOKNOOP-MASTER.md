@@ -2776,3 +2776,42 @@ oorspronkelijke hoofdfunctie van de app) raakt bij zoekopdrachten in dit gebied 
 dan eerder gedacht.
 
 437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
+
+### 9.63 DEFINITIEVE BEVINDING: pontje-oversteek ontbreekt in de graafdata — waarschijnlijk bredere categorie (bruggen/veerdiensten) (30-8-2026)
+
+**Twee aparte, bevestigde bevindingen die samen de kern vormen:**
+
+1. **Directe test bij de oversteek zelf**: Buiksloterweg (noordkant IJ, bij het bekende
+   voetgangers-/fietspontje naar Amsterdam Centraal) → Amsterdam Centraal (zuidkant IJ, 1,6 km
+   hemelsbreed) geeft **`disconnected`** -- niet "een lange omweg", maar LETTERLIJK geen enkel
+   pad, hoe lang ook. Dit is de meest precieze aanwijzing van de hele sessie: een harde knip in
+   de graafdata, exact bij de pontje-locatie.
+
+2. **Bevestiging dat dit de kandidaat-keuze bij Hilversum verklaart**: knooppunt 45 (door de
+   gebruiker verwacht als startpunt voor een rondje bij Hilversum) bleek HETZELFDE
+   omweg-probleem te hebben als knooppunt 53 (wél gekozen door de rondje-generator) -- 42,7 km
+   hemelsbreed, 329,1 km netwerk, 175 hops. De rondje-generator koos dus GEEN slechte
+   kandidaat; beide beschikbare kandidaten zaten al vast in hetzelfde onderliggende gat.
+
+**Waarschijnlijke, bredere oorzaak (op verzoek expliciet vastgelegd)**: dit is vermoedelijk
+geen incident beperkt tot dit ene pontje, maar een SYSTEMATISCH patroon bij een hele
+categorie oversteek-infrastructuur -- **bruggen, pontjes, veerdiensten**. Dit soort
+verbindingen wordt in OpenStreetMap vaak anders getagd dan een gewoon fietspad (bijv. als
+`route=ferry` in plaats van een reguliere `highway`-tag, of met een aparte
+toegankelijkheids-/dienstregelingstag) -- als de oorspronkelijke import (Fase 1) dit soort
+tags niet herkende/meenam, zou dat een STRUCTUREEL, herhaalbaar patroon zijn, niet een
+eenmalige fout.
+
+**Voor de volgende sessie, samengevat**:
+- Kern van het probleem: bruggen/pontjes/veerdiensten ontbreken mogelijk systematisch in de
+  geïmporteerde graafdata (niet alleen dit ene pontje bij Amsterdam-Noord).
+- Concreet, bevestigd voorbeeld om mee te beginnen: de pontje-oversteek Buiksloterweg ↔
+  Amsterdam Centraal (52,3860/4,9115 ↔ 52,37833/4,90000) -- volledig disconnected.
+- Onderzoek: hoe zijn `route=ferry`-achtige OSM-tags behandeld tijdens de oorspronkelijke
+  import? Zijn er nog meer bekende pontje-/brugoversteken in het gebied die hetzelfde patroon
+  vertonen (bijv. andere IJ-veren, andere waterwegen)?
+- De bestaande diagnosetools (`/debug/direct-route`, met exacte node-ID's, weergavenummer +
+  referentiepunt, of dichtstbijzijnde-knooppunt-modus) zijn klaar voor gebruik om verdere
+  vermoedelijke oversteken te verifiëren.
+
+437/437 tests, `tsc` schoon (ongewijzigd sinds de laatste code-aanpassing in dit traject).
