@@ -2296,3 +2296,27 @@ oorzaken tegelijk spelen. Blijven doorvragen/verifiëren (Vercel-logs) i.p.v. aa
 eerste fix voldoende was, bracht de tweede, onderliggende oorzaak alsnog aan het licht.
 
 422/422 tests ongewijzigd, `tsc` schoon.
+
+### 9.45 "Geen parkeerplaatsen" bij Hilversum — diagnostische toevoeging (30-8-2026)
+
+**Status: nog niet definitief opgelost, wél de timeout-fout (sectie 9.44) bevestigd verholpen**
+-- de gebruiker meldde nu "geen parkeerplaatsen" (0 resultaten) i.p.v. een fout. Voor een stad
+als Hilversum is 0 resultaten binnen 1500m verdacht (OSM heeft daar gegarandeerd
+parkeerplaatsen) -- wijst eerder op een verwerkingsfout dan op echt ontbrekende data.
+
+**Query-vorm opnieuw geverifieerd** via meerdere onafhankelijke, echte, werkende voorbeelden
+(niet alleen de eerste keer) -- de gebruikte `[out:json]` + `nwr[...](around:...)` +
+`out center N` -vorm en de bijbehorende JSON-structuur (`elements[].center` voor
+ways/relations) blijken correct. Belangrijke kanttekening: de eigen tests (sectie 9.42)
+gebruikten een NAGEMAAKTE respons (gemockte `fetch`) -- die bewijzen dat de EIGEN
+verwerkingslogica correct is gegeven een bepaalde input, maar bewijzen niet dat de aanname
+over de ECHTE Overpass-respons klopt. Nog niet live tegen de daadwerkelijke API getest (kan
+niet vanuit deze sandbox, netwerkbeperking).
+
+**Tijdelijke diagnostische toevoeging** (geen definitieve fix, bewust zo genoemd): de
+zoekopdracht toont nu de daadwerkelijk geocodede coördinaten + plaatsnaam ("Gezocht bij: ...")
+onder de knop -- zodat direct zichtbaar is of het probleem zit in de GEOCODING (verkeerde
+coördinaten) of in de PARKEERPLAATS-ZOEKOPDRACHT zelf (juiste coördinaten, maar toch niets
+gevonden). Nodig om de volgende diagnosestap gericht te kunnen zetten i.p.v. verder te gokken.
+
+422/422 tests ongewijzigd, `tsc` schoon.

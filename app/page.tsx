@@ -221,6 +221,9 @@ export default function Home() {
   const [routeToDestinationLoading, setRouteToDestinationLoading] = useState(false);
   /** Parkeerplaats-zoekfunctie (sectie 9.42, 30-8-2026). */
   const [parkingOptions, setParkingOptions] = useState<{ name: string | null; lat: number; lon: number; distanceM: number }[] | null>(null);
+  /** Tijdelijk diagnostisch (30-8-2026, "geen parkeerplaatsen" bij Hilversum -- om te zien of
+   *  de geocodede coördinaten kloppen, zonder verder te gokken). */
+  const [parkingDebugInfo, setParkingDebugInfo] = useState<{ displayName: string; lat: number; lon: number } | null>(null);
   const [parkingLoading, setParkingLoading] = useState(false);
   const [startLocation, setStartLocation] = useState<LocationCandidate | null>(null);
   const [locationCandidates, setLocationCandidates] = useState<LocationCandidate[]>([]);
@@ -632,6 +635,7 @@ export default function Home() {
         setStep("error");
         return;
       }
+      setParkingDebugInfo({ displayName: destData.displayName ?? destinationInput, lat: destData.lat, lon: destData.lon });
 
       const parkingRes = await fetch("/api/places/parking", {
         method: "POST",
@@ -944,6 +948,12 @@ export default function Home() {
                 >
                   {parkingLoading ? "Zoeken..." : "🅿️ Toon parkeerplaatsen bij dit adres"}
                 </button>
+
+                {parkingDebugInfo && (
+                  <p style={{ fontSize: 12, opacity: 0.55, marginTop: 8 }}>
+                    Gezocht bij: {parkingDebugInfo.displayName} ({parkingDebugInfo.lat.toFixed(5)}, {parkingDebugInfo.lon.toFixed(5)})
+                  </p>
+                )}
 
                 {parkingOptions && (
                   <div style={{ marginTop: 12 }}>
