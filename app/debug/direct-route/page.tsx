@@ -30,13 +30,13 @@ type DirectRouteResult = {
 };
 
 export default function DirectRoutePage() {
-  const [fromNodeId, setFromNodeId] = useState("CJSXBPUMG49vOPmYvhJd"); // Knooppunt 5, Amsterdam Centraal
+  const [fromNodeId, setFromNodeId] = useState("");
   const [toNodeId, setToNodeId] = useState("");
   const [fromDisplay, setFromDisplay] = useState("");
-  const [toDisplay, setToDisplay] = useState("56");
-  const [nearFromLat, setNearFromLat] = useState("");
-  const [nearFromLon, setNearFromLon] = useState("");
-  const [nearToLat, setNearToLat] = useState("52.37833"); // Amsterdam Centraal
+  const [toDisplay, setToDisplay] = useState("");
+  const [nearFromLat, setNearFromLat] = useState("52.3875"); // IJplein, noordkant IJ (F2-pontje)
+  const [nearFromLon, setNearFromLon] = useState("4.9080");
+  const [nearToLat, setNearToLat] = useState("52.37833"); // Amsterdam Centraal, zuidkant
   const [nearToLon, setNearToLon] = useState("4.90000");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +83,7 @@ export default function DirectRoutePage() {
     <div style={{ padding: 20, fontFamily: "sans-serif" }}>
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>Directe node-naar-node-test</h1>
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>
-        Vooraf ingevuld: knooppunt 5 (waar de patch naartoe liep) → knooppunt 56 (vlak ernaast, wél goed verbonden naar Hilversum). Test of knooppunt 5 zelf een eiland is, los van het grote netwerk.
+        Vooraf ingevuld: IJplein (noordkant IJ, officiële F2-pontverbinding) → Amsterdam Centraal (zuidkant). Test of ook déze pontje-oversteek ontbreekt in de data, net als Buiksloterweg.
       </p>
 
       <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Van: exact ID (leeg = weergavenummer + referentiepunt eronder)</p>
