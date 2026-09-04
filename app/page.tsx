@@ -226,6 +226,20 @@ export default function Home() {
   /** Tijdelijk diagnostisch (30-8-2026, "geen parkeerplaatsen" bij Hilversum -- om te zien of
    *  de geocodede coördinaten kloppen, zonder verder te gokken). */
   const [parkingDebugInfo, setParkingDebugInfo] = useState<{ displayName: string; lat: number; lon: number } | null>(null);
+  /** Tijdelijk diagnostisch (30-8-2026, "Hilversum doet een omweg" -- om te zien of de
+   *  geocoding en kandidaat-selectie zelf kloppen, zonder verder te gokken). */
+  const [routeDebugInfo, setRouteDebugInfo] = useState<{
+    geocodedAs: string;
+    geocodedLat: number;
+    geocodedLon: number;
+    selectedDestinationNodeId: string;
+    selectedDestinationNodeDisplayNumber: string;
+    selectedDestinationCandidateRank: number;
+    selectedStartNodeId: string;
+    selectedStartNodeDisplayNumber: string;
+    selectedCandidateRank: number;
+    totalDistanceM: number;
+  } | null>(null);
   const [parkingLoading, setParkingLoading] = useState(false);
   const [startLocation, setStartLocation] = useState<LocationCandidate | null>(null);
   const [locationCandidates, setLocationCandidates] = useState<LocationCandidate[]>([]);
@@ -580,6 +594,26 @@ export default function Home() {
             setStep("error");
             return;
           }
+
+          setRouteDebugInfo({
+            geocodedAs: destData.geocodedAs ?? destinationInput,
+            geocodedLat: destData.geocodedLat,
+            geocodedLon: destData.geocodedLon,
+            selectedDestinationNodeId: routeData.knotLeg.selectedDestinationNodeId,
+            selectedDestinationNodeDisplayNumber: routeData.knotLeg.selectedDestinationNodeDisplayNumber,
+            selectedDestinationCandidateRank: routeData.knotLeg.selectedDestinationCandidateRank,
+            selectedStartNodeId: routeData.knotLeg.selectedStartNodeId,
+            selectedStartNodeDisplayNumber: routeData.knotLeg.selectedStartNodeDisplayNumber,
+            selectedCandidateRank: routeData.knotLeg.selectedCandidateRank,
+            totalDistanceM: routeData.knotLeg.route.distanceM,
+          });
+
+          // Tijdelijk, puur diagnostisch (30-8-2026, "Hilversum doet een omweg") -- blokkerende
+          // melding zodat dit gegarandeerd zichtbaar is vóórdat het navigatiescherm het
+          // overneemt, zonder een heel nieuw tussenscherm te bouwen voor iets tijdelijks.
+          alert(
+            `Diagnose:\nGezocht: ${destData.geocodedAs ?? destinationInput}\nGeocoded: ${destData.geocodedLat.toFixed(5)}, ${destData.geocodedLon.toFixed(5)}\nStart: knooppunt ${routeData.knotLeg.selectedStartNodeDisplayNumber} (kandidaat #${routeData.knotLeg.selectedCandidateRank})\nBestemming: knooppunt ${routeData.knotLeg.selectedDestinationNodeDisplayNumber} (kandidaat #${routeData.knotLeg.selectedDestinationCandidateRank})\nTotale afstand: ${(routeData.knotLeg.route.distanceM / 1000).toFixed(1)} km`
+          );
 
           setActiveBackToStartRoute({
             edges: routeData.knotLeg.resolvedEdges,

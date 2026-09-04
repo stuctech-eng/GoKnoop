@@ -2497,3 +2497,26 @@ pas daarna geprobeerd maar veel korter (100m) -- bevestigd dat nu B gekozen word
 
 Geen wijziging aan de kern van `lib/route-engine/` (Dijkstra zelf). 437/437 tests (436 + 1
 nieuw), `tsc` schoon.
+
+### 9.52 "Hilversum doet een omweg" — diagnostische toevoeging (30-8-2026)
+
+**Status: nog niet opgelost.** Ná twee bevestigde, terechte fixes aan de kandidaat-
+selectielogica (sectie 9.50/9.51) blijft exact dezelfde omweg-route optreden voor Volendam/
+Edam-gebied → Hilversum -- terwijl een vergelijkbare zoekopdracht naar Amsterdam WEL een
+nette, directe route opleverde (bevestigd door de gebruiker met een screenshot). Dit wijst
+erop dat het probleem niet generiek in de Dijkstra/kandidaat-logica zit (die werkt aantoonbaar
+correct voor Amsterdam), maar mogelijk specifiek is voor het gebied rond Hilversum -- bijv.
+een gat in de knooppunten-brondata tussen Amsterdam-Noord en Hilversum (rond IJmeer/Naarden),
+of een verkeerde geocoding van "Hilversum" zelf.
+
+**Onderzocht en uitgesloten**: geen ridden-routes-vermijd-logica actief in dit endpoint
+(bevestigd, `/api/route/to-destination` bevat geen enkele verwijzing naar avoid-constraints of
+gereden-routes-geschiedenis) -- dat was een geopperde hypothese, maar niet de oorzaak.
+
+**Tijdelijke diagnostische toevoeging**: vlak vóór het starten van de navigatie toont de app nu
+een blokkerende melding met: de geocodede coördinaten van de bestemming, welk startknooppunt
+en welk bestemmingsknooppunt daadwerkelijk gekozen zijn (incl. hun kandidaat-rangnummer), en
+de totale afstand. Puur om te zien of de geocoding/kandidaat-keuze zelf ergens vreemd uitpakt
+-- geen permanente UX-toevoeging, makkelijk weer te verwijderen zodra de oorzaak gevonden is.
+
+437/437 tests ongewijzigd, `tsc` schoon.
