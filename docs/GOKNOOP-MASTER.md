@@ -2934,3 +2934,23 @@ dichtbij te treffen, niet een willekeurige elders in Nederland). Als DIT ook een
 of disconnected geeft, is de eiland-hypothese bevestigd.
 
 437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
+COMPSIZEEOF
+cat >> /home/claude/GOKNOOP-MASTER.md << 'CSEOF'
+
+### 9.69 Nog extremer bevestigd: knooppunt 5 → 56 is 3,6 km hemelsbreed maar 409,9 km netwerk (30-8-2026)
+
+De vernieuwde testpagina (`/debug/island-test`, om een hardnekkig cacheprobleem te omzeilen)
+bevestigde: knooppunt 5 → knooppunt 56, slechts 3,6 km uit elkaar, geeft 409,9 km via het
+netwerk (214 hops) -- nog extremer dan de eerdere Hilversum-bevindingen. Dit bevestigt sterk
+dat knooppunt 5 een geïsoleerd "eiland" is, los van het grote netwerk.
+
+**Nieuw, fundamenteler diagnosetool gebouwd** i.p.v. losse afstandstests te blijven stapelen:
+- `POST /api/debug/component-size` -- doet een breedte-eerst-zoektocht (BFS) vanaf een
+  opgegeven knooppunt en telt hoeveel andere knooppunten daadwerkelijk bereikbaar zijn,
+  ongeacht afstand. Direct antwoord op "is dit een klein, geïsoleerd eiland?" i.p.v. dat af
+  te leiden uit steeds meer losse paar-tests.
+- `/debug/component-size` -- bedieningsscherm, vooraf ingesteld op knooppunt 5.
+
+437/437 tests ongewijzigd, `tsc` schoon. Nog niet uitgevoerd/bevestigd.
+CSEOF
+echo toegevoegd
