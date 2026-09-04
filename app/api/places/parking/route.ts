@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { PlacesFinder } from "@/lib/places/places-finder";
 import { OverpassPlacesAdapter } from "@/lib/places/overpass-places-adapter";
 
-export const maxDuration = 20;
+export const maxDuration = 10; // BUGFIX 30-8-2026: Vercel Hobby-plan kapt hoe dan ook af bij 10s, ongeacht wat hier stond -- gecorrigeerd naar de echte limiet.
 export const dynamic = "force-dynamic";
 
 /**

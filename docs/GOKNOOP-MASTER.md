@@ -2229,3 +2229,36 @@ latere Ritdagboek, sectie 9.19/9.23)**: geen restaurants/terrassen/koffie -- uit
 parkeerplaatsen, zoals afgesproken.
 
 Geen wijziging aan `lib/route-engine/`. 422/422 tests (411 + 11 nieuw), `tsc` schoon.
+
+### 9.43 ECHTE BUG GEVONDEN: Overpass-timeout overschreed Vercel Hobby's echte 10s-limiet — ✅ GEFIXT (30-8-2026)
+
+**Gemeld probleem**: "de fetch faalde bij parkeerplaats Hilversum" (sectie 9.42's parkeer-
+functie, meteen bij de eerste echte test).
+
+**Root cause, bevestigd**: GoKnoop draait op Vercel's **Hobby-plan, met een HARDE limiet van
+10 seconden per serverfunctie** (al vastgelegd sinds het begin van dit project). De
+Overpass-query zelf vroeg om `[out:json][timeout:15]` -- dat overschrijdt de 10
+platformseconden al IN ZIJN EENTJE. De functie werd simpelweg afgebroken door Vercel vóórdat
+Overpass ooit kon antwoorden -- geen storing bij Overpass zelf (eerst overwogen, via
+webzoekopdracht bevestigd dat de publieke server soms wel degelijk beschikbaarheidsproblemen
+heeft gehad, maar dat bleek hier niet de daadwerkelijke oorzaak).
+
+**Fix, twee onderdelen:**
+1. Overpass-querytimeout verlaagd van `[timeout:15]` naar `[timeout:7]` -- ruim binnen de
+   10s-limiet, met marge voor het versturen/parsen van de respons.
+2. **Breder patroon ontdekt en rechtgezet**: bijna ELK endpoint in de codebase declareerde een
+   `maxDuration` die de echte 10s-limiet overschreed (15/20/30/60 -- stuk voor stuk
+   misleidend, ongeacht of ze daadwerkelijk tot een storing leidden). Allemaal gecorrigeerd
+   naar `maxDuration = 10`, met een duidelijke comment waarom.
+
+**Bewust NIET (nog) verder onderzocht**: of de interne logica van andere endpoints (bijv.
+`/api/route/suggest-name`'s twee sequentiële Nominatim-aanvragen met een pauze ertussen) ooit
+daadwerkelijk de 10s zou kunnen overschrijden -- geen bevestigd probleem daar, alleen de
+DECLARATIE was onjuist. Een aandachtspunt voor later, mocht daar ooit een vergelijkbare
+melding komen.
+
+**Geen automatische herprobeerpoging binnen de Overpass-aanroep zelf toegevoegd** (eerst wel
+overwogen) -- zou de 10s-limiet met een extra poging alsnog kunnen overschrijden. Een
+eventuele nieuwe poging gebeurt nu gewoon door opnieuw op de knop te tikken.
+
+422/422 tests ongewijzigd, `tsc` schoon.

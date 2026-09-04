@@ -4,7 +4,7 @@ import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { generateLoopRoutesWithScoring } from "@/lib/route-engine/start-node-scoring";
 import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
-export const maxDuration = 60;
+export const maxDuration = 10; // BUGFIX 30-8-2026: Vercel Hobby-plan kapt hoe dan ook af bij 10s, ongeacht wat hier stond -- gecorrigeerd naar de echte limiet.
 export const dynamic = "force-dynamic";
 
 /**

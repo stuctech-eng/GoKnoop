@@ -7,7 +7,7 @@ import { LocalBikeRouter } from "@/lib/local-bike-router/local-bike-router";
 import { OpenRouteServiceAdapter } from "@/lib/local-bike-router/open-route-service-adapter";
 import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
-export const maxDuration = 30;
+export const maxDuration = 10; // BUGFIX 30-8-2026: Vercel Hobby-plan kapt hoe dan ook af bij 10s, ongeacht wat hier stond -- gecorrigeerd naar de echte limiet.
 export const dynamic = "force-dynamic";
 
 /**

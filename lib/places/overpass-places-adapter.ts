@@ -38,7 +38,15 @@ type OverpassElement = {
 
 export class OverpassPlacesAdapter implements PlacesProvider {
   async findNearby(center: LatLon, category: "parking", radiusM: number, limit: number): Promise<PlaceResult[] | PlacesProviderError> {
-    const query = `[out:json][timeout:15];nwr["amenity"="${category}"](around:${radiusM},${center.lat},${center.lon});out center ${limit};`;
+    // BUGFIX (30-8-2026, "de fetch faalde"): de echte oorzaak bleek NIET een storing bij
+    // Overpass, maar een eigen fout -- GoKnoop draait op Vercel's Hobby-plan, met een HARDE
+    // limiet van 10 seconden per serverfunctie. De Overpass-query zelf vroeg om `[timeout:15]`
+    // -- dat overschrijdt die 10 seconden al in z'n eentje, de functie werd simpelweg
+    // afgebroken door het platform vóórdat Overpass ooit kon antwoorden. Verlaagd naar
+    // `[timeout:7]`, met marge voor het versturen/parsen van de respons binnen de 10s.
+    // GEEN herprobeerpoging binnen deze aanroep (zou de 10s-limiet alsnog overschrijden) --
+    // een eventuele nieuwe poging gebeurt door gewoon nog eens op de knop te tikken.
+    const query = `[out:json][timeout:7];nwr["amenity"="${category}"](around:${radiusM},${center.lat},${center.lon});out center ${limit};`;
 
     let res: Response;
     try {
@@ -48,7 +56,10 @@ export class OverpassPlacesAdapter implements PlacesProvider {
         body: `data=${encodeURIComponent(query)}`,
       });
     } catch (err) {
-      return { reason: "provider_error", message: err instanceof Error ? err.message : String(err) };
+      return {
+        reason: "provider_error",
+        message: `Kon de Overpass-server niet bereiken (${err instanceof Error ? err.message : String(err)}).`,
+      };
     }
 
     if (!res.ok) {
