@@ -25,6 +25,7 @@ function makeBridge(overrides: Partial<NetworkBridge> = {}): NetworkBridge {
   return {
     id: "ds1_A_B",
     datasetVersionId: "ds1",
+    scope: "strong",
     sourceNodeId: "A",
     targetNodeId: "B",
     distanceM: 1500,

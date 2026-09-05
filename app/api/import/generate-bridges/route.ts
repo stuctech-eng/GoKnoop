@@ -6,7 +6,7 @@ import { OpenRouteServiceAdapter } from "@/lib/local-bike-router/open-route-serv
 import type { NetworkBridge, NetworkBridgeValidationStatus, BridgeCandidate } from "@/lib/route-engine/network-bridge-types";
 import { classifyBridgeAttempt } from "@/lib/route-engine/bridge-validation-thresholds";
 
-export const maxDuration = 60;
+export const maxDuration = 10; // Vercel Hobby: HARDE 10s-limiet per functie, ongeacht wat hier staat (zie docs/HANDOFF.md sectie 3.1, GOKNOOP-MASTER.md 9.43-9.48). Batches zijn daarom tijdsbudget-bewust, niet call-count-bewust.
 
 /**
  * GET /api/import/generate-bridges — Network Bridge Layer-generator.
@@ -25,16 +25,33 @@ export const maxDuration = 60;
  *           (gechunkt, zelfde patroon als edgeMatchCache). Geen ORS-calls.
  *        |
  *   COMPUTE BATCHES (phase=compute-batch&scope=...&batchOffset=N)
- *        -> verwerkt een deterministische slice van de gecachete lijst,
- *           batchOffset MOET gelijk zijn aan het al-verwerkte aantal (geen
- *           gaten/sprongen mogelijk), batchSize hard begrensd op
- *           MAX_TOTAL_ORS_CALLS_PER_RUN. Herhaal totdat status "complete" is.
+ *        -> verwerkt een TIJDSBUDGET-bewuste slice van de gecachete lijst
+ *           (stopt ruim vóór de harde 10s-Vercel-Hobby-limiet, ongeacht hoe
+ *           groot de gevraagde batchSize was), batchOffset MOET gelijk zijn
+ *           aan het al-verwerkte aantal (geen gaten/sprongen mogelijk).
+ *           Herhaal totdat status "complete" is.
  *        |
  *   COMPLETE (status-veld in de cache, geen aparte phase)
  *        |
  *   WRITE (phase=write&scope=...)
  *        -> alleen toegestaan wanneer status "complete" is; persisteert alle
  *           resultaten (valid EN rejected, plan §8) naar networkBridges.
+ *
+ * RATE-LIMIT-INCIDENT (5-9-2026): de eerste volledige strong-scope-run (4002
+ * items) liep tegen ORS's rate limit aan (HTTP 429) na de eerste paar
+ * honderd calls, zonder retry/backoff/vertraging. Erger nog: de generator
+ * classificeerde `provider_error` (429/HTTP-fouten) ten onrechte hetzelfde
+ * als `no_route_found` (een ECHTE afwijzing) -- waardoor 4002 resultaten met
+ * overwegend `rejected_no_route` werden geschreven die grotendeels helemaal
+ * geen uitspraak deden over of er een fietsroute bestaat. Bevestigd doordat
+ * de 3 al-bekende, eerder 100%-valide Amsterdam-knopen plotseling ook
+ * `rejected_no_route`/429 gaven. Gerepareerd: `provider_error` krijgt een
+ * eigen status (`rejected_provider_error`, NOOIT een impliciete "geen
+ * route"-uitspraak), met retry+backoff vóórdat die status definitief wordt,
+ * plus een verplichte vertraging tussen ORS-calls, plus een tijdsbudget dat
+ * een batch veilig laat stoppen (i.p.v. de 10s-Vercel-limiet te riskeren).
+ * De eerder geschreven 4002 resultaten van vóór deze fix zijn NIET
+ * betrouwbaar en horen gewist te worden (phase=reset) vóór een nieuwe run.
  *
  * BELANGRIJK — bridges zijn DIRECTIONEEL (plan §2): de gecachete kandidatenlijst
  * bevat AL beide richtingen als aparte items (1 item = 1 ORS-call = 1
@@ -51,7 +68,12 @@ export const maxDuration = 60;
 // ---- Harde server-side caps (plan §17 — query-parameters kunnen deze alleen VERLAGEN, nooit verhogen) ----
 const MAX_CANDIDATES_PER_NODE_HARD_CAP = 3;
 const MAX_BRIDGE_CANDIDATE_RADIUS_M_HARD_CAP = 3000;
-const MAX_TOTAL_ORS_CALLS_PER_RUN = 200; // = max. directionele items per compute-batch-aanroep
+const MAX_TOTAL_ORS_CALLS_PER_RUN = 30; // bovengrens per aanvraag; het TIJDSBUDGET (hieronder) is meestal de echte begrenzer
+
+// ---- Vercel Hobby 10s-limiet-bewuste batchverwerking (5-9-2026, n.a.v. rate-limit-incident) ----
+const FUNCTION_TIME_BUDGET_MS = 7000; // ruime marge onder de harde 10s (response-serialisatie, netwerklatentie, cold start)
+const ORS_CALL_DELAY_MS = 400; // verplichte pauze TUSSEN elke ORS-call, proactief, om rate limiting te voorkomen i.p.v. er pas op te reageren
+const ORS_RETRY_DELAYS_MS = [500, 1500]; // backoff-schema bij provider_error (bv. 429) -- 2 extra pogingen, dan pas rejected_provider_error
 
 // ---- Gap-detection (plan §4, definitief herzien 5-9-2026) ----
 const DEFAULT_GAP_COMPONENT_SIZE_THRESHOLD = 50;
@@ -251,6 +273,43 @@ function candidateMetaRef(db: FirebaseFirestore.Firestore, datasetVersionId: str
   return db.collection(CANDIDATE_CACHE_COLLECTION).doc(`${datasetVersionId}_${scope}`);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Roept ORS aan met retry+backoff bij `provider_error` (bv. 429) -- ALLEEN
+ * `no_route_found` telt als een echte afwijzing. Na uitgeputte retries wordt
+ * een provider-fout expliciet als zodanig geclassificeerd (nooit stilzwijgend
+ * als "geen route", zie docstring bovenaan).
+ */
+async function routeWithRetry(
+  router: LocalBikeRouter,
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number }
+): Promise<
+  | { ok: true; distanceM: number; durationS: number; geometry: { lat: number; lon: number }[] }
+  | { ok: false; validationStatus: "rejected_no_route" | "rejected_provider_error"; rejectionReason: string }
+> {
+  let lastReason = "";
+  for (let attempt = 0; attempt <= ORS_RETRY_DELAYS_MS.length; attempt++) {
+    const result = await router.route(from, to, "cycling");
+    if (!("reason" in result)) {
+      return { ok: true, distanceM: result.distanceM, durationS: result.durationS, geometry: result.geometry };
+    }
+    if (result.reason === "no_route_found") {
+      // Echte afwijzing -- geen retry nodig, ORS heeft een definitief antwoord gegeven.
+      return { ok: false, validationStatus: "rejected_no_route", rejectionReason: `ORS: ${result.reason} (${result.message})` };
+    }
+    // provider_error / invalid_response -- vermoedelijk transient (bv. 429). Retry met backoff.
+    lastReason = `ORS: ${result.reason}${result.message ? ` (${result.message})` : ""}`;
+    if (attempt < ORS_RETRY_DELAYS_MS.length) {
+      await sleep(ORS_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  return { ok: false, validationStatus: "rejected_provider_error", rejectionReason: `${lastReason} -- na ${ORS_RETRY_DELAYS_MS.length + 1} pogingen` };
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -429,6 +488,10 @@ export async function GET(req: NextRequest) {
       if (batchOffset < 0) {
         return NextResponse.json({ error: "batchOffset is verplicht (0 of hoger)." }, { status: 400 });
       }
+      // batchSize is nu een BOVENGRENS, geen doel -- het tijdsbudget (FUNCTION_TIME_BUDGET_MS)
+      // bepaalt in de praktijk hoeveel items daadwerkelijk verwerkt worden (5-9-2026, n.a.v.
+      // Vercel Hobby's harde 10s-limiet). batchProcessed in de response kan dus kleiner zijn
+      // dan de gevraagde batchSize -- dat is verwacht gedrag, geen fout.
       const requestedBatchSize = parseInt(req.nextUrl.searchParams.get("batchSize") || String(MAX_TOTAL_ORS_CALLS_PER_RUN), 10);
       const batchSize = Math.min(requestedBatchSize, MAX_TOTAL_ORS_CALLS_PER_RUN);
 
@@ -466,7 +529,7 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      const actualBatchSize = Math.min(batchSize, meta.totalDirectionalItems - meta.processedCount);
+      const requestedSlice = Math.min(batchSize, meta.totalDirectionalItems - meta.processedCount);
 
       let router: LocalBikeRouter;
       try {
@@ -483,7 +546,7 @@ export async function GET(req: NextRequest) {
 
       // Slice ophalen: kan over chunk-grenzen heen lopen, dus lees alle relevante chunks.
       const startChunk = Math.floor(batchOffset / CANDIDATE_CACHE_CHUNK_SIZE);
-      const endChunk = Math.floor((batchOffset + actualBatchSize - 1) / CANDIDATE_CACHE_CHUNK_SIZE);
+      const endChunk = Math.floor((batchOffset + requestedSlice - 1) / CANDIDATE_CACHE_CHUNK_SIZE);
       let pool: DirectionalCandidate[] = [];
       for (let c = startChunk; c <= endChunk && c < meta.chunkCount; c++) {
         const chunkSnap = await db.collection(CANDIDATE_CACHE_COLLECTION).doc(`${datasetVersionId}_${scope}_chunk${c}`).get();
@@ -491,28 +554,37 @@ export async function GET(req: NextRequest) {
         if (chunkData) pool = pool.concat(chunkData.items);
       }
       const localOffset = batchOffset - startChunk * CANDIDATE_CACHE_CHUNK_SIZE;
-      const slice = pool.slice(localOffset, localOffset + actualBatchSize);
+      const slice = pool.slice(localOffset, localOffset + requestedSlice);
 
+      // Gerichte node-lookup i.p.v. de volledige graph herladen (5-9-2026 performance-fix,
+      // noodzakelijk gegeven het krappe tijdsbudget): Firestore "in"-query, max. 30 ID's per
+      // call, dus in stukken van 30 opgehaald.
+      const neededIds = [...new Set(slice.flatMap((c) => [c.sourceNodeId, c.targetNodeId]))];
       const nodeById = new Map<string, { lat: number; lon: number }>();
-      // Coördinaten zijn niet in de gecachete candidate-items opgeslagen (alleen
-      // ID's + afstand) -- opnieuw ophalen uit logicalNodes voor deze slice.
-      const neededIds = new Set<string>();
-      slice.forEach((c) => {
-        neededIds.add(c.sourceNodeId);
-        neededIds.add(c.targetNodeId);
-      });
-      const structure = await loadGraphStructure(db, datasetVersionId);
-      if (!structure) {
-        return NextResponse.json({ error: "Geen logicalNodes gevonden voor deze datasetVersionId." }, { status: 404 });
-      }
-      for (const id of neededIds) {
-        const node = structure.nodes.find((n) => n.id === id);
-        if (node) nodeById.set(id, rdToWgs84(node.x, node.y));
+      for (let i = 0; i < neededIds.length; i += 30) {
+        const idBatch = neededIds.slice(i, i + 30);
+        const snap = await db
+          .collection("logicalNodes")
+          .where(FirebaseFirestore.FieldPath.documentId(), "in", idBatch)
+          .get();
+        for (const doc of snap.docs) {
+          const d = doc.data();
+          nodeById.set(doc.id, rdToWgs84(d.x, d.y));
+        }
       }
 
+      const batchStartTime = Date.now();
       const nowIso = new Date().toISOString();
       const results: StoredAttempt[] = [];
+      let consecutiveProviderErrors = 0;
+      let stoppedEarly: string | null = null;
+
       for (const c of slice) {
+        if (Date.now() - batchStartTime > FUNCTION_TIME_BUDGET_MS) {
+          stoppedEarly = `Tijdsbudget (${FUNCTION_TIME_BUDGET_MS}ms) bereikt -- veilig gestopt vóór de Vercel Hobby 10s-limiet.`;
+          break;
+        }
+
         const from = nodeById.get(c.sourceNodeId);
         const to = nodeById.get(c.targetNodeId);
         if (!from || !to) {
@@ -520,7 +592,7 @@ export async function GET(req: NextRequest) {
             ...c,
             datasetVersionId,
             scope,
-            validationStatus: "rejected_no_route",
+            validationStatus: "rejected_provider_error",
             rejectionReason: "Node-coördinaten niet gevonden bij compute-batch (mogelijk dataset gewijzigd sinds prepare).",
             distanceM: null,
             durationS: null,
@@ -531,35 +603,43 @@ export async function GET(req: NextRequest) {
           continue;
         }
 
-        const orsResult = await router.route({ lat: from.lat, lon: from.lon }, { lat: to.lat, lon: to.lon }, "cycling");
+        if (results.length > 0) await sleep(ORS_CALL_DELAY_MS); // proactieve rate-limit-preventie tussen calls
 
-        if ("reason" in orsResult) {
+        const outcome = await routeWithRetry(router, from, to);
+
+        if (!outcome.ok) {
           results.push({
             ...c,
             datasetVersionId,
             scope,
-            validationStatus: "rejected_no_route",
-            rejectionReason: `ORS: ${orsResult.reason}${orsResult.message ? ` (${orsResult.message})` : ""}`,
+            validationStatus: outcome.validationStatus,
+            rejectionReason: outcome.rejectionReason,
             distanceM: null,
             durationS: null,
             circuityRatio: null,
             geometry: null,
             validatedAt: nowIso,
           });
+          consecutiveProviderErrors = outcome.validationStatus === "rejected_provider_error" ? consecutiveProviderErrors + 1 : 0;
+          if (consecutiveProviderErrors >= 2) {
+            stoppedEarly = "2 opeenvolgende provider-fouten (na retries) -- batch veilig afgebroken, ORS lijkt structureel niet bereikbaar. Probeer later opnieuw.";
+            break;
+          }
           continue;
         }
 
-        const { validationStatus, rejectionReason, circuityRatio } = classifyBridgeAttempt(orsResult.distanceM, c.geographicDistanceM);
+        consecutiveProviderErrors = 0;
+        const { validationStatus, rejectionReason, circuityRatio } = classifyBridgeAttempt(outcome.distanceM, c.geographicDistanceM);
         results.push({
           ...c,
           datasetVersionId,
           scope,
           validationStatus,
           rejectionReason,
-          distanceM: Math.round(orsResult.distanceM),
-          durationS: Math.round(orsResult.durationS),
+          distanceM: Math.round(outcome.distanceM),
+          durationS: Math.round(outcome.durationS),
           circuityRatio,
-          geometry: orsResult.geometry,
+          geometry: outcome.geometry,
           validatedAt: nowIso,
         });
       }
@@ -582,11 +662,13 @@ export async function GET(req: NextRequest) {
         scope,
         batchOffset,
         batchProcessed: results.length,
+        stoppedEarly,
         batchValidCount: results.filter((r) => r.validationStatus === "valid").length,
         batchRejectedBreakdown: {
           rejected_no_route: results.filter((r) => r.validationStatus === "rejected_no_route").length,
           rejected_distance: results.filter((r) => r.validationStatus === "rejected_distance").length,
           rejected_circuity: results.filter((r) => r.validationStatus === "rejected_circuity").length,
+          rejected_provider_error: results.filter((r) => r.validationStatus === "rejected_provider_error").length,
         },
         processedCount: newProcessedCount,
         totalDirectionalItems: meta.totalDirectionalItems,
@@ -595,6 +677,63 @@ export async function GET(req: NextRequest) {
           newStatus === "complete"
             ? "Alle kandidaten verwerkt. Roep phase=write aan om de resultaten naar networkBridges te schrijven."
             : `Roep opnieuw phase=compute-batch&scope=${scope}&batchOffset=${newProcessedCount} aan.`,
+      });
+    }
+
+    // ============================================================
+    // PHASE: reset -- wist candidate-cache, attempts EN al-geschreven
+    // networkBridges-documenten voor één scope. Toegevoegd 5-9-2026 n.a.v. het
+    // rate-limit-incident: de eerste strong-scope-run bevatte overwegend
+    // valse "rejected_no_route"-resultaten (in werkelijkheid 429-fouten) en
+    // moet volledig opnieuw, niet hergebruikt worden.
+    // ============================================================
+    if (phase === "reset") {
+      const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
+      if (scope !== "strong" && scope !== "weak") {
+        return NextResponse.json({ error: "scope is verplicht en moet 'strong' of 'weak' zijn." }, { status: 400 });
+      }
+      const confirm = req.nextUrl.searchParams.get("confirm");
+      if (confirm !== "yes") {
+        return NextResponse.json(
+          { error: "Dit verwijdert alle candidate-cache, attempts EN geschreven networkBridges voor deze scope. Voeg &confirm=yes toe om te bevestigen." },
+          { status: 400 }
+        );
+      }
+
+      let deleted = 0;
+
+      const metaRef = candidateMetaRef(db, datasetVersionId, scope);
+      const metaSnap = await metaRef.get();
+      const meta = metaSnap.exists ? (metaSnap.data() as { chunkCount: number }) : null;
+      if (meta) {
+        for (let c = 0; c < meta.chunkCount; c++) {
+          await db.collection(CANDIDATE_CACHE_COLLECTION).doc(`${datasetVersionId}_${scope}_chunk${c}`).delete();
+        }
+        await metaRef.delete();
+      }
+
+      const attemptsSnap = await db.collection(ATTEMPTS_COLLECTION).where("datasetVersionId", "==", datasetVersionId).where("scope", "==", scope).get();
+      for (let i = 0; i < attemptsSnap.docs.length; i += FIRESTORE_OP_LIMIT) {
+        const batch = db.batch();
+        for (const doc of attemptsSnap.docs.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
+        await batch.commit();
+        deleted += Math.min(FIRESTORE_OP_LIMIT, attemptsSnap.docs.length - i);
+      }
+
+      const bridgesSnap = await db.collection("networkBridges").where("datasetVersionId", "==", datasetVersionId).where("scope", "==", scope).get();
+      for (let i = 0; i < bridgesSnap.docs.length; i += FIRESTORE_OP_LIMIT) {
+        const batch = db.batch();
+        for (const doc of bridgesSnap.docs.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
+        await batch.commit();
+      }
+
+      return NextResponse.json({
+        phase: "reset",
+        scope,
+        deletedAttempts: attemptsSnap.docs.length,
+        deletedNetworkBridges: bridgesSnap.docs.length,
+        candidateCacheCleared: !!meta,
+        nextStep: "Roep nu phase=prepare opnieuw aan om schoon te herstarten.",
       });
     }
 
@@ -641,6 +780,7 @@ export async function GET(req: NextRequest) {
           const bridge: NetworkBridge = {
             id: a.id,
             datasetVersionId,
+            scope,
             sourceNodeId: a.sourceNodeId,
             targetNodeId: a.targetNodeId,
             distanceM: a.distanceM ?? 0,
@@ -670,7 +810,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: `Onbekende phase "${phase}". Gebruik status, analyze, prepare, compute-batch, of write.` }, { status: 400 });
+    return NextResponse.json({ error: `Onbekende phase "${phase}". Gebruik status, analyze, prepare, compute-batch, write, of reset.` }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { error: "Bridge-generatie mislukt.", details: err instanceof Error ? err.message : String(err) },

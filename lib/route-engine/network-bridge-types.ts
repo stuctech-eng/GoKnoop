@@ -16,10 +16,11 @@ export type BridgeCandidate = {
 
 export type NetworkBridgeValidationStatus =
   | "valid"
-  | "rejected_no_route"
+  | "rejected_no_route" // ORS gaf expliciet aan: geen fietsroute mogelijk (echte afwijzing)
   | "rejected_circuity"
   | "rejected_distance"
-  | "rejected_component";
+  | "rejected_component"
+  | "rejected_provider_error"; // 429/HTTP-fout/onverwachte respons NA uitgeputte retries -- GEEN uitspraak over of er een route bestaat, alleen dat de validatie zelf mislukte (5-9-2026, n.a.v. ORS-rate-limit-incident)
 
 /**
  * Persistent, in Firestore-collectie `networkBridges` (plan §2/§3). Directioneel:
@@ -30,6 +31,8 @@ export type NetworkBridgeValidationStatus =
 export type NetworkBridge = {
   id: string; // `${datasetVersionId}_${sourceNodeId}_${targetNodeId}` -- NIET gesorteerd (plan §8, gecorrigeerd)
   datasetVersionId: string;
+  /** Welk gap-signaal deze bridge opleverde ("strong"=edgeCount===0, "weak"=edgeCount===1+kleine component). Puur provenance/reset-doeleinden, geen invloed op routing. */
+  scope: "strong" | "weak";
   sourceNodeId: string;
   targetNodeId: string;
   distanceM: number;

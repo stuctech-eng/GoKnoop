@@ -14,8 +14,14 @@ type Scope = "strong" | "weak";
 type BatchResult = {
   batchOffset: number;
   batchProcessed: number;
+  stoppedEarly: string | null;
   batchValidCount: number;
-  batchRejectedBreakdown: { rejected_no_route: number; rejected_distance: number; rejected_circuity: number };
+  batchRejectedBreakdown: {
+    rejected_no_route: number;
+    rejected_distance: number;
+    rejected_circuity: number;
+    rejected_provider_error: number;
+  };
   processedCount: number;
   totalDirectionalItems: number;
   status: string;
@@ -144,7 +150,12 @@ export default function GenerateBridgesRunnerPage() {
   const totalItems = log.length > 0 ? log[log.length - 1].totalDirectionalItems : 0;
   const cumulativeValid = log.reduce((sum, b) => sum + b.batchValidCount, 0);
   const cumulativeRejected = log.reduce(
-    (sum, b) => sum + b.batchRejectedBreakdown.rejected_no_route + b.batchRejectedBreakdown.rejected_distance + b.batchRejectedBreakdown.rejected_circuity,
+    (sum, b) =>
+      sum +
+      b.batchRejectedBreakdown.rejected_no_route +
+      b.batchRejectedBreakdown.rejected_distance +
+      b.batchRejectedBreakdown.rejected_circuity +
+      b.batchRejectedBreakdown.rejected_provider_error,
     0
   );
 
@@ -246,8 +257,9 @@ export default function GenerateBridgesRunnerPage() {
       {log.map((b, i) => (
         <div key={i} style={{ fontSize: 12, fontFamily: "monospace", padding: "4px 0", borderTop: "1px solid #eee" }}>
           batch @{b.batchOffset}: {b.batchProcessed} verwerkt, {b.batchValidCount} valid, {b.batchRejectedBreakdown.rejected_no_route}/
-          {b.batchRejectedBreakdown.rejected_distance}/{b.batchRejectedBreakdown.rejected_circuity} rejected (no_route/distance/circuity)
-          — totaal {b.processedCount}/{b.totalDirectionalItems}
+          {b.batchRejectedBreakdown.rejected_distance}/{b.batchRejectedBreakdown.rejected_circuity}/{b.batchRejectedBreakdown.rejected_provider_error} rejected
+          (no_route/distance/circuity/provider_error) — totaal {b.processedCount}/{b.totalDirectionalItems}
+          {b.stoppedEarly && <div style={{ color: "#b8860b" }}>⏸️ {b.stoppedEarly}</div>}
         </div>
       ))}
     </div>
