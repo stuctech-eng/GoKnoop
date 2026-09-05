@@ -42,8 +42,15 @@ export default function NodeGeometryInspectorPage() {
   const [runs, setRuns] = useState<Run[]>(POINTS.map((point) => ({ point, status: "wachten" })));
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [debugKey, setDebugKey] = useState("");
 
-  async function runAll() {
+  function saveKey(value: string) {
+    setDebugKey(value);
+    window.localStorage.setItem("goknoop_debug_secret", value);
+  }
+
+  async function runAll(keyOverride?: string) {
+    const key = keyOverride ?? debugKey;
     setRunning(true);
     setCopied(false);
     const next: Run[] = POINTS.map((point) => ({ point, status: "wachten" }));
@@ -55,6 +62,7 @@ export default function NodeGeometryInspectorPage() {
       try {
         const p = POINTS[i];
         const params = new URLSearchParams({ lat: String(p.lat), lon: String(p.lon), radiusM: String(p.radiusM ?? 150) });
+        if (key) params.set("key", key);
         const res = await fetch(`/api/debug/node-geometry-inspector?${params.toString()}`);
         const data = await res.json();
         if (!res.ok) next[i] = { ...next[i], status: "fout", error: data.error ?? "Onbekende fout." };
@@ -68,7 +76,9 @@ export default function NodeGeometryInspectorPage() {
   }
 
   useEffect(() => {
-    runAll();
+    const saved = window.localStorage.getItem("goknoop_debug_secret") || "";
+    setDebugKey(saved);
+    runAll(saved);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -118,8 +128,18 @@ export default function NodeGeometryInspectorPage() {
         ver weg? Draait automatisch voor 4 bekende plekken.
       </p>
 
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          type="password"
+          value={debugKey}
+          onChange={(e) => saveKey(e.target.value)}
+          placeholder="DEBUG_SECRET (éénmalig invullen)"
+          style={{ flex: 1, padding: 10, fontSize: 14, border: "1px solid #ccc", borderRadius: 8 }}
+        />
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <button onClick={runAll} disabled={running} style={{ flex: 1, padding: 12, fontSize: 16, background: "#085041", color: "white", border: "none", borderRadius: 8 }}>
+        <button onClick={() => runAll()} disabled={running} style={{ flex: 1, padding: 12, fontSize: 16, background: "#085041", color: "white", border: "none", borderRadius: 8 }}>
           {running ? "Bezig..." : "Opnieuw draaien"}
         </button>
         <button onClick={copyResults} disabled={!allDone} style={{ flex: 1, padding: 12, fontSize: 16, background: allDone ? "#1a73e8" : "#ccc", color: "white", border: "none", borderRadius: 8 }}>

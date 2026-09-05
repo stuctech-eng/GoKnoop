@@ -31,13 +31,28 @@ export default function RegionAuditPage() {
   const [status, setStatus] = useState<"bezig" | "klaar" | "fout">("bezig");
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [debugKey, setDebugKey] = useState("");
 
-  async function run() {
+  useEffect(() => {
+    const saved = window.localStorage.getItem("goknoop_debug_secret") || "";
+    setDebugKey(saved);
+    run(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function saveKey(value: string) {
+    setDebugKey(value);
+    window.localStorage.setItem("goknoop_debug_secret", value);
+  }
+
+  async function run(keyOverride?: string) {
     setStatus("bezig");
     setError(null);
     setCopied(false);
     try {
-      const res = await fetch("/api/debug/region-audit");
+      const key = keyOverride ?? debugKey;
+      const params = key ? `?key=${encodeURIComponent(key)}` : "";
+      const res = await fetch(`/api/debug/region-audit${params}`);
       const json = await res.json();
       if (!res.ok) {
         setError(json.error ?? "Onbekende fout.");
@@ -52,9 +67,7 @@ export default function RegionAuditPage() {
     }
   }
 
-  useEffect(() => {
-    run();
-  }, []);
+
 
   function buildCopyText(): string {
     if (!data) return "";
@@ -102,8 +115,18 @@ export default function RegionAuditPage() {
         edges/node en 0-edge-knopen. Draait automatisch.
       </p>
 
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          type="password"
+          value={debugKey}
+          onChange={(e) => saveKey(e.target.value)}
+          placeholder="DEBUG_SECRET (éénmalig invullen)"
+          style={{ flex: 1, padding: 10, fontSize: 14, border: "1px solid #ccc", borderRadius: 8 }}
+        />
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <button onClick={run} disabled={status === "bezig"} style={{ flex: 1, padding: 12, fontSize: 16, background: "#085041", color: "white", border: "none", borderRadius: 8 }}>
+        <button onClick={() => run()} disabled={status === "bezig"} style={{ flex: 1, padding: 12, fontSize: 16, background: "#085041", color: "white", border: "none", borderRadius: 8 }}>
           {status === "bezig" ? "Bezig..." : "Opnieuw draaien"}
         </button>
         <button onClick={copyResults} disabled={status !== "klaar"} style={{ flex: 1, padding: 12, fontSize: 16, background: status === "klaar" ? "#1a73e8" : "#ccc", color: "white", border: "none", borderRadius: 8 }}>
