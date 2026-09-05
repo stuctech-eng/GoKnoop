@@ -73,7 +73,7 @@ const MAX_TOTAL_ORS_CALLS_PER_RUN = 30; // bovengrens per aanvraag; het TIJDSBUD
 
 // ---- Vercel Hobby 10s-limiet-bewuste batchverwerking (5-9-2026, n.a.v. rate-limit-incident) ----
 const FUNCTION_TIME_BUDGET_MS = 7000; // ruime marge onder de harde 10s (response-serialisatie, netwerklatentie, cold start)
-const ORS_CALL_DELAY_MS = 400; // verplichte pauze TUSSEN elke ORS-call, proactief, om rate limiting te voorkomen i.p.v. er pas op te reageren
+const ORS_CALL_DELAY_MS = 1600; // was 400ms -- dat bleek te snel (rate limit getriggerd bij 1840/2000 dagquota over, dus geen dagquota-probleem maar een per-minuut-limiet). 1600ms ≈ 37,5 calls/min, ruim onder de gangbare ORS-gratis-tier-limiet van ~40/min (niet exact bevestigd door ORS zelf, wel de gangbare aanname -- als dit nog steeds 429's geeft, verder verhogen).
 const ORS_RETRY_DELAYS_MS = [500, 1500]; // backoff-schema bij provider_error (bv. 429) -- 2 extra pogingen, dan pas rejected_provider_error
 
 // ---- Gap-detection (plan §4, definitief herzien 5-9-2026) ----
