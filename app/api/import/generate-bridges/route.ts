@@ -748,11 +748,26 @@ export async function GET(req: NextRequest) {
         await batch.commit();
       }
 
+      // Eenmalige opruiming van LEGACY networkBridges-documenten zonder scope-veld
+      // (5-9-2026): deze dataset had al 4002 documenten van vóór het scope-veld
+      // bestond, allemaal afkomstig van de door het 429-incident vervuilde run.
+      // Aantoonbaar veilig te verwijderen: er is nog geen productiecode die
+      // networkBridges leest (BridgeAugmentedGraphProvider is nog niet
+      // gewired), en elk toekomstig schrijfmoment zet altijd een scope-veld.
+      const allBridgesForDatasetSnap = await db.collection("networkBridges").where("datasetVersionId", "==", datasetVersionId).get();
+      const legacyDocsWithoutScope = allBridgesForDatasetSnap.docs.filter((d) => d.data().scope === undefined);
+      for (let i = 0; i < legacyDocsWithoutScope.length; i += FIRESTORE_OP_LIMIT) {
+        const batch = db.batch();
+        for (const doc of legacyDocsWithoutScope.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
+        await batch.commit();
+      }
+
       return NextResponse.json({
         phase: "reset",
         scope,
         deletedAttempts: attemptsSnap.docs.length,
         deletedNetworkBridges: bridgesSnap.docs.length,
+        deletedLegacyBridgesWithoutScope: legacyDocsWithoutScope.length,
         candidateCacheCleared: !!meta,
         nextStep: "Roep nu phase=prepare opnieuw aan om schoon te herstarten.",
       });
