@@ -707,6 +707,14 @@ export async function GET(req: NextRequest) {
     // rate-limit-incident: de eerste strong-scope-run bevatte overwegend
     // valse "rejected_no_route"-resultaten (in werkelijkheid 429-fouten) en
     // moet volledig opnieuw, niet hergebruikt worden.
+    //
+    // TIJDSBUDGET-BEWUST (toegevoegd 5-9-2026, n.a.v. een 504
+    // FUNCTION_INVOCATION_TIMEOUT tijdens een eerdere reset-aanroep met
+    // duizenden te verwijderen documenten): net als compute-batch stopt reset
+    // veilig ruim vóór de harde Vercel Hobby 10s-limiet en rapporteert of er
+    // nog meer te doen is. Herhaal simpelweg dezelfde aanroep (geen offset
+    // nodig -- elke aanroep bevraagt opnieuw wat er nog over is) totdat
+    // "done: true" terugkomt.
     // ============================================================
     if (phase === "reset") {
       const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
@@ -721,8 +729,16 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      let deleted = 0;
+      const resetStartTime = Date.now();
+      const timeLeft = () => FUNCTION_TIME_BUDGET_MS - (Date.now() - resetStartTime);
 
+      let deletedAttempts = 0;
+      let deletedNetworkBridges = 0;
+      let deletedLegacyBridgesWithoutScope = 0;
+      let candidateCacheCleared = false;
+      let stoppedEarly: string | null = null;
+
+      // 1. Candidate-cache (meestal klein, <10 chunk-docs -- doen we altijd volledig).
       const metaRef = candidateMetaRef(db, datasetVersionId, scope);
       const metaSnap = await metaRef.get();
       const meta = metaSnap.exists ? (metaSnap.data() as { chunkCount: number }) : null;
@@ -731,45 +747,86 @@ export async function GET(req: NextRequest) {
           await db.collection(CANDIDATE_CACHE_COLLECTION).doc(`${datasetVersionId}_${scope}_chunk${c}`).delete();
         }
         await metaRef.delete();
+        candidateCacheCleared = true;
       }
 
-      const attemptsSnap = await db.collection(ATTEMPTS_COLLECTION).where("datasetVersionId", "==", datasetVersionId).where("scope", "==", scope).get();
-      for (let i = 0; i < attemptsSnap.docs.length; i += FIRESTORE_OP_LIMIT) {
-        const batch = db.batch();
-        for (const doc of attemptsSnap.docs.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
-        await batch.commit();
-        deleted += Math.min(FIRESTORE_OP_LIMIT, attemptsSnap.docs.length - i);
+      // 2. attempts (scope-specifiek) -- gepagineerd, tijdsbudget-bewust.
+      outer: {
+        if (timeLeft() < 1500) {
+          stoppedEarly = "Tijdsbudget op vóór attempts-opruiming kon beginnen.";
+          break outer;
+        }
+        const attemptsSnap = await db
+          .collection(ATTEMPTS_COLLECTION)
+          .where("datasetVersionId", "==", datasetVersionId)
+          .where("scope", "==", scope)
+          .limit(2000)
+          .get();
+        for (let i = 0; i < attemptsSnap.docs.length; i += FIRESTORE_OP_LIMIT) {
+          if (timeLeft() < 1000) {
+            stoppedEarly = "Tijdsbudget bereikt tijdens attempts-opruiming.";
+            break outer;
+          }
+          const batch = db.batch();
+          for (const doc of attemptsSnap.docs.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
+          await batch.commit();
+          deletedAttempts += Math.min(FIRESTORE_OP_LIMIT, attemptsSnap.docs.length - i);
+        }
+
+        // 3. networkBridges met scope-veld (voor deze scope).
+        if (timeLeft() < 1500) {
+          stoppedEarly = "Tijdsbudget op vóór networkBridges(scope)-opruiming kon beginnen.";
+          break outer;
+        }
+        const bridgesSnap = await db
+          .collection("networkBridges")
+          .where("datasetVersionId", "==", datasetVersionId)
+          .where("scope", "==", scope)
+          .limit(2000)
+          .get();
+        for (let i = 0; i < bridgesSnap.docs.length; i += FIRESTORE_OP_LIMIT) {
+          if (timeLeft() < 1000) {
+            stoppedEarly = "Tijdsbudget bereikt tijdens networkBridges(scope)-opruiming.";
+            break outer;
+          }
+          const batch = db.batch();
+          for (const doc of bridgesSnap.docs.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
+          await batch.commit();
+          deletedNetworkBridges += Math.min(FIRESTORE_OP_LIMIT, bridgesSnap.docs.length - i);
+        }
+
+        // 4. Legacy networkBridges zonder scope-veld (eenmalige historische opruiming).
+        if (timeLeft() < 1500) {
+          stoppedEarly = "Tijdsbudget op vóór legacy-opruiming kon beginnen.";
+          break outer;
+        }
+        const allBridgesForDatasetSnap = await db.collection("networkBridges").where("datasetVersionId", "==", datasetVersionId).limit(2000).get();
+        const legacyDocsWithoutScope = allBridgesForDatasetSnap.docs.filter((d) => d.data().scope === undefined);
+        for (let i = 0; i < legacyDocsWithoutScope.length; i += FIRESTORE_OP_LIMIT) {
+          if (timeLeft() < 1000) {
+            stoppedEarly = "Tijdsbudget bereikt tijdens legacy-opruiming.";
+            break outer;
+          }
+          const batch = db.batch();
+          for (const doc of legacyDocsWithoutScope.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
+          await batch.commit();
+          deletedLegacyBridgesWithoutScope += Math.min(FIRESTORE_OP_LIMIT, legacyDocsWithoutScope.length - i);
+        }
       }
 
-      const bridgesSnap = await db.collection("networkBridges").where("datasetVersionId", "==", datasetVersionId).where("scope", "==", scope).get();
-      for (let i = 0; i < bridgesSnap.docs.length; i += FIRESTORE_OP_LIMIT) {
-        const batch = db.batch();
-        for (const doc of bridgesSnap.docs.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
-        await batch.commit();
-      }
-
-      // Eenmalige opruiming van LEGACY networkBridges-documenten zonder scope-veld
-      // (5-9-2026): deze dataset had al 4002 documenten van vóór het scope-veld
-      // bestond, allemaal afkomstig van de door het 429-incident vervuilde run.
-      // Aantoonbaar veilig te verwijderen: er is nog geen productiecode die
-      // networkBridges leest (BridgeAugmentedGraphProvider is nog niet
-      // gewired), en elk toekomstig schrijfmoment zet altijd een scope-veld.
-      const allBridgesForDatasetSnap = await db.collection("networkBridges").where("datasetVersionId", "==", datasetVersionId).get();
-      const legacyDocsWithoutScope = allBridgesForDatasetSnap.docs.filter((d) => d.data().scope === undefined);
-      for (let i = 0; i < legacyDocsWithoutScope.length; i += FIRESTORE_OP_LIMIT) {
-        const batch = db.batch();
-        for (const doc of legacyDocsWithoutScope.slice(i, i + FIRESTORE_OP_LIMIT)) batch.delete(doc.ref);
-        await batch.commit();
-      }
-
+      const done = stoppedEarly === null;
       return NextResponse.json({
         phase: "reset",
         scope,
-        deletedAttempts: attemptsSnap.docs.length,
-        deletedNetworkBridges: bridgesSnap.docs.length,
-        deletedLegacyBridgesWithoutScope: legacyDocsWithoutScope.length,
-        candidateCacheCleared: !!meta,
-        nextStep: "Roep nu phase=prepare opnieuw aan om schoon te herstarten.",
+        deletedAttempts,
+        deletedNetworkBridges,
+        deletedLegacyBridgesWithoutScope,
+        candidateCacheCleared,
+        done,
+        stoppedEarly,
+        nextStep: done
+          ? "Alles opgeruimd. Roep nu phase=prepare opnieuw aan om schoon te herstarten."
+          : "Nog niet klaar -- roep exact dezelfde reset-URL nogmaals aan om verder te gaan (elke aanroep pakt automatisch waar de vorige stopte).",
       });
     }
 
