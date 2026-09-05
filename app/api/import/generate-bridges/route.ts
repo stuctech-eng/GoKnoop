@@ -71,6 +71,49 @@ type BridgeAttempt = {
   geometry: { lat: number; lon: number }[] | null;
 };
 
+async function loadGraphStructure(db: FirebaseFirestore.Firestore, datasetVersionId: string) {
+  const [logicalNodesSnap, matchedEdgesSnap] = await Promise.all([
+    db.collection("logicalNodes").where("datasetVersionId", "==", datasetVersionId).get(),
+    db.collection("edges").where("datasetVersionId", "==", datasetVersionId).where("matchConfidence", "==", "matched").get(),
+  ]);
+
+  if (logicalNodesSnap.empty) return null;
+
+  const nodes: LNode[] = logicalNodesSnap.docs.map((d) => {
+    const data = d.data();
+    return { id: d.id, x: data.x, y: data.y, displayNumber: data.displayNumber };
+  });
+  const idToIndex = new Map<string, number>();
+  nodes.forEach((n, i) => idToIndex.set(n.id, i));
+
+  const uf = new UnionFind(nodes.length);
+  const edgeCountByNode = new Map<string, number>();
+  for (const doc of matchedEdgesSnap.docs) {
+    const d = doc.data();
+    const fromIdx = idToIndex.get(d.fromLogicalNodeId);
+    const toIdx = idToIndex.get(d.toLogicalNodeId);
+    if (fromIdx !== undefined && toIdx !== undefined) {
+      uf.union(fromIdx, toIdx);
+      edgeCountByNode.set(d.fromLogicalNodeId, (edgeCountByNode.get(d.fromLogicalNodeId) || 0) + 1);
+      edgeCountByNode.set(d.toLogicalNodeId, (edgeCountByNode.get(d.toLogicalNodeId) || 0) + 1);
+    }
+  }
+
+  const componentSize = new Map<number, number>();
+  for (let i = 0; i < nodes.length; i++) {
+    const root = uf.find(i);
+    componentSize.set(root, (componentSize.get(root) || 0) + 1);
+  }
+
+  return { nodes, idToIndex, uf, componentSize, edgeCountByNode };
+}
+
+function median(sorted: number[]): number {
+  if (sorted.length === 0) return 0;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -102,6 +145,74 @@ export async function GET(req: NextRequest) {
     const db = getDb();
     const cacheRef = db.collection(CACHE_COLLECTION).doc(datasetVersionId);
 
+    if (phase === "analyze") {
+      // Landelijke, ORS-vrije structuuranalyse (toegevoegd 5-9-2026, n.a.v. de
+      // eerste compute-run: edgeCount<=1 bleek als samengevoegd signaal 80%
+      // rejected_no_route op te leveren -- te veel legitieme dead-end-knopen
+      // (edgeCount===1) werden ten onrechte als gap-kandidaat behandeld. Geen
+      // enkele ORS-call in deze fase; puur Union-Find + geografische telling.
+      const structure = await loadGraphStructure(db, datasetVersionId);
+      if (!structure) {
+        return NextResponse.json({ error: "Geen logicalNodes gevonden voor deze datasetVersionId." }, { status: 404 });
+      }
+      const { nodes, uf, componentSize, edgeCountByNode } = structure;
+      const radiusSq = candidateRadiusM * candidateRadiusM;
+
+      function hasCandidateInLargerComponent(i: number): boolean {
+        const root = uf.find(i);
+        const ownSize = componentSize.get(root) || 1;
+        const node = nodes[i];
+        for (let j = 0; j < nodes.length; j++) {
+          if (j === i) continue;
+          const otherRoot = uf.find(j);
+          if (otherRoot === root) continue;
+          if ((componentSize.get(otherRoot) || 1) <= ownSize) continue;
+          const dx = nodes[j].x - node.x;
+          const dy = nodes[j].y - node.y;
+          if (dx * dx + dy * dy <= radiusSq) return true;
+        }
+        return false;
+      }
+
+      function analyzeCategory(predicate: (edgeCount: number) => boolean) {
+        const indices: number[] = [];
+        for (let i = 0; i < nodes.length; i++) {
+          if (predicate(edgeCountByNode.get(nodes[i].id) || 0)) indices.push(i);
+        }
+        const compSizes = indices.map((i) => componentSize.get(uf.find(i)) || 1).sort((a, b) => a - b);
+        const withCandidateInLargerComponent = indices.filter(hasCandidateInLargerComponent);
+        const withSmallComponent = indices.filter((i) => (componentSize.get(uf.find(i)) || 1) < gapComponentSizeThreshold);
+        const withBothSignals = indices.filter(
+          (i) => hasCandidateInLargerComponent(i) && (componentSize.get(uf.find(i)) || 1) < gapComponentSizeThreshold
+        );
+        return {
+          total: indices.length,
+          componentSizeStats: compSizes.length
+            ? { min: compSizes[0], median: median(compSizes), max: compSizes[compSizes.length - 1] }
+            : null,
+          withCandidateInLargerComponentWithinRadius: withCandidateInLargerComponent.length,
+          withComponentSizeUnderThreshold: withSmallComponent.length,
+          withBothSignals: withBothSignals.length,
+        };
+      }
+
+      const edgeCountZero = analyzeCategory((c) => c === 0);
+      const edgeCountOne = analyzeCategory((c) => c === 1);
+      const edgeCountTwoPlus = nodes.filter((n) => (edgeCountByNode.get(n.id) || 0) >= 2).length;
+
+      return NextResponse.json({
+        phase: "analyze",
+        datasetVersionId,
+        candidateRadiusM,
+        gapComponentSizeThreshold,
+        totalLogicalNodes: nodes.length,
+        edgeCountBuckets: { zero: edgeCountZero.total, one: edgeCountOne.total, twoPlus: edgeCountTwoPlus },
+        edgeCountZero,
+        edgeCountOne,
+        orsCallsMade: 0,
+      });
+    }
+
     if (phase === "compute") {
       let router: LocalBikeRouter;
       try {
@@ -116,40 +227,11 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      const [logicalNodesSnap, matchedEdgesSnap] = await Promise.all([
-        db.collection("logicalNodes").where("datasetVersionId", "==", datasetVersionId).get(),
-        db.collection("edges").where("datasetVersionId", "==", datasetVersionId).where("matchConfidence", "==", "matched").get(),
-      ]);
-
-      if (logicalNodesSnap.empty) {
+      const structure = await loadGraphStructure(db, datasetVersionId);
+      if (!structure) {
         return NextResponse.json({ error: "Geen logicalNodes gevonden voor deze datasetVersionId." }, { status: 404 });
       }
-
-      const nodes: LNode[] = logicalNodesSnap.docs.map((d) => {
-        const data = d.data();
-        return { id: d.id, x: data.x, y: data.y, displayNumber: data.displayNumber };
-      });
-      const idToIndex = new Map<string, number>();
-      nodes.forEach((n, i) => idToIndex.set(n.id, i));
-
-      const uf = new UnionFind(nodes.length);
-      const edgeCountByNode = new Map<string, number>();
-      for (const doc of matchedEdgesSnap.docs) {
-        const d = doc.data();
-        const fromIdx = idToIndex.get(d.fromLogicalNodeId);
-        const toIdx = idToIndex.get(d.toLogicalNodeId);
-        if (fromIdx !== undefined && toIdx !== undefined) {
-          uf.union(fromIdx, toIdx);
-          edgeCountByNode.set(d.fromLogicalNodeId, (edgeCountByNode.get(d.fromLogicalNodeId) || 0) + 1);
-          edgeCountByNode.set(d.toLogicalNodeId, (edgeCountByNode.get(d.toLogicalNodeId) || 0) + 1);
-        }
-      }
-
-      const componentSize = new Map<number, number>();
-      for (let i = 0; i < nodes.length; i++) {
-        const root = uf.find(i);
-        componentSize.set(root, (componentSize.get(root) || 0) + 1);
-      }
+      const { nodes, uf, componentSize, edgeCountByNode } = structure;
 
       // Gap-detection (plan §4, bijgesteld): edgeCount<=1 is het PRIMAIRE signaal.
       // componentSize<threshold is een SECUNDAIR signaal -- apart geteld, niet
