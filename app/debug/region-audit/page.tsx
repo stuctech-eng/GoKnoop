@@ -17,6 +17,15 @@ type RegionResult = {
   edgesPerNode: { zeroEdgeNodeCount: number; oneEdgeNodeCount: number; avg: string; median: number | string; max: number | string };
   zeroEdgeNodeSample: { id: string; displayNumber: string | null }[];
   endpointDistanceStatsM: { count: number; median: string; p90: string; max: string } | null;
+  gapAnalysis: {
+    lowDegreeNodesChecked: number;
+    searchRadiusM: number;
+    nearbyUnmatchedEndpointsFound: number;
+    nearMissCount: number;
+    structuralCount: number;
+    gapDistanceStatsM: { median: string; max: string } | null;
+    structuralSample: { nodeId: string; displayNumber: string | null; distanceM: number }[];
+  };
 };
 
 type AuditResponse = {
@@ -92,6 +101,14 @@ export default function RegionAuditPage() {
       if (r.zeroEdgeNodeSample.length) {
         lines.push(`0-edge node-ID's (steekproef): ${r.zeroEdgeNodeSample.map((n) => `${n.id}(${n.displayNumber ?? "-"})`).join(", ")}`);
       }
+      lines.push(
+        `gap-analyse (${r.gapAnalysis.lowDegreeNodesChecked} laag-connectieve knopen gecheckt, radius ${r.gapAnalysis.searchRadiusM}m): ${r.gapAnalysis.nearbyUnmatchedEndpointsFound} onmatched endpoints gevonden -- ${r.gapAnalysis.nearMissCount} near-miss (<=15m), ${r.gapAnalysis.structuralCount} structureel (>15m)`
+      );
+      if (r.gapAnalysis.structuralSample.length) {
+        lines.push(
+          `  structurele gaten (steekproef): ${r.gapAnalysis.structuralSample.map((s) => `${s.displayNumber ?? s.nodeId}@${s.distanceM}m`).join(", ")}`
+        );
+      }
       lines.push("");
     }
     return lines.join("\n");
@@ -160,6 +177,23 @@ export default function RegionAuditPage() {
                   max {r.endpointDistanceStatsM.max}m
                 </div>
               )}
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #ccc" }}>
+                <div>
+                  Gap-analyse ({r.gapAnalysis.lowDegreeNodesChecked} laag-connectieve knopen, {r.gapAnalysis.searchRadiusM}m radius):
+                </div>
+                <div>
+                  {r.gapAnalysis.nearbyUnmatchedEndpointsFound} onmatched endpoints —{" "}
+                  <span style={{ color: "#b8860b" }}>{r.gapAnalysis.nearMissCount} near-miss (≤15m)</span> ·{" "}
+                  <span style={{ color: r.gapAnalysis.structuralCount > 0 ? "#c00" : "inherit" }}>
+                    {r.gapAnalysis.structuralCount} structureel (&gt;15m)
+                  </span>
+                </div>
+                {r.gapAnalysis.structuralSample.length > 0 && (
+                  <div style={{ opacity: 0.7, marginTop: 2 }}>
+                    bv: {r.gapAnalysis.structuralSample.map((s) => `${s.displayNumber ?? s.nodeId}@${s.distanceM}m`).join(", ")}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         ))}
