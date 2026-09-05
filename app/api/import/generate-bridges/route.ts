@@ -281,6 +281,26 @@ export async function GET(req: NextRequest) {
     const db = getDb();
 
     // ============================================================
+    // PHASE: status -- puur lezen, geen enkele wijziging. Toegevoegd 5-9-2026
+    // zodat een client (bv. de in-app batch-runner) de voortgang van een
+    // eerdere prepare/compute-batch-reeks kan opvragen zonder het risico dat
+    // phase=prepare per ongeluk opnieuw wordt aangeroepen en de al-opgebouwde
+    // voortgang (processedCount) reset.
+    // ============================================================
+    if (phase === "status") {
+      const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
+      if (scope !== "strong" && scope !== "weak") {
+        return NextResponse.json({ error: "scope is verplicht en moet 'strong' of 'weak' zijn." }, { status: 400 });
+      }
+      const metaSnap = await candidateMetaRef(db, datasetVersionId, scope).get();
+      if (!metaSnap.exists) {
+        return NextResponse.json({ phase: "status", scope, prepared: false });
+      }
+      const meta = metaSnap.data();
+      return NextResponse.json({ phase: "status", scope, prepared: true, ...meta });
+    }
+
+    // ============================================================
     // PHASE: analyze -- landelijke, ORS-vrije structuuranalyse. Ongewijzigd
     // t.o.v. de vorige versie; geen cache-effect, puur informatief.
     // ============================================================
@@ -650,7 +670,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: `Onbekende phase "${phase}". Gebruik analyze, prepare, compute-batch, of write.` }, { status: 400 });
+    return NextResponse.json({ error: `Onbekende phase "${phase}". Gebruik status, analyze, prepare, compute-batch, of write.` }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { error: "Bridge-generatie mislukt.", details: err instanceof Error ? err.message : String(err) },
