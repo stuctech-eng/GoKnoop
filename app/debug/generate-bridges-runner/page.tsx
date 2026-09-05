@@ -121,7 +121,8 @@ export default function GenerateBridgesRunnerPage() {
       }
       if (processedCount >= totalDirectionalItems) setStatus("complete");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const details = err instanceof ApiCallError && typeof err.data.details === "string" ? err.data.details : null;
+      setError(err instanceof Error ? `${err.message}${details ? ` — ${details}` : ""}` : String(err));
       setStatus("error");
     } finally {
       setRunning(false);
@@ -139,7 +140,8 @@ export default function GenerateBridgesRunnerPage() {
       setWriteResult({ written: result.written, validCount: result.validCount });
       setStatus("written");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const details = err instanceof ApiCallError && typeof err.data.details === "string" ? err.data.details : null;
+      setError(err instanceof Error ? `${err.message}${details ? ` — ${details}` : ""}` : String(err));
     } finally {
       setRunning(false);
       runningRef.current = false;
