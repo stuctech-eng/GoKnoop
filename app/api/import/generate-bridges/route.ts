@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
+import { FieldPath, type Firestore } from "firebase-admin/firestore";
 import { rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
 import { LocalBikeRouter } from "@/lib/local-bike-router/local-bike-router";
 import { OpenRouteServiceAdapter } from "@/lib/local-bike-router/open-route-service-adapter";
@@ -128,7 +129,7 @@ class UnionFind {
   }
 }
 
-async function loadGraphStructure(db: FirebaseFirestore.Firestore, datasetVersionId: string) {
+async function loadGraphStructure(db: Firestore, datasetVersionId: string) {
   const [logicalNodesSnap, matchedEdgesSnap] = await Promise.all([
     db.collection("logicalNodes").where("datasetVersionId", "==", datasetVersionId).get(),
     db.collection("edges").where("datasetVersionId", "==", datasetVersionId).where("matchConfidence", "==", "matched").get(),
@@ -269,7 +270,7 @@ function toDirectionalCandidates(datasetVersionId: string, pairs: BridgeCandidat
   return out;
 }
 
-function candidateMetaRef(db: FirebaseFirestore.Firestore, datasetVersionId: string, scope: Scope) {
+function candidateMetaRef(db: Firestore, datasetVersionId: string, scope: Scope) {
   return db.collection(CANDIDATE_CACHE_COLLECTION).doc(`${datasetVersionId}_${scope}`);
 }
 
@@ -586,7 +587,7 @@ export async function GET(req: NextRequest) {
         const idBatch = neededIds.slice(i, i + 30);
         const snap = await db
           .collection("logicalNodes")
-          .where(FirebaseFirestore.FieldPath.documentId(), "in", idBatch)
+          .where(FieldPath.documentId(), "in", idBatch)
           .get();
         for (const doc of snap.docs) {
           const d = doc.data();
