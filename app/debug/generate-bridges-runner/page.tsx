@@ -7,7 +7,7 @@
  * ORS-logica hier) -- deze pagina is puur een client-side orkestrator.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Scope = "strong" | "weak";
 
@@ -21,6 +21,14 @@ type BatchResult = {
   status: string;
 };
 
+class ApiCallError extends Error {
+  data: Record<string, unknown>;
+  constructor(message: string, data: Record<string, unknown>) {
+    super(message);
+    this.data = data;
+  }
+}
+
 export default function GenerateBridgesRunnerPage() {
   const [debugKey, setDebugKey] = useState("");
   const [datasetVersionId, setDatasetVersionId] = useState("uINZ3y2QsgBdEyky3duq");
@@ -31,6 +39,7 @@ export default function GenerateBridgesRunnerPage() {
   const [status, setStatus] = useState<"idle" | "running" | "complete" | "written" | "error">("idle");
   const [writeResult, setWriteResult] = useState<{ written: number; validCount: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  const runningRef = useRef(false); // synchrone guard tegen dubbeltik/race -- state alleen sluit het tijdvenster niet snel genoeg
 
   useEffect(() => {
     const saved = window.localStorage.getItem("goknoop_debug_secret") || "";
@@ -46,11 +55,13 @@ export default function GenerateBridgesRunnerPage() {
     const qs = new URLSearchParams({ datasetVersionId, key: debugKey, _t: String(Date.now()), ...params }).toString();
     const res = await fetch(`/api/import/generate-bridges?${qs}`, { cache: "no-store" });
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Onbekende fout.");
+    if (!res.ok) throw new ApiCallError(json.error || "Onbekende fout.", json);
     return json;
   }
 
   async function run() {
+    if (runningRef.current) return; // synchrone dubbeltik-blokkade, vóór enige state/async
+    runningRef.current = true;
     setRunning(true);
     setError(null);
     setLog([]);
@@ -69,7 +80,6 @@ export default function GenerateBridgesRunnerPage() {
         processedCount = 0;
         if (totalDirectionalItems === 0) {
           setStatus("complete");
-          setRunning(false);
           return;
         }
       } else {
@@ -77,19 +87,30 @@ export default function GenerateBridgesRunnerPage() {
         totalDirectionalItems = statusResp.totalDirectionalItems;
         if (statusResp.status === "complete" || statusResp.status === "written") {
           setStatus(statusResp.status === "written" ? "written" : "complete");
-          setRunning(false);
           return;
         }
       }
 
       // 2. Herhaald compute-batch, hervat automatisch vanaf processedCount.
+      //    Zelfherstellend (toegevoegd 5-9-2026, n.a.v. een batchOffset-mismatch
+      //    door een dubbeltik): bij een 409 met expectedBatchOffset past de loop
+      //    zichzelf aan i.p.v. hard te stoppen -- de server weet het beter dan
+      //    de lokale teller.
       while (processedCount < totalDirectionalItems) {
-        const batch: BatchResult = await call({ phase: "compute-batch", scope, batchOffset: String(processedCount) });
-        setLog((prev) => [...prev, batch]);
-        processedCount = batch.processedCount;
-        if (batch.status === "complete") {
-          setStatus("complete");
-          break;
+        try {
+          const batch: BatchResult = await call({ phase: "compute-batch", scope, batchOffset: String(processedCount) });
+          setLog((prev) => [...prev, batch]);
+          processedCount = batch.processedCount;
+          if (batch.status === "complete") {
+            setStatus("complete");
+            break;
+          }
+        } catch (err) {
+          if (err instanceof ApiCallError && typeof err.data.expectedBatchOffset === "number") {
+            processedCount = err.data.expectedBatchOffset as number;
+            continue; // opnieuw proberen met de door de server aangegeven juiste offset
+          }
+          throw err;
         }
       }
       if (processedCount >= totalDirectionalItems) setStatus("complete");
@@ -98,10 +119,13 @@ export default function GenerateBridgesRunnerPage() {
       setStatus("error");
     } finally {
       setRunning(false);
+      runningRef.current = false;
     }
   }
 
   async function doWrite() {
+    if (runningRef.current) return;
+    runningRef.current = true;
     setRunning(true);
     setError(null);
     try {
@@ -112,6 +136,7 @@ export default function GenerateBridgesRunnerPage() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setRunning(false);
+      runningRef.current = false;
     }
   }
 
