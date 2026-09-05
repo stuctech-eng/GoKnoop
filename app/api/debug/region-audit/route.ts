@@ -116,7 +116,13 @@ export async function GET(req: NextRequest) {
       fromLogicalNodeId: string | null;
       toLogicalNodeId: string | null;
       coords: { x: number; y: number }[];
-      endpointMatches?: { endpoint: string; sourceCoordinate: { x: number; y: number }; distanceM: number | null; matchConfidence: string }[];
+      endpointMatches?: {
+        endpoint: string;
+        sourceCoordinate: { x: number; y: number };
+        matchedSourceNodeId: string | null;
+        distanceM: number | null;
+        matchConfidence: string;
+      }[];
     };
     const edges: EdgeRow[] = edgesSnap.docs.map((d) => {
       const data = d.data();
