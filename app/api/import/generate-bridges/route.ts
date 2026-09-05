@@ -114,6 +114,88 @@ function median(sorted: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+type GraphStructure = NonNullable<Awaited<ReturnType<typeof loadGraphStructure>>>;
+
+/**
+ * Gap-detectie (plan §4, DEFINITIEF herzien 5-9-2026 op basis van landelijke
+ * analyze-run): eerdere regel "edgeCount<=1 OF componentSize<threshold" bleek
+ * op schaal (11.003 nodes) een te brede/vervuilde populatie op te leveren --
+ * 80% rejected_no_route in de eerste ORS-steekproef, met name doordat
+ * edgeCount===1-knopen óók heel gewoon in het hoofdnetwerk voorkomen (max
+ * gevonden componentgrootte bij edgeCount===1: 8372 -- exact het
+ * hoofdnetwerk). Definitieve regel:
+ *
+ *   isStrongGap = edgeCount === 0                                   (729 landelijk)
+ *   isWeakGap   = edgeCount === 1 AND componentSize < threshold      (609 landelijk)
+ *
+ * BEWUST GEEN "heeft-kandidaat-binnen-radius"-check hier (GPT 5-9-2026):
+ * dat hoort bij kandidaatselectie, niet bij gap-detectie zelf. Een gap-node
+ * zonder kandidaat binnen radius is nog steeds een gap -- hij levert alleen
+ * geen bruikbare bridge op. Die twee dingen worden hieronder apart gehouden.
+ */
+function detectGapNodes(structure: GraphStructure, gapComponentSizeThreshold: number) {
+  const { nodes, uf, componentSize, edgeCountByNode } = structure;
+  const strongGap = new Set<number>(); // edgeCount === 0
+  const weakGap = new Set<number>(); // edgeCount === 1 + kleine component
+  for (let i = 0; i < nodes.length; i++) {
+    const edgeCount = edgeCountByNode.get(nodes[i].id) || 0;
+    if (edgeCount === 0) {
+      strongGap.add(i);
+    } else if (edgeCount === 1) {
+      const size = componentSize.get(uf.find(i)) || 1;
+      if (size < gapComponentSizeThreshold) weakGap.add(i);
+    }
+  }
+  const all = new Set<number>([...strongGap, ...weakGap]);
+  return { strongGap, weakGap, all };
+}
+
+/** Kandidaatselectie (plan §5): andere, grotere component, binnen radius, top-N. */
+function findCandidates(
+  structure: GraphStructure,
+  gapNodeIndices: Iterable<number>,
+  candidateRadiusM: number,
+  maxCandidatesPerNode: number
+): BridgeCandidate[] {
+  const { nodes, uf, componentSize } = structure;
+  const radiusSq = candidateRadiusM * candidateRadiusM;
+  const candidates: BridgeCandidate[] = [];
+
+  for (const i of gapNodeIndices) {
+    const node = nodes[i];
+    const root = uf.find(i);
+    const nodeComponentSize = componentSize.get(root) || 1;
+
+    const nearby = nodes
+      .map((n, j) => {
+        if (j === i) return null;
+        const otherRoot = uf.find(j);
+        if (otherRoot === root) return null; // zelfde component, geen bridge nodig
+        const otherSize = componentSize.get(otherRoot) || 1;
+        if (otherSize <= nodeComponentSize) return null; // moet richting grotere component wijzen
+        const dx = n.x - node.x;
+        const dy = n.y - node.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq > radiusSq) return null;
+        return { node: n, distanceM: Math.sqrt(distSq), otherComponentSize: otherSize };
+      })
+      .filter((c): c is { node: LNode; distanceM: number; otherComponentSize: number } => c !== null)
+      .sort((a, b) => a.distanceM - b.distanceM)
+      .slice(0, maxCandidatesPerNode);
+
+    for (const c of nearby) {
+      candidates.push({
+        sourceNodeId: node.id,
+        sourceComponentSize: nodeComponentSize,
+        targetNodeId: c.node.id,
+        targetComponentSize: c.otherComponentSize,
+        geographicDistanceM: c.distanceM,
+      });
+    }
+  }
+  return candidates;
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -146,69 +228,59 @@ export async function GET(req: NextRequest) {
     const cacheRef = db.collection(CACHE_COLLECTION).doc(datasetVersionId);
 
     if (phase === "analyze") {
-      // Landelijke, ORS-vrije structuuranalyse (toegevoegd 5-9-2026, n.a.v. de
-      // eerste compute-run: edgeCount<=1 bleek als samengevoegd signaal 80%
-      // rejected_no_route op te leveren -- te veel legitieme dead-end-knopen
-      // (edgeCount===1) werden ten onrechte als gap-kandidaat behandeld. Geen
-      // enkele ORS-call in deze fase; puur Union-Find + geografische telling.
+      // Landelijke, ORS-vrije structuuranalyse (toegevoegd 5-9-2026). Gebruikt
+      // nu de DEFINITIEVE gap-regel (zie detectGapNodes hierboven) en voert de
+      // ECHTE kandidaatselectie-functie uit (findCandidates) -- geen losse
+      // "withBothSignals"-boolean meer, gap-detectie en kandidaatselectie zijn
+      // twee gescheiden stappen, exact zoals compute (verderop) ze ook gebruikt.
+      // Geen enkele ORS-call in deze fase.
       const structure = await loadGraphStructure(db, datasetVersionId);
       if (!structure) {
         return NextResponse.json({ error: "Geen logicalNodes gevonden voor deze datasetVersionId." }, { status: 404 });
       }
       const { nodes, uf, componentSize, edgeCountByNode } = structure;
-      const radiusSq = candidateRadiusM * candidateRadiusM;
 
-      function hasCandidateInLargerComponent(i: number): boolean {
-        const root = uf.find(i);
-        const ownSize = componentSize.get(root) || 1;
-        const node = nodes[i];
-        for (let j = 0; j < nodes.length; j++) {
-          if (j === i) continue;
-          const otherRoot = uf.find(j);
-          if (otherRoot === root) continue;
-          if ((componentSize.get(otherRoot) || 1) <= ownSize) continue;
-          const dx = nodes[j].x - node.x;
-          const dy = nodes[j].y - node.y;
-          if (dx * dx + dy * dy <= radiusSq) return true;
-        }
-        return false;
-      }
+      const { strongGap, weakGap, all: gapNodeIndices } = detectGapNodes(structure, gapComponentSizeThreshold);
+      const candidates = findCandidates(structure, gapNodeIndices, candidateRadiusM, maxCandidatesPerNode);
 
-      function analyzeCategory(predicate: (edgeCount: number) => boolean) {
-        const indices: number[] = [];
-        for (let i = 0; i < nodes.length; i++) {
-          if (predicate(edgeCountByNode.get(nodes[i].id) || 0)) indices.push(i);
-        }
-        const compSizes = indices.map((i) => componentSize.get(uf.find(i)) || 1).sort((a, b) => a - b);
-        const withCandidateInLargerComponent = indices.filter(hasCandidateInLargerComponent);
-        const withSmallComponent = indices.filter((i) => (componentSize.get(uf.find(i)) || 1) < gapComponentSizeThreshold);
-        const withBothSignals = indices.filter(
-          (i) => hasCandidateInLargerComponent(i) && (componentSize.get(uf.find(i)) || 1) < gapComponentSizeThreshold
-        );
-        return {
-          total: indices.length,
-          componentSizeStats: compSizes.length
-            ? { min: compSizes[0], median: median(compSizes), max: compSizes[compSizes.length - 1] }
-            : null,
-          withCandidateInLargerComponentWithinRadius: withCandidateInLargerComponent.length,
-          withComponentSizeUnderThreshold: withSmallComponent.length,
-          withBothSignals: withBothSignals.length,
-        };
-      }
+      const gapNodesWithCandidate = new Set(candidates.map((c) => c.sourceNodeId));
+      const strongGapIds = [...strongGap].map((i) => nodes[i].id);
+      const weakGapIds = [...weakGap].map((i) => nodes[i].id);
 
-      const edgeCountZero = analyzeCategory((c) => c === 0);
-      const edgeCountOne = analyzeCategory((c) => c === 1);
-      const edgeCountTwoPlus = nodes.filter((n) => (edgeCountByNode.get(n.id) || 0) >= 2).length;
+      const weakGapComponentSizes = [...weakGap].map((i) => componentSize.get(uf.find(i)) || 1).sort((a, b) => a - b);
 
       return NextResponse.json({
         phase: "analyze",
         datasetVersionId,
         candidateRadiusM,
+        maxCandidatesPerNode,
         gapComponentSizeThreshold,
         totalLogicalNodes: nodes.length,
-        edgeCountBuckets: { zero: edgeCountZero.total, one: edgeCountOne.total, twoPlus: edgeCountTwoPlus },
-        edgeCountZero,
-        edgeCountOne,
+        edgeCountBuckets: {
+          zero: strongGap.size,
+          one: nodes.filter((n) => (edgeCountByNode.get(n.id) || 0) === 1).length,
+          twoPlus: nodes.filter((n) => (edgeCountByNode.get(n.id) || 0) >= 2).length,
+        },
+        isolatedNodes: {
+          total: strongGap.size,
+          withCandidate: strongGapIds.filter((id) => gapNodesWithCandidate.has(id)).length,
+          withoutCandidate: strongGapIds.filter((id) => !gapNodesWithCandidate.has(id)).length,
+        },
+        weakGapNodes: {
+          total: weakGap.size,
+          note: "edgeCount===1 EN componentSize < gapComponentSizeThreshold -- NIET vereist: kandidaat binnen radius (dat is kandidaatselectie, zie withCandidate/withoutCandidate hieronder).",
+          componentSizeStats: weakGapComponentSizes.length
+            ? { min: weakGapComponentSizes[0], median: median(weakGapComponentSizes), max: weakGapComponentSizes[weakGapComponentSizes.length - 1] }
+            : null,
+          withCandidate: weakGapIds.filter((id) => gapNodesWithCandidate.has(id)).length,
+          withoutCandidate: weakGapIds.filter((id) => !gapNodesWithCandidate.has(id)).length,
+        },
+        candidateSelection: {
+          totalGapNodes: gapNodeIndices.size,
+          candidatePairsFound: candidates.length,
+          orsCallsRequired: candidates.length * 2, // directioneel: 2 calls per paar (plan §2/§6)
+          note: "orsCallsRequired is een SCHATTING op basis van de huidige kandidaatselectie -- er is nog geen enkele ORS-call gemaakt.",
+        },
         orsCallsMade: 0,
       });
     }
@@ -231,57 +303,14 @@ export async function GET(req: NextRequest) {
       if (!structure) {
         return NextResponse.json({ error: "Geen logicalNodes gevonden voor deze datasetVersionId." }, { status: 404 });
       }
-      const { nodes, uf, componentSize, edgeCountByNode } = structure;
+      const { nodes, uf, componentSize } = structure;
 
-      // Gap-detection (plan §4, bijgesteld): edgeCount<=1 is het PRIMAIRE signaal.
-      // componentSize<threshold is een SECUNDAIR signaal -- apart geteld, niet
-      // blind samengevoegd, zodat zichtbaar is hoeveel elk signaal oplevert
-      // vóórdat er ook maar één ORS-call gedaan wordt.
-      const gapByEdgeCount = new Set<number>();
-      const gapByComponentSize = new Set<number>();
-      for (let i = 0; i < nodes.length; i++) {
-        const edgeCount = edgeCountByNode.get(nodes[i].id) || 0;
-        if (edgeCount <= 1) gapByEdgeCount.add(i);
-        const size = componentSize.get(uf.find(i)) || 1;
-        if (size < gapComponentSizeThreshold) gapByComponentSize.add(i);
-      }
-      const gapNodeIndices = new Set<number>([...gapByEdgeCount, ...gapByComponentSize]);
-
-      // ---- Kandidaatselectie (plan §5) ----
-      const candidates: BridgeCandidate[] = [];
-      for (const i of gapNodeIndices) {
-        const node = nodes[i];
-        const root = uf.find(i);
-        const nodeComponentSize = componentSize.get(root) || 1;
-        const radiusSq = candidateRadiusM * candidateRadiusM;
-
-        const nearby = nodes
-          .map((n, j) => {
-            if (j === i) return null;
-            const otherRoot = uf.find(j);
-            if (otherRoot === root) return null; // zelfde component, geen bridge nodig
-            const otherSize = componentSize.get(otherRoot) || 1;
-            if (otherSize <= nodeComponentSize) return null; // moet richting grotere component wijzen (plan §5)
-            const dx = n.x - node.x;
-            const dy = n.y - node.y;
-            const distSq = dx * dx + dy * dy;
-            if (distSq > radiusSq) return null;
-            return { node: n, distanceM: Math.sqrt(distSq), otherComponentSize: otherSize };
-          })
-          .filter((c): c is { node: LNode; distanceM: number; otherComponentSize: number } => c !== null)
-          .sort((a, b) => a.distanceM - b.distanceM)
-          .slice(0, maxCandidatesPerNode);
-
-        for (const c of nearby) {
-          candidates.push({
-            sourceNodeId: node.id,
-            sourceComponentSize: nodeComponentSize,
-            targetNodeId: c.node.id,
-            targetComponentSize: c.otherComponentSize,
-            geographicDistanceM: c.distanceM,
-          });
-        }
-      }
+      // Gap-detectie + kandidaatselectie: gedeelde functies, DEFINITIEVE regel
+      // (zie detectGapNodes hierboven; niet meer "edgeCount<=1 OF kleine
+      // component" apart, maar "edgeCount===0 OF (edgeCount===1 EN kleine
+      // component)" -- landelijk gevalideerd via phase=analyze, 5-9-2026).
+      const { all: gapNodeIndices } = detectGapNodes(structure, gapComponentSizeThreshold);
+      const candidates = findCandidates(structure, gapNodeIndices, candidateRadiusM, maxCandidatesPerNode);
 
       // ---- ORS-validatie, BEIDE richtingen per candidate-paar (plan §2/§6) ----
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
@@ -349,8 +378,6 @@ export async function GET(req: NextRequest) {
 
       const report = {
         totalLogicalNodes: nodes.length,
-        gapNodesByEdgeCountSignal: gapByEdgeCount.size,
-        gapNodesByComponentSizeSignal: gapByComponentSize.size,
         gapNodesTotal: gapNodeIndices.size,
         candidatePairsFound: candidates.length,
         orsCallsMade: orsCallCount,
