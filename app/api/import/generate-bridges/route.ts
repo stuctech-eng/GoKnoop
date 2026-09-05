@@ -11,28 +11,81 @@ export const maxDuration = 60;
 /**
  * GET /api/import/generate-bridges — Network Bridge Layer-generator.
  * Implementatieplan: docs/network-bridge-layer-plan.md (§4-§8, §13, §17).
- * Two-phase patroon, zelfde als match-edges/route.ts: phase=compute (rapport +
- * cache, incl. de daadwerkelijke ORS-validatie), dan phase=write (persisteert
- * de gevalideerde bridges naar `networkBridges`).
  *
- * BELANGRIJK — bridges zijn DIRECTIONEEL (plan §2, gecorrigeerd na de
- * 24-richtingentest): voor elk candidate-paar (source, target) worden BEIDE
- * richtingen apart gevalideerd via ORS en apart opgeslagen. Geen aanname dat
- * A->B ook B->A impliceert.
+ * HERONTWERP 5-9-2026 (GPT-review, n.a.v. landelijke analyze-run: 3081
+ * kandidaatparen / 6162 benodigde ORS-calls, ruim boven de 200-cap per run).
+ * Vervangt het oorspronkelijke single-shot compute/write door een
+ * deterministisch batchmechanisme met expliciete statussen:
+ *
+ *   ANALYZE (phase=analyze, ongewijzigd, geen cache-effect)
+ *        |
+ *   PREPARE (phase=prepare&scope=strong|weak)
+ *        -> berekent EENMALIG de deterministische, richtinggevoelige
+ *           kandidatenlijst voor het gekozen signaal en cachet die
+ *           (gechunkt, zelfde patroon als edgeMatchCache). Geen ORS-calls.
+ *        |
+ *   COMPUTE BATCHES (phase=compute-batch&scope=...&batchOffset=N)
+ *        -> verwerkt een deterministische slice van de gecachete lijst,
+ *           batchOffset MOET gelijk zijn aan het al-verwerkte aantal (geen
+ *           gaten/sprongen mogelijk), batchSize hard begrensd op
+ *           MAX_TOTAL_ORS_CALLS_PER_RUN. Herhaal totdat status "complete" is.
+ *        |
+ *   COMPLETE (status-veld in de cache, geen aparte phase)
+ *        |
+ *   WRITE (phase=write&scope=...)
+ *        -> alleen toegestaan wanneer status "complete" is; persisteert alle
+ *           resultaten (valid EN rejected, plan §8) naar networkBridges.
+ *
+ * BELANGRIJK — bridges zijn DIRECTIONEEL (plan §2): de gecachete kandidatenlijst
+ * bevat AL beide richtingen als aparte items (1 item = 1 ORS-call = 1
+ * NetworkBridge-document) -- geen impliciete "x2"-vermenigvuldiging meer
+ * ergens in de batch-logica, wat bij paginering foutgevoelig zou zijn.
+ *
+ * SCOPE (GPT 5-9-2026, n.a.v. de 80%-rejected-uitkomst op de ongesplitste
+ * populatie): "strong" = edgeCount===0 (het sterke, ondubbelzinnige signaal --
+ * hier starten we mee). "weak" = edgeCount===1 + kleine component (zwakker
+ * heuristisch signaal, pas te gebruiken NADAT de strong-populatie een
+ * bevredigende validity-rate heeft aangetoond).
  */
 
 // ---- Harde server-side caps (plan §17 — query-parameters kunnen deze alleen VERLAGEN, nooit verhogen) ----
 const MAX_CANDIDATES_PER_NODE_HARD_CAP = 3;
 const MAX_BRIDGE_CANDIDATE_RADIUS_M_HARD_CAP = 3000;
-const MAX_TOTAL_ORS_CALLS_PER_RUN = 200;
+const MAX_TOTAL_ORS_CALLS_PER_RUN = 200; // = max. directionele items per compute-batch-aanroep
 
-// ---- Kwaliteitsdrempels (plan §7): zie lib/route-engine/bridge-validation-thresholds.ts
-//      (single source of truth, ook gebruikt door de unit tests) ----
-
-// ---- Gap-detection (plan §4, bijgesteld: componentSize is secundair signaal, geen foutclassificatie) ----
+// ---- Gap-detection (plan §4, definitief herzien 5-9-2026) ----
 const DEFAULT_GAP_COMPONENT_SIZE_THRESHOLD = 50;
 
-const CACHE_COLLECTION = "generateBridgesCache";
+const CANDIDATE_CACHE_COLLECTION = "generateBridgesCandidateCache";
+const CANDIDATE_CACHE_CHUNK_SIZE = 500;
+const ATTEMPTS_COLLECTION = "generateBridgesAttempts";
+const FIRESTORE_OP_LIMIT = 450;
+
+type LNode = { id: string; x: number; y: number; displayNumber?: string };
+type Scope = "strong" | "weak";
+
+/** Eén regel in de deterministische, gecachete kandidatenlijst -- vóór ORS-validatie. */
+type DirectionalCandidate = {
+  id: string; // `${datasetVersionId}_${sourceNodeId}_${targetNodeId}` -- ook het uiteindelijke NetworkBridge-ID (plan §8)
+  sourceNodeId: string;
+  targetNodeId: string;
+  geographicDistanceM: number;
+  sourceComponentSize: number;
+  targetComponentSize: number;
+};
+
+/** Zoals DirectionalCandidate, plus het ORS-validatieresultaat -- 1 document per item in ATTEMPTS_COLLECTION. */
+type StoredAttempt = DirectionalCandidate & {
+  datasetVersionId: string;
+  scope: Scope;
+  validationStatus: NetworkBridgeValidationStatus;
+  rejectionReason: string | null;
+  distanceM: number | null;
+  durationS: number | null;
+  circuityRatio: number | null;
+  geometry: { lat: number; lon: number }[] | null;
+  validatedAt: string;
+};
 
 class UnionFind {
   parent: number[];
@@ -52,24 +105,6 @@ class UnionFind {
     if (ra !== rb) this.parent[ra] = rb;
   }
 }
-
-type LNode = { id: string; x: number; y: number; displayNumber?: string };
-
-/** Eén ORS-validatiepoging in één richting -- wordt 1-op-1 een NetworkBridge-doc. */
-type BridgeAttempt = {
-  id: string; // `${datasetVersionId}_${sourceNodeId}_${targetNodeId}`
-  sourceNodeId: string;
-  targetNodeId: string;
-  geographicDistanceM: number;
-  sourceComponentSize: number;
-  targetComponentSize: number;
-  validationStatus: NetworkBridgeValidationStatus;
-  rejectionReason: string | null;
-  distanceM: number | null;
-  durationS: number | null;
-  circuityRatio: number | null;
-  geometry: { lat: number; lon: number }[] | null;
-};
 
 async function loadGraphStructure(db: FirebaseFirestore.Firestore, datasetVersionId: string) {
   const [logicalNodesSnap, matchedEdgesSnap] = await Promise.all([
@@ -117,26 +152,16 @@ function median(sorted: number[]): number {
 type GraphStructure = NonNullable<Awaited<ReturnType<typeof loadGraphStructure>>>;
 
 /**
- * Gap-detectie (plan §4, DEFINITIEF herzien 5-9-2026 op basis van landelijke
- * analyze-run): eerdere regel "edgeCount<=1 OF componentSize<threshold" bleek
- * op schaal (11.003 nodes) een te brede/vervuilde populatie op te leveren --
- * 80% rejected_no_route in de eerste ORS-steekproef, met name doordat
- * edgeCount===1-knopen óók heel gewoon in het hoofdnetwerk voorkomen (max
- * gevonden componentgrootte bij edgeCount===1: 8372 -- exact het
- * hoofdnetwerk). Definitieve regel:
- *
- *   isStrongGap = edgeCount === 0                                   (729 landelijk)
- *   isWeakGap   = edgeCount === 1 AND componentSize < threshold      (609 landelijk)
- *
- * BEWUST GEEN "heeft-kandidaat-binnen-radius"-check hier (GPT 5-9-2026):
- * dat hoort bij kandidaatselectie, niet bij gap-detectie zelf. Een gap-node
- * zonder kandidaat binnen radius is nog steeds een gap -- hij levert alleen
- * geen bruikbare bridge op. Die twee dingen worden hieronder apart gehouden.
+ * Gap-detectie (plan §4, definitief 5-9-2026):
+ *   isStrongGap = edgeCount === 0                               (729 landelijk)
+ *   isWeakGap   = edgeCount === 1 AND componentSize < threshold  (609 landelijk)
+ * Bewust GEEN "heeft-kandidaat-binnen-radius"-check hier -- dat hoort bij
+ * kandidaatselectie (findCandidates), niet bij gap-detectie zelf.
  */
 function detectGapNodes(structure: GraphStructure, gapComponentSizeThreshold: number) {
   const { nodes, uf, componentSize, edgeCountByNode } = structure;
-  const strongGap = new Set<number>(); // edgeCount === 0
-  const weakGap = new Set<number>(); // edgeCount === 1 + kleine component
+  const strongGap = new Set<number>();
+  const weakGap = new Set<number>();
   for (let i = 0; i < nodes.length; i++) {
     const edgeCount = edgeCountByNode.get(nodes[i].id) || 0;
     if (edgeCount === 0) {
@@ -146,8 +171,7 @@ function detectGapNodes(structure: GraphStructure, gapComponentSizeThreshold: nu
       if (size < gapComponentSizeThreshold) weakGap.add(i);
     }
   }
-  const all = new Set<number>([...strongGap, ...weakGap]);
-  return { strongGap, weakGap, all };
+  return { strongGap, weakGap };
 }
 
 /** Kandidaatselectie (plan §5): andere, grotere component, binnen radius, top-N. */
@@ -170,9 +194,9 @@ function findCandidates(
       .map((n, j) => {
         if (j === i) return null;
         const otherRoot = uf.find(j);
-        if (otherRoot === root) return null; // zelfde component, geen bridge nodig
+        if (otherRoot === root) return null;
         const otherSize = componentSize.get(otherRoot) || 1;
-        if (otherSize <= nodeComponentSize) return null; // moet richting grotere component wijzen
+        if (otherSize <= nodeComponentSize) return null;
         const dx = n.x - node.x;
         const dy = n.y - node.y;
         const distSq = dx * dx + dy * dy;
@@ -196,6 +220,37 @@ function findCandidates(
   return candidates;
 }
 
+/** Zet geografische paren om in een deterministische, gesorteerde lijst van BEIDE richtingen apart. */
+function toDirectionalCandidates(datasetVersionId: string, pairs: BridgeCandidate[]): DirectionalCandidate[] {
+  const out: DirectionalCandidate[] = [];
+  for (const p of pairs) {
+    out.push({
+      id: `${datasetVersionId}_${p.sourceNodeId}_${p.targetNodeId}`,
+      sourceNodeId: p.sourceNodeId,
+      targetNodeId: p.targetNodeId,
+      geographicDistanceM: p.geographicDistanceM,
+      sourceComponentSize: p.sourceComponentSize,
+      targetComponentSize: p.targetComponentSize,
+    });
+    out.push({
+      id: `${datasetVersionId}_${p.targetNodeId}_${p.sourceNodeId}`,
+      sourceNodeId: p.targetNodeId,
+      targetNodeId: p.sourceNodeId,
+      geographicDistanceM: p.geographicDistanceM,
+      sourceComponentSize: p.targetComponentSize,
+      targetComponentSize: p.sourceComponentSize,
+    });
+  }
+  // Deterministisch: alfabetisch op id. Chunking/paginering hangt hiervan af,
+  // dus de sortering moet stabiel en herhaalbaar zijn -- string sort is dat.
+  out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return out;
+}
+
+function candidateMetaRef(db: FirebaseFirestore.Firestore, datasetVersionId: string, scope: Scope) {
+  return db.collection(CANDIDATE_CACHE_COLLECTION).doc(`${datasetVersionId}_${scope}`);
+}
+
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
   if (debugSecret) {
@@ -209,9 +264,8 @@ export async function GET(req: NextRequest) {
   if (!datasetVersionId) {
     return NextResponse.json({ error: "datasetVersionId is verplicht." }, { status: 400 });
   }
-  const phase = req.nextUrl.searchParams.get("phase") || "compute";
+  const phase = req.nextUrl.searchParams.get("phase") || "analyze";
 
-  // Query-parameters kunnen de harde caps alleen VERLAGEN, nooit verhogen (plan §17).
   const requestedMaxCandidates = parseInt(req.nextUrl.searchParams.get("maxCandidates") || String(MAX_CANDIDATES_PER_NODE_HARD_CAP), 10);
   const maxCandidatesPerNode = Math.min(requestedMaxCandidates, MAX_CANDIDATES_PER_NODE_HARD_CAP);
 
@@ -225,28 +279,26 @@ export async function GET(req: NextRequest) {
 
   try {
     const db = getDb();
-    const cacheRef = db.collection(CACHE_COLLECTION).doc(datasetVersionId);
 
+    // ============================================================
+    // PHASE: analyze -- landelijke, ORS-vrije structuuranalyse. Ongewijzigd
+    // t.o.v. de vorige versie; geen cache-effect, puur informatief.
+    // ============================================================
     if (phase === "analyze") {
-      // Landelijke, ORS-vrije structuuranalyse (toegevoegd 5-9-2026). Gebruikt
-      // nu de DEFINITIEVE gap-regel (zie detectGapNodes hierboven) en voert de
-      // ECHTE kandidaatselectie-functie uit (findCandidates) -- geen losse
-      // "withBothSignals"-boolean meer, gap-detectie en kandidaatselectie zijn
-      // twee gescheiden stappen, exact zoals compute (verderop) ze ook gebruikt.
-      // Geen enkele ORS-call in deze fase.
       const structure = await loadGraphStructure(db, datasetVersionId);
       if (!structure) {
         return NextResponse.json({ error: "Geen logicalNodes gevonden voor deze datasetVersionId." }, { status: 404 });
       }
       const { nodes, uf, componentSize, edgeCountByNode } = structure;
 
-      const { strongGap, weakGap, all: gapNodeIndices } = detectGapNodes(structure, gapComponentSizeThreshold);
-      const candidates = findCandidates(structure, gapNodeIndices, candidateRadiusM, maxCandidatesPerNode);
+      const { strongGap, weakGap } = detectGapNodes(structure, gapComponentSizeThreshold);
+      const strongCandidates = findCandidates(structure, strongGap, candidateRadiusM, maxCandidatesPerNode);
+      const weakCandidates = findCandidates(structure, weakGap, candidateRadiusM, maxCandidatesPerNode);
 
-      const gapNodesWithCandidate = new Set(candidates.map((c) => c.sourceNodeId));
+      const strongGapWithCandidate = new Set(strongCandidates.map((c) => c.sourceNodeId));
+      const weakGapWithCandidate = new Set(weakCandidates.map((c) => c.sourceNodeId));
       const strongGapIds = [...strongGap].map((i) => nodes[i].id);
       const weakGapIds = [...weakGap].map((i) => nodes[i].id);
-
       const weakGapComponentSizes = [...weakGap].map((i) => componentSize.get(uf.find(i)) || 1).sort((a, b) => a - b);
 
       return NextResponse.json({
@@ -263,207 +315,342 @@ export async function GET(req: NextRequest) {
         },
         isolatedNodes: {
           total: strongGap.size,
-          withCandidate: strongGapIds.filter((id) => gapNodesWithCandidate.has(id)).length,
-          withoutCandidate: strongGapIds.filter((id) => !gapNodesWithCandidate.has(id)).length,
+          withCandidate: strongGapIds.filter((id) => strongGapWithCandidate.has(id)).length,
+          withoutCandidate: strongGapIds.filter((id) => !strongGapWithCandidate.has(id)).length,
+          candidatePairsFound: strongCandidates.length,
+          directionalOrsCallsRequired: strongCandidates.length * 2,
         },
         weakGapNodes: {
           total: weakGap.size,
-          note: "edgeCount===1 EN componentSize < gapComponentSizeThreshold -- NIET vereist: kandidaat binnen radius (dat is kandidaatselectie, zie withCandidate/withoutCandidate hieronder).",
           componentSizeStats: weakGapComponentSizes.length
             ? { min: weakGapComponentSizes[0], median: median(weakGapComponentSizes), max: weakGapComponentSizes[weakGapComponentSizes.length - 1] }
             : null,
-          withCandidate: weakGapIds.filter((id) => gapNodesWithCandidate.has(id)).length,
-          withoutCandidate: weakGapIds.filter((id) => !gapNodesWithCandidate.has(id)).length,
-        },
-        candidateSelection: {
-          totalGapNodes: gapNodeIndices.size,
-          candidatePairsFound: candidates.length,
-          orsCallsRequired: candidates.length * 2, // directioneel: 2 calls per paar (plan §2/§6)
-          note: "orsCallsRequired is een SCHATTING op basis van de huidige kandidaatselectie -- er is nog geen enkele ORS-call gemaakt.",
+          withCandidate: weakGapIds.filter((id) => weakGapWithCandidate.has(id)).length,
+          withoutCandidate: weakGapIds.filter((id) => !weakGapWithCandidate.has(id)).length,
+          candidatePairsFound: weakCandidates.length,
+          directionalOrsCallsRequired: weakCandidates.length * 2,
         },
         orsCallsMade: 0,
+        nextStep: "Roep phase=prepare&scope=strong aan om te starten (aanbevolen volgorde: eerst strong, pas daarna weak).",
       });
     }
 
-    if (phase === "compute") {
-      let router: LocalBikeRouter;
-      try {
-        router = new LocalBikeRouter(new OpenRouteServiceAdapter());
-      } catch (err) {
-        return NextResponse.json(
-          {
-            error: "ORS niet geconfigureerd -- generate-bridges kan niet valideren zonder een werkende ORS-verbinding.",
-            details: err instanceof Error ? err.message : String(err),
-          },
-          { status: 503 }
-        );
+    // ============================================================
+    // PHASE: prepare -- berekent EENMALIG de deterministische, richtinggevoelige
+    // kandidatenlijst voor één scope en cachet die gechunkt. Geen ORS-calls.
+    // ============================================================
+    if (phase === "prepare") {
+      const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
+      if (scope !== "strong" && scope !== "weak") {
+        return NextResponse.json({ error: "scope is verplicht en moet 'strong' of 'weak' zijn." }, { status: 400 });
       }
 
       const structure = await loadGraphStructure(db, datasetVersionId);
       if (!structure) {
         return NextResponse.json({ error: "Geen logicalNodes gevonden voor deze datasetVersionId." }, { status: 404 });
       }
-      const { nodes, uf, componentSize } = structure;
+      const { strongGap, weakGap } = detectGapNodes(structure, gapComponentSizeThreshold);
+      const gapSet = scope === "strong" ? strongGap : weakGap;
 
-      // Gap-detectie + kandidaatselectie: gedeelde functies, DEFINITIEVE regel
-      // (zie detectGapNodes hierboven; niet meer "edgeCount<=1 OF kleine
-      // component" apart, maar "edgeCount===0 OF (edgeCount===1 EN kleine
-      // component)" -- landelijk gevalideerd via phase=analyze, 5-9-2026).
-      const { all: gapNodeIndices } = detectGapNodes(structure, gapComponentSizeThreshold);
-      const candidates = findCandidates(structure, gapNodeIndices, candidateRadiusM, maxCandidatesPerNode);
+      const pairs = findCandidates(structure, gapSet, candidateRadiusM, maxCandidatesPerNode);
+      const directional = toDirectionalCandidates(datasetVersionId, pairs);
 
-      // ---- ORS-validatie, BEIDE richtingen per candidate-paar (plan §2/§6) ----
-      const nodeById = new Map(nodes.map((n) => [n.id, n]));
-      const attempts: BridgeAttempt[] = [];
-      let orsCallCount = 0;
-      let partial = false;
-
-      outer: for (const candidate of candidates) {
-        const sourceNode = nodeById.get(candidate.sourceNodeId)!;
-        const targetNode = nodeById.get(candidate.targetNodeId)!;
-        const sourceWgs = rdToWgs84(sourceNode.x, sourceNode.y);
-        const targetWgs = rdToWgs84(targetNode.x, targetNode.y);
-
-        const directions: { sourceId: string; targetId: string; from: typeof sourceWgs; to: typeof targetWgs; sourceCompSize: number; targetCompSize: number }[] = [
-          { sourceId: candidate.sourceNodeId, targetId: candidate.targetNodeId, from: sourceWgs, to: targetWgs, sourceCompSize: candidate.sourceComponentSize, targetCompSize: candidate.targetComponentSize },
-          { sourceId: candidate.targetNodeId, targetId: candidate.sourceNodeId, from: targetWgs, to: sourceWgs, sourceCompSize: candidate.targetComponentSize, targetCompSize: candidate.sourceComponentSize },
-        ];
-
-        for (const dir of directions) {
-          if (orsCallCount >= MAX_TOTAL_ORS_CALLS_PER_RUN) {
-            partial = true;
-            break outer;
-          }
-          orsCallCount++;
-
-          const id = `${datasetVersionId}_${dir.sourceId}_${dir.targetId}`;
-          const orsResult = await router.route({ lat: dir.from.lat, lon: dir.from.lon }, { lat: dir.to.lat, lon: dir.to.lon }, "cycling");
-
-          if ("reason" in orsResult) {
-            attempts.push({
-              id,
-              sourceNodeId: dir.sourceId,
-              targetNodeId: dir.targetId,
-              geographicDistanceM: candidate.geographicDistanceM,
-              sourceComponentSize: dir.sourceCompSize,
-              targetComponentSize: dir.targetCompSize,
-              validationStatus: "rejected_no_route",
-              rejectionReason: `ORS: ${orsResult.reason}${orsResult.message ? ` (${orsResult.message})` : ""}`,
-              distanceM: null,
-              durationS: null,
-              circuityRatio: null,
-              geometry: null,
-            });
-            continue;
-          }
-
-          const { validationStatus, rejectionReason, circuityRatio } = classifyBridgeAttempt(orsResult.distanceM, candidate.geographicDistanceM);
-
-          attempts.push({
-            id,
-            sourceNodeId: dir.sourceId,
-            targetNodeId: dir.targetId,
-            geographicDistanceM: candidate.geographicDistanceM,
-            sourceComponentSize: dir.sourceCompSize,
-            targetComponentSize: dir.targetCompSize,
-            validationStatus,
-            rejectionReason,
-            distanceM: Math.round(orsResult.distanceM),
-            durationS: Math.round(orsResult.durationS),
-            circuityRatio,
-            geometry: orsResult.geometry,
-          });
-        }
+      const chunks: DirectionalCandidate[][] = [];
+      for (let i = 0; i < directional.length; i += CANDIDATE_CACHE_CHUNK_SIZE) {
+        chunks.push(directional.slice(i, i + CANDIDATE_CACHE_CHUNK_SIZE));
       }
-
-      const report = {
-        totalLogicalNodes: nodes.length,
-        gapNodesTotal: gapNodeIndices.size,
-        candidatePairsFound: candidates.length,
-        orsCallsMade: orsCallCount,
-        attemptsTotal: attempts.length,
-        validCount: attempts.filter((a) => a.validationStatus === "valid").length,
-        rejectedCount: attempts.filter((a) => a.validationStatus !== "valid").length,
-        rejectedBreakdown: {
-          rejected_no_route: attempts.filter((a) => a.validationStatus === "rejected_no_route").length,
-          rejected_distance: attempts.filter((a) => a.validationStatus === "rejected_distance").length,
-          rejected_circuity: attempts.filter((a) => a.validationStatus === "rejected_circuity").length,
-        },
-        partial,
-      };
-
-      // Gecorrigeerd (GPT 5-9-2026, plan-update): bij partial=true wordt de
-      // write-fase HARD geblokkeerd -- geen halve bridge-set die er compleet
-      // uitziet voor de rest van de pipeline. `phase=write` checkt dit hieronder.
-      await cacheRef.set({
+      for (let i = 0; i < chunks.length; i++) {
+        await db
+          .collection(CANDIDATE_CACHE_COLLECTION)
+          .doc(`${datasetVersionId}_${scope}_chunk${i}`)
+          .set({ datasetVersionId, scope, chunkIndex: i, items: chunks[i] });
+      }
+      await candidateMetaRef(db, datasetVersionId, scope).set({
         datasetVersionId,
-        computedAt: new Date().toISOString(),
-        report,
-        attempts,
+        scope,
+        gapNodesInScope: gapSet.size,
+        candidatePairsFound: pairs.length,
+        totalDirectionalItems: directional.length,
+        chunkCount: chunks.length,
+        processedCount: 0,
+        status: directional.length === 0 ? "complete" : "candidates_ready",
+        preparedAt: new Date().toISOString(),
       });
+
+      const suggestedBatches = Math.ceil(directional.length / MAX_TOTAL_ORS_CALLS_PER_RUN);
 
       return NextResponse.json({
-        phase: "compute",
+        phase: "prepare",
         datasetVersionId,
-        report,
-        nextStep: partial
-          ? "partial=true: ORS-call-limiet bereikt vóórdat alle kandidaten verwerkt waren. Write-fase is GEBLOKKEERD. Verhoog MAX_TOTAL_ORS_CALLS_PER_RUN of verklein de scope (bv. gapComponentSizeThreshold) en draai compute opnieuw."
-          : "Roep nu phase=write aan om de gevalideerde bridges naar networkBridges weg te schrijven.",
+        scope,
+        gapNodesInScope: gapSet.size,
+        candidatePairsFound: pairs.length,
+        totalDirectionalItems: directional.length,
+        maxBatchSize: MAX_TOTAL_ORS_CALLS_PER_RUN,
+        suggestedBatches,
+        nextStep:
+          directional.length === 0
+            ? "Geen kandidaten voor deze scope -- niets te doen."
+            : `Roep nu ${suggestedBatches}x phase=compute-batch&scope=${scope} aan, met batchOffset=0, ${MAX_TOTAL_ORS_CALLS_PER_RUN}, ${2 * MAX_TOTAL_ORS_CALLS_PER_RUN}, ... totdat status "complete" is.`,
       });
     }
 
-    // phase === "write"
-    const cacheSnap = await cacheRef.get();
-    if (!cacheSnap.exists) {
-      return NextResponse.json({ error: "Geen cache gevonden. Roep eerst phase=compute aan." }, { status: 400 });
-    }
-    const cached = cacheSnap.data() as { report: { partial: boolean }; attempts: BridgeAttempt[] };
-
-    if (cached.report.partial) {
-      return NextResponse.json(
-        {
-          error:
-            "Write geblokkeerd: de laatste compute-run was partial (ORS-call-limiet bereikt vóór volledige verwerking). " +
-            "Draai phase=compute opnieuw met een hogere limiet of kleinere scope totdat partial=false, voordat er geschreven wordt.",
-        },
-        { status: 409 }
-      );
-    }
-
-    const FIRESTORE_OP_LIMIT = 450;
-    const nowIso = new Date().toISOString();
-    for (let i = 0; i < cached.attempts.length; i += FIRESTORE_OP_LIMIT) {
-      const chunk = cached.attempts.slice(i, i + FIRESTORE_OP_LIMIT);
-      const batch = db.batch();
-      for (const a of chunk) {
-        const bridge: NetworkBridge = {
-          id: a.id,
-          datasetVersionId,
-          sourceNodeId: a.sourceNodeId,
-          targetNodeId: a.targetNodeId,
-          distanceM: a.distanceM ?? 0,
-          durationS: a.durationS ?? 0,
-          geometry: a.geometry ?? [],
-          routingProvider: "openrouteservice",
-          routingProfile: "cycling",
-          circuityRatio: a.circuityRatio ?? 0,
-          validationStatus: a.validationStatus,
-          rejectionReason: a.rejectionReason,
-          sourceComponentSizeAtCreation: a.sourceComponentSize,
-          targetComponentSizeAtCreation: a.targetComponentSize,
-          createdAt: nowIso,
-        };
-        batch.set(db.collection("networkBridges").doc(a.id), bridge);
+    // ============================================================
+    // PHASE: compute-batch -- verwerkt een deterministische slice van de
+    // gecachete lijst. batchOffset MOET gelijk zijn aan processedCount (geen
+    // gaten/sprongen). batchSize hard begrensd op MAX_TOTAL_ORS_CALLS_PER_RUN.
+    // ============================================================
+    if (phase === "compute-batch") {
+      const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
+      if (scope !== "strong" && scope !== "weak") {
+        return NextResponse.json({ error: "scope is verplicht en moet 'strong' of 'weak' zijn." }, { status: 400 });
       }
-      await batch.commit();
+      const batchOffset = parseInt(req.nextUrl.searchParams.get("batchOffset") || "-1", 10);
+      if (batchOffset < 0) {
+        return NextResponse.json({ error: "batchOffset is verplicht (0 of hoger)." }, { status: 400 });
+      }
+      const requestedBatchSize = parseInt(req.nextUrl.searchParams.get("batchSize") || String(MAX_TOTAL_ORS_CALLS_PER_RUN), 10);
+      const batchSize = Math.min(requestedBatchSize, MAX_TOTAL_ORS_CALLS_PER_RUN);
+
+      const metaRef = candidateMetaRef(db, datasetVersionId, scope);
+      const metaSnap = await metaRef.get();
+      if (!metaSnap.exists) {
+        return NextResponse.json({ error: `Geen kandidatenlijst gevonden voor scope=${scope}. Roep eerst phase=prepare aan.` }, { status: 400 });
+      }
+      const meta = metaSnap.data() as {
+        totalDirectionalItems: number;
+        chunkCount: number;
+        processedCount: number;
+        status: string;
+      };
+
+      if (meta.status === "complete") {
+        return NextResponse.json({
+          phase: "compute-batch",
+          scope,
+          status: "complete",
+          processedCount: meta.processedCount,
+          totalDirectionalItems: meta.totalDirectionalItems,
+          message: "Al volledig verwerkt -- niets te doen. Roep phase=write aan.",
+        });
+      }
+
+      if (batchOffset !== meta.processedCount) {
+        return NextResponse.json(
+          {
+            error: `batchOffset (${batchOffset}) komt niet overeen met het al-verwerkte aantal (${meta.processedCount}). ` +
+              `Batches moeten strikt opeenvolgend zijn, geen gaten of sprongen. Gebruik batchOffset=${meta.processedCount}.`,
+            expectedBatchOffset: meta.processedCount,
+          },
+          { status: 409 }
+        );
+      }
+
+      const actualBatchSize = Math.min(batchSize, meta.totalDirectionalItems - meta.processedCount);
+
+      let router: LocalBikeRouter;
+      try {
+        router = new LocalBikeRouter(new OpenRouteServiceAdapter());
+      } catch (err) {
+        return NextResponse.json(
+          {
+            error: "ORS niet geconfigureerd -- compute-batch kan niet valideren zonder een werkende ORS-verbinding.",
+            details: err instanceof Error ? err.message : String(err),
+          },
+          { status: 503 }
+        );
+      }
+
+      // Slice ophalen: kan over chunk-grenzen heen lopen, dus lees alle relevante chunks.
+      const startChunk = Math.floor(batchOffset / CANDIDATE_CACHE_CHUNK_SIZE);
+      const endChunk = Math.floor((batchOffset + actualBatchSize - 1) / CANDIDATE_CACHE_CHUNK_SIZE);
+      let pool: DirectionalCandidate[] = [];
+      for (let c = startChunk; c <= endChunk && c < meta.chunkCount; c++) {
+        const chunkSnap = await db.collection(CANDIDATE_CACHE_COLLECTION).doc(`${datasetVersionId}_${scope}_chunk${c}`).get();
+        const chunkData = chunkSnap.data() as { items: DirectionalCandidate[] } | undefined;
+        if (chunkData) pool = pool.concat(chunkData.items);
+      }
+      const localOffset = batchOffset - startChunk * CANDIDATE_CACHE_CHUNK_SIZE;
+      const slice = pool.slice(localOffset, localOffset + actualBatchSize);
+
+      const nodeById = new Map<string, { lat: number; lon: number }>();
+      // Coördinaten zijn niet in de gecachete candidate-items opgeslagen (alleen
+      // ID's + afstand) -- opnieuw ophalen uit logicalNodes voor deze slice.
+      const neededIds = new Set<string>();
+      slice.forEach((c) => {
+        neededIds.add(c.sourceNodeId);
+        neededIds.add(c.targetNodeId);
+      });
+      const structure = await loadGraphStructure(db, datasetVersionId);
+      if (!structure) {
+        return NextResponse.json({ error: "Geen logicalNodes gevonden voor deze datasetVersionId." }, { status: 404 });
+      }
+      for (const id of neededIds) {
+        const node = structure.nodes.find((n) => n.id === id);
+        if (node) nodeById.set(id, rdToWgs84(node.x, node.y));
+      }
+
+      const nowIso = new Date().toISOString();
+      const results: StoredAttempt[] = [];
+      for (const c of slice) {
+        const from = nodeById.get(c.sourceNodeId);
+        const to = nodeById.get(c.targetNodeId);
+        if (!from || !to) {
+          results.push({
+            ...c,
+            datasetVersionId,
+            scope,
+            validationStatus: "rejected_no_route",
+            rejectionReason: "Node-coördinaten niet gevonden bij compute-batch (mogelijk dataset gewijzigd sinds prepare).",
+            distanceM: null,
+            durationS: null,
+            circuityRatio: null,
+            geometry: null,
+            validatedAt: nowIso,
+          });
+          continue;
+        }
+
+        const orsResult = await router.route({ lat: from.lat, lon: from.lon }, { lat: to.lat, lon: to.lon }, "cycling");
+
+        if ("reason" in orsResult) {
+          results.push({
+            ...c,
+            datasetVersionId,
+            scope,
+            validationStatus: "rejected_no_route",
+            rejectionReason: `ORS: ${orsResult.reason}${orsResult.message ? ` (${orsResult.message})` : ""}`,
+            distanceM: null,
+            durationS: null,
+            circuityRatio: null,
+            geometry: null,
+            validatedAt: nowIso,
+          });
+          continue;
+        }
+
+        const { validationStatus, rejectionReason, circuityRatio } = classifyBridgeAttempt(orsResult.distanceM, c.geographicDistanceM);
+        results.push({
+          ...c,
+          datasetVersionId,
+          scope,
+          validationStatus,
+          rejectionReason,
+          distanceM: Math.round(orsResult.distanceM),
+          durationS: Math.round(orsResult.durationS),
+          circuityRatio,
+          geometry: orsResult.geometry,
+          validatedAt: nowIso,
+        });
+      }
+
+      // Elk resultaat als eigen document -- geen read-modify-write op een groeiende array.
+      for (let i = 0; i < results.length; i += FIRESTORE_OP_LIMIT) {
+        const batch = db.batch();
+        for (const r of results.slice(i, i + FIRESTORE_OP_LIMIT)) {
+          batch.set(db.collection(ATTEMPTS_COLLECTION).doc(r.id), r);
+        }
+        await batch.commit();
+      }
+
+      const newProcessedCount = meta.processedCount + results.length;
+      const newStatus = newProcessedCount >= meta.totalDirectionalItems ? "complete" : "processing";
+      await metaRef.update({ processedCount: newProcessedCount, status: newStatus, lastBatchAt: nowIso });
+
+      return NextResponse.json({
+        phase: "compute-batch",
+        scope,
+        batchOffset,
+        batchProcessed: results.length,
+        batchValidCount: results.filter((r) => r.validationStatus === "valid").length,
+        batchRejectedBreakdown: {
+          rejected_no_route: results.filter((r) => r.validationStatus === "rejected_no_route").length,
+          rejected_distance: results.filter((r) => r.validationStatus === "rejected_distance").length,
+          rejected_circuity: results.filter((r) => r.validationStatus === "rejected_circuity").length,
+        },
+        processedCount: newProcessedCount,
+        totalDirectionalItems: meta.totalDirectionalItems,
+        status: newStatus,
+        nextStep:
+          newStatus === "complete"
+            ? "Alle kandidaten verwerkt. Roep phase=write aan om de resultaten naar networkBridges te schrijven."
+            : `Roep opnieuw phase=compute-batch&scope=${scope}&batchOffset=${newProcessedCount} aan.`,
+      });
     }
 
-    return NextResponse.json({
-      phase: "write",
-      datasetVersionId,
-      written: cached.attempts.length,
-      report: cached.report,
-    });
+    // ============================================================
+    // PHASE: write -- alleen toegestaan wanneer status "complete" is.
+    // ============================================================
+    if (phase === "write") {
+      const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
+      if (scope !== "strong" && scope !== "weak") {
+        return NextResponse.json({ error: "scope is verplicht en moet 'strong' of 'weak' zijn." }, { status: 400 });
+      }
+
+      const metaRef = candidateMetaRef(db, datasetVersionId, scope);
+      const metaSnap = await metaRef.get();
+      if (!metaSnap.exists) {
+        return NextResponse.json({ error: `Geen kandidatenlijst gevonden voor scope=${scope}. Roep eerst phase=prepare aan.` }, { status: 400 });
+      }
+      const meta = metaSnap.data() as { totalDirectionalItems: number; processedCount: number; status: string };
+
+      if (meta.status !== "complete") {
+        return NextResponse.json(
+          {
+            error:
+              `Write geblokkeerd: scope=${scope} is nog niet compleet ` +
+              `(${meta.processedCount}/${meta.totalDirectionalItems} verwerkt, status="${meta.status}"). ` +
+              "Rond alle compute-batch-aanroepen af voordat er geschreven wordt.",
+          },
+          { status: 409 }
+        );
+      }
+
+      const attemptsSnap = await db
+        .collection(ATTEMPTS_COLLECTION)
+        .where("datasetVersionId", "==", datasetVersionId)
+        .where("scope", "==", scope)
+        .get();
+
+      const nowIso = new Date().toISOString();
+      const docs = attemptsSnap.docs;
+      for (let i = 0; i < docs.length; i += FIRESTORE_OP_LIMIT) {
+        const batch = db.batch();
+        for (const doc of docs.slice(i, i + FIRESTORE_OP_LIMIT)) {
+          const a = doc.data() as StoredAttempt;
+          const bridge: NetworkBridge = {
+            id: a.id,
+            datasetVersionId,
+            sourceNodeId: a.sourceNodeId,
+            targetNodeId: a.targetNodeId,
+            distanceM: a.distanceM ?? 0,
+            durationS: a.durationS ?? 0,
+            geometry: a.geometry ?? [],
+            routingProvider: "openrouteservice",
+            routingProfile: "cycling",
+            circuityRatio: a.circuityRatio ?? 0,
+            validationStatus: a.validationStatus,
+            rejectionReason: a.rejectionReason,
+            sourceComponentSizeAtCreation: a.sourceComponentSize,
+            targetComponentSizeAtCreation: a.targetComponentSize,
+            createdAt: nowIso,
+          };
+          batch.set(db.collection("networkBridges").doc(a.id), bridge);
+        }
+        await batch.commit();
+      }
+
+      await metaRef.update({ status: "written", writtenAt: nowIso });
+
+      return NextResponse.json({
+        phase: "write",
+        scope,
+        written: docs.length,
+        validCount: docs.filter((d) => (d.data() as StoredAttempt).validationStatus === "valid").length,
+      });
+    }
+
+    return NextResponse.json({ error: `Onbekende phase "${phase}". Gebruik analyze, prepare, compute-batch, of write.` }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { error: "Bridge-generatie mislukt.", details: err instanceof Error ? err.message : String(err) },
