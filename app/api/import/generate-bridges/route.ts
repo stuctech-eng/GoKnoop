@@ -352,11 +352,32 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "scope is verplicht en moet 'strong' of 'weak' zijn." }, { status: 400 });
       }
       const metaSnap = await candidateMetaRef(db, datasetVersionId, scope).get();
+
+      // Diagnostisch (5-9-2026, n.a.v. onverklaarde discrepantie na reset: 852
+      // deletedAttempts i.p.v. verwacht 4002, candidateCacheCleared:false
+      // terwijl prepare eerder succesvol leek). Telt de WERKELIJKE Firestore-
+      // staat i.p.v. te vertrouwen op de meta-cache, om te zien of er
+      // documenten zonder scope-veld zijn blijven staan van vóór de
+      // scope-toevoeging, of dat er iets anders aan de hand is.
+      const [attemptsWithScopeSnap, allNetworkBridgesForDatasetSnap, networkBridgesWithScopeSnap] = await Promise.all([
+        db.collection(ATTEMPTS_COLLECTION).where("datasetVersionId", "==", datasetVersionId).where("scope", "==", scope).get(),
+        db.collection("networkBridges").where("datasetVersionId", "==", datasetVersionId).get(),
+        db.collection("networkBridges").where("datasetVersionId", "==", datasetVersionId).where("scope", "==", scope).get(),
+      ]);
+      const networkBridgesWithoutScopeField = allNetworkBridgesForDatasetSnap.docs.filter((d) => d.data().scope === undefined).length;
+
+      const diagnostics = {
+        actualAttemptsWithScopeCount: attemptsWithScopeSnap.docs.length,
+        actualNetworkBridgesTotalForDataset: allNetworkBridgesForDatasetSnap.docs.length,
+        actualNetworkBridgesWithScopeCount: networkBridgesWithScopeSnap.docs.length,
+        actualNetworkBridgesWithoutScopeField: networkBridgesWithoutScopeField,
+      };
+
       if (!metaSnap.exists) {
-        return NextResponse.json({ phase: "status", scope, prepared: false });
+        return NextResponse.json({ phase: "status", scope, prepared: false, diagnostics });
       }
       const meta = metaSnap.data();
-      return NextResponse.json({ phase: "status", scope, prepared: true, ...meta });
+      return NextResponse.json({ phase: "status", scope, prepared: true, ...meta, diagnostics });
     }
 
     // ============================================================
