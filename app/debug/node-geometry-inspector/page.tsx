@@ -27,12 +27,15 @@ type Endpoint = {
   distToCenterM: number;
   matchedToSourceNodeId: string | null;
   matchedDistanceM: number | null;
+  actualNearestSourceNodeId: string | null;
+  actualNearestDistanceM: number | null;
 };
 
 type InspectResponse = {
   totalEndpointsFound: number;
   unmatchedEndpointCount: number;
   justOutsideToleranceCount: number;
+  structurallyFarCount: number;
   endpoints: Endpoint[];
 };
 
@@ -90,10 +93,12 @@ export default function NodeGeometryInspectorPage() {
       lines.push(`## ${run.point.label} (${run.point.lat}, ${run.point.lon}), radius ${run.point.radiusM ?? 150}m`);
       if (run.status === "klaar" && run.data) {
         lines.push(
-          `${run.data.totalEndpointsFound} endpoints binnen radius | ${run.data.unmatchedEndpointCount} onmatched | ${run.data.justOutsideToleranceCount} net-buiten-tolerantie (5-15m)`
+          `${run.data.totalEndpointsFound} endpoints binnen radius | ${run.data.unmatchedEndpointCount} onmatched | ${run.data.justOutsideToleranceCount} net-buiten-tolerantie (5-15m) | ${run.data.structurallyFarCount} structureel ver (>15m)`
         );
         for (const ep of run.data.endpoints.slice(0, 20)) {
-          const status = ep.matchedToSourceNodeId ? `matched @ ${ep.matchedDistanceM?.toFixed(1)}m` : "ONMATCHED";
+          const status = ep.matchedToSourceNodeId
+            ? `matched @ ${ep.matchedDistanceM?.toFixed(1)}m`
+            : `ONMATCHED (werkelijk dichtstbijzijnde node: ${ep.actualNearestDistanceM?.toFixed(1)}m)`;
           lines.push(
             `  [${ep.edgeMatchConfidence}] edge ${ep.edgeId} (${ep.endpoint}) -- ${ep.distToCenterM.toFixed(0)}m van centrum -- ${status}`
           );
@@ -161,12 +166,12 @@ export default function NodeGeometryInspectorPage() {
                 <span style={{ color: run.data.unmatchedEndpointCount > 0 ? "#c00" : "inherit" }}>
                   {run.data.unmatchedEndpointCount} onmatched
                 </span>{" "}
-                · {run.data.justOutsideToleranceCount} net-buiten-tolerantie
+                · {run.data.justOutsideToleranceCount} net-buiten-tolerantie · {run.data.structurallyFarCount} structureel ver
               </div>
               {run.data.endpoints.slice(0, 8).map((ep, j) => (
                 <div key={j} style={{ borderTop: "1px solid #eee", padding: "4px 0", color: ep.matchedToSourceNodeId ? "inherit" : "#c00" }}>
                   [{ep.edgeMatchConfidence}] {ep.distToCenterM.toFixed(0)}m weg —{" "}
-                  {ep.matchedToSourceNodeId ? `matched @ ${ep.matchedDistanceM?.toFixed(1)}m` : "ONMATCHED"}
+                  {ep.matchedToSourceNodeId ? `matched @ ${ep.matchedDistanceM?.toFixed(1)}m` : `ONMATCHED (dichtstbij: ${ep.actualNearestDistanceM?.toFixed(1)}m)`}
                 </div>
               ))}
               {run.data.endpoints.length > 8 && <div style={{ opacity: 0.5, marginTop: 4 }}>+{run.data.endpoints.length - 8} meer (zie kopieertekst)</div>}

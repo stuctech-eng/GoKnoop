@@ -80,6 +80,18 @@ export async function GET(req: NextRequest) {
       ambiguous: boolean;
     };
 
+    const sourceNodeList: { id: string; x: number; y: number }[] = [];
+    for (const [id, n] of sourceNodeById) sourceNodeList.push({ id, x: n.x, y: n.y });
+
+    function nearestSourceNode(point: { x: number; y: number }): { id: string; d: number } | null {
+      let best: { id: string; d: number } | null = null;
+      for (const n of sourceNodeList) {
+        const d = Math.sqrt((n.x - point.x) ** 2 + (n.y - point.y) ** 2);
+        if (!best || d < best.d) best = { id: n.id, d };
+      }
+      return best;
+    }
+
     const nearbyEndpoints: {
       edgeId: string;
       edgeMatchConfidence: string;
@@ -91,6 +103,8 @@ export async function GET(req: NextRequest) {
       matchedDistanceM: number | null;
       matchedSourceNodeLat: number | null;
       matchedSourceNodeLon: number | null;
+      actualNearestSourceNodeId: string | null;
+      actualNearestDistanceM: number | null;
     }[] = [];
 
     for (const doc of edgesSnap.docs) {
@@ -116,6 +130,8 @@ export async function GET(req: NextRequest) {
           }
         }
 
+        const actual = nearestSourceNode(ep.sourceCoordinate);
+
         nearbyEndpoints.push({
           edgeId: doc.id,
           edgeMatchConfidence: data.matchConfidence,
@@ -127,6 +143,8 @@ export async function GET(req: NextRequest) {
           matchedDistanceM: ep.distanceM,
           matchedSourceNodeLat: matchedLat,
           matchedSourceNodeLon: matchedLon,
+          actualNearestSourceNodeId: actual?.id ?? null,
+          actualNearestDistanceM: actual ? Number(actual.d.toFixed(2)) : null,
         });
       }
     }
@@ -134,7 +152,10 @@ export async function GET(req: NextRequest) {
     nearbyEndpoints.sort((a, b) => a.distToCenterM - b.distToCenterM);
 
     const unmatchedNearby = nearbyEndpoints.filter((e) => e.matchedToSourceNodeId === null);
-    const justOutsideTolerance = nearbyEndpoints.filter((e) => e.matchedDistanceM !== null && e.matchedDistanceM > 5 && e.matchedDistanceM <= 15);
+    const justOutsideTolerance = nearbyEndpoints.filter(
+      (e) => e.actualNearestDistanceM !== null && e.actualNearestDistanceM > 5 && e.actualNearestDistanceM <= 15
+    );
+    const structurallyFar = unmatchedNearby.filter((e) => e.actualNearestDistanceM !== null && e.actualNearestDistanceM > 15);
 
     return NextResponse.json({
       datasetVersionId,
@@ -143,8 +164,9 @@ export async function GET(req: NextRequest) {
       totalEndpointsFound: nearbyEndpoints.length,
       unmatchedEndpointCount: unmatchedNearby.length,
       justOutsideToleranceCount: justOutsideTolerance.length,
+      structurallyFarCount: structurallyFar.length,
       interpretation: {
-        hint: "Als 'justOutsideToleranceCount' hoog is (endpoints net buiten de 5m-grens, bv. 5-15m), wijst dat op een kalibratieprobleem (tolerantie te strak voor dit gebied). Als endpoints juist ONMATCHED zijn met GEEN nabije sourceNode binnen enkele tientallen meters, wijst dat op een structureel dekkingsgat (geen brondata i.p.v. net gemist).",
+        hint: "justOutsideToleranceCount = endpoints (matched of onmatched) met een werkelijk dichtstbijzijnde sourceNode net buiten de 5m-grens (5-15m) -- kalibratieprobleem. structurallyFarCount = onmatched endpoints waarvan de dichtstbijzijnde sourceNode zelfs >15m weg ligt -- structureel dekkingsgat, geen kalibratiekwestie. Let op: 'matchedDistanceM' is null voor onmatched endpoints (de bestaande matching-code onthoudt geen afstand buiten tolerantie); gebruik 'actualNearestDistanceM' voor de echte afstand, ook bij onmatched.",
       },
       endpoints: nearbyEndpoints,
     });
