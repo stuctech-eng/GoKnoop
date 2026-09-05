@@ -175,6 +175,29 @@ export async function GET(req: NextRequest) {
           { lat: candidateWgs.lat, lon: candidateWgs.lon },
           "cycling"
         );
+        // Bidirectionaliteitstest (GPT-verzoek, sessie 5-9-2026): niet aannemen dat A->B
+        // en B->A hetzelfde zijn (eenrichtingsfietspaden bestaan) -- expliciet ook de
+        // omgekeerde richting valideren en de twee vergelijken.
+        const orsResultReverse = await router.route(
+          { lat: candidateWgs.lat, lon: candidateWgs.lon },
+          { lat: targetWgs.lat, lon: targetWgs.lon },
+          "cycling"
+        );
+
+        function summarize(r: typeof orsResult) {
+          if ("reason" in r) return { validated: false as const, reason: r.reason, message: r.message };
+          return { validated: true as const, distanceM: Math.round(r.distanceM), durationS: Math.round(r.durationS) };
+        }
+        const forward = summarize(orsResult);
+        const reverse = summarize(orsResultReverse);
+        let symmetric: boolean | null = null;
+        let asymmetryPercent: number | null = null;
+        if (forward.validated && reverse.validated) {
+          const diff = Math.abs(forward.distanceM - reverse.distanceM);
+          const avg = (forward.distanceM + reverse.distanceM) / 2;
+          asymmetryPercent = Number(((diff / avg) * 100).toFixed(1));
+          symmetric = diff / avg <= 0.2; // GPT's 20%-drempel
+        }
 
         if ("reason" in orsResult) {
           candidateResults.push({
@@ -183,6 +206,9 @@ export async function GET(req: NextRequest) {
             geographicDistanceM: Math.round(c.distanceM),
             otherComponentSize: c.otherComponentSize,
             ors: { validated: false, reason: orsResult.reason, message: orsResult.message },
+            reverse,
+            symmetric,
+            asymmetryPercent,
           });
         } else {
           const ratio = orsResult.distanceM / c.distanceM;
@@ -198,6 +224,9 @@ export async function GET(req: NextRequest) {
               ratioOrsVsGeographic: Number(ratio.toFixed(2)),
               plausible: ratio >= 0.8 && ratio <= 5,
             },
+            reverse,
+            symmetric,
+            asymmetryPercent,
           });
         }
       }

@@ -17,6 +17,9 @@ type Candidate = {
   geographicDistanceM: number;
   otherComponentSize: number;
   ors: OrsResult;
+  reverse: { validated: false; reason: string; message: string | null } | { validated: true; distanceM: number; durationS: number };
+  symmetric: boolean | null;
+  asymmetryPercent: number | null;
 };
 
 type NodeResult = {
@@ -92,13 +95,15 @@ export default function BridgeValidatorPage() {
       }
       lines.push(`## Knooppunt ${r.displayNumber ?? "(geen)"} (${r.nodeId}) -- eigen component: ${r.componentSize} knopen`);
       for (const c of r.candidates ?? []) {
+        const rev = c.reverse.validated ? `${c.reverse.distanceM}m (${(c.reverse.durationS / 60).toFixed(0)} min)` : `GEEN ROUTE (${c.reverse.reason})`;
+        const sym = c.symmetric === null ? "n/a" : c.symmetric ? `symmetrisch (${c.asymmetryPercent}% verschil)` : `ASYMMETRISCH (${c.asymmetryPercent}% verschil)`;
         if (c.ors.validated) {
           lines.push(
-            `  -> ${c.candidateDisplayNumber ?? c.candidateNodeId} (component ${c.otherComponentSize}) | geo ${c.geographicDistanceM}m | ORS ${c.ors.orsDistanceM}m (${(c.ors.orsDurationS / 60).toFixed(0)} min) | ratio ${c.ors.ratioOrsVsGeographic}x | ${c.ors.plausible ? "PLAUSIBEL" : "twijfelachtig"}`
+            `  -> ${c.candidateDisplayNumber ?? c.candidateNodeId} (component ${c.otherComponentSize}) | geo ${c.geographicDistanceM}m | heen ${c.ors.orsDistanceM}m (${(c.ors.orsDurationS / 60).toFixed(0)} min) | terug ${rev} | ${sym} | ratio ${c.ors.ratioOrsVsGeographic}x | ${c.ors.plausible ? "PLAUSIBEL" : "twijfelachtig"}`
           );
         } else {
           lines.push(
-            `  -> ${c.candidateDisplayNumber ?? c.candidateNodeId} (component ${c.otherComponentSize}) | geo ${c.geographicDistanceM}m | ORS: GEEN ROUTE (${c.ors.reason}${c.ors.message ? `: ${c.ors.message}` : ""})`
+            `  -> ${c.candidateDisplayNumber ?? c.candidateNodeId} (component ${c.otherComponentSize}) | geo ${c.geographicDistanceM}m | heen: GEEN ROUTE (${c.ors.reason}${c.ors.message ? `: ${c.ors.message}` : ""}) | terug ${rev}`
           );
         }
       }
@@ -175,7 +180,7 @@ export default function BridgeValidatorPage() {
                     </div>
                     {c.ors.validated ? (
                       <div style={{ color: c.ors.plausible ? "green" : "#b8860b" }}>
-                        ORS {c.ors.orsDistanceM}m ({(c.ors.orsDurationS / 60).toFixed(0)} min) · ratio {c.ors.ratioOrsVsGeographic}x ·{" "}
+                        heen {c.ors.orsDistanceM}m ({(c.ors.orsDurationS / 60).toFixed(0)} min) · ratio {c.ors.ratioOrsVsGeographic}x ·{" "}
                         {c.ors.plausible ? "PLAUSIBEL ✓" : "twijfelachtig ⚠️"}
                       </div>
                     ) : (
@@ -184,6 +189,15 @@ export default function BridgeValidatorPage() {
                         {c.ors.message ? `: ${c.ors.message}` : ""}
                       </div>
                     )}
+                    <div style={{ opacity: 0.75 }}>
+                      terug:{" "}
+                      {c.reverse.validated ? `${c.reverse.distanceM}m (${(c.reverse.durationS / 60).toFixed(0)} min)` : `GEEN ROUTE (${c.reverse.reason})`}
+                      {c.symmetric !== null && (
+                        <span style={{ color: c.symmetric ? "green" : "#c00", marginLeft: 6 }}>
+                          {c.symmetric ? `symmetrisch ✓` : `ASYMMETRISCH ⚠️`} ({c.asymmetryPercent}%)
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </>
