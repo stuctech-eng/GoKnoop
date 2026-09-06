@@ -72,7 +72,7 @@ const MAX_BRIDGE_CANDIDATE_RADIUS_M_HARD_CAP = 3000;
 const MAX_TOTAL_ORS_CALLS_PER_RUN = 30; // bovengrens per aanvraag; het TIJDSBUDGET (hieronder) is meestal de echte begrenzer
 
 // ---- Vercel Hobby 10s-limiet-bewuste batchverwerking (5-9-2026, n.a.v. rate-limit-incident) ----
-const FUNCTION_TIME_BUDGET_MS = 7000; // ruime marge onder de harde 10s (response-serialisatie, netwerklatentie, cold start)
+const FUNCTION_TIME_BUDGET_MS = 3500; // was 7000ms -- te weinig marge gebleken voor een item dat moet retryen (retry-backoff + meerdere calls kan alleen al ~4-6s kosten), risico op een 504 ondanks de check. Kleinere batches, maar veilig -- de ORS-dagquota is toch de echte bottleneck, niet batchgrootte.
 const ORS_CALL_DELAY_MS = 1600; // was 400ms -- dat bleek te snel (rate limit getriggerd bij 1840/2000 dagquota over, dus geen dagquota-probleem maar een per-minuut-limiet). 1600ms ≈ 37,5 calls/min, ruim onder de gangbare ORS-gratis-tier-limiet van ~40/min (niet exact bevestigd door ORS zelf, wel de gangbare aanname -- als dit nog steeds 429's geeft, verder verhogen).
 const ORS_RETRY_DELAYS_MS = [500, 1500]; // backoff-schema bij provider_error (bv. 429) -- 2 extra pogingen, dan pas rejected_provider_error
 
