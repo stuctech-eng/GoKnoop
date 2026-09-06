@@ -1,7 +1,6 @@
-import { GraphProvider, GraphEdge, Route } from "./types";
+import { GraphProvider, Route } from "./types";
 import { computeRoute } from "./route-engine";
 import { edgeOverlapRatio } from "./route-diversity";
-import { resolveRouteEdges } from "./resolve-route-edges";
 
 /**
  * Rondje-generator (Master Plan sectie 74/90: "Hoe ver? -> 20/30/40/50km ->
@@ -33,29 +32,7 @@ export type LoopCandidate = {
   actualDistanceM: number;
   deviationM: number;
   deviationPercent: number;
-  /**
-   * Volledige GraphEdge-objecten voor route.edges[], in dezelfde volgorde --
-   * ADDITIEF toegevoegd (GOKNOOP-MASTER.md sectie 7, Phase 4-UI-integratie),
-   * bestaande velden (route/nodes/edges/geometry/distanceM) ongewijzigd. De
-   * Navigation Engine (buildRouteProgressModel, stap 5) kan dit rechtstreeks
-   * consumeren zonder edges opnieuw te reconstrueren uit de platte geometrie
-   * -- "Route Engine → GraphEdge[] → Navigation Engine" blijft één bron van
-   * waarheid, geen tweede/parallel edge-datamodel.
-   */
-  resolvedEdges: GraphEdge[];
-  /**
-   * Weergavenummers (GraphNode.displayNumber) voor route.nodes[], in dezelfde
-   * volgorde -- ADDITIEF toegevoegd (bugfix 29-8-2026: de navigatie-UI toonde
-   * anders de interne Firestore-document-ID als "knooppuntnummer", bijv.
-   * "9CHmIH3BmYvDp7wmARBq" i.p.v. "96"). Valt terug op de logicalNodeId zelf
-   * als een node onverhoopt geen displayNumber heeft (geen crash, wel zichtbaar
-   * een technisch ID i.p.v. een stil leeg label).
-   */
-  nodeDisplayNumbers: string[];
 };
-
-/** Interne, tussentijdse vorm vóór dedup -- resolvedEdges/nodeDisplayNumbers pas berekend voor de daadwerkelijk geaccepteerde kandidaten (geen verspilde GraphProvider-lookups voor afgewezen/duplicate kandidaten). */
-type LoopCandidateDraft = Omit<LoopCandidate, "resolvedEdges" | "nodeDisplayNumbers">;
 
 export type LoopGenerationResult = {
   loops: LoopCandidate[];
@@ -68,8 +45,6 @@ export type LoopGenerationResult = {
     outboundFailed: number;
     inboundFailed: number;
     duplicateRejected: number;
-    /** Aantal kandidaten overgeslagen wegens te veel overlap met eerder gereden routes (Fase 2, 29-8-2026). */
-    historyRejected: number;
     succeeded: number;
   };
 };
@@ -196,16 +171,6 @@ export function generateLoopRoutes(
     radiusTolerance?: number;
     overlapThreshold?: number;
     candidatesPerBucket?: number;
-    /**
-     * Edge-ID-sets van eerder GEREDEN routes (Fase 2, gereden-routes-
-     * tracking, 29-8-2026) -- een nieuwe kandidaat die te veel overlapt met
-     * een van deze sets wordt overgeslagen, net als bij de bestaande
-     * onderlinge dedup tussen kandidaten binnen één aanvraag (zelfde
-     * `edgeOverlapRatio`-mechanisme, geen nieuwe/afwijkende logica). Puur
-     * gebaseerd op edge-overlap, geen aanname over WAAROM een route eerder
-     * gereden is.
-     */
-    avoidRouteEdgeSets?: string[][];
   } = {}
 ): LoopGenerationResult {
   const count = options.count ?? 4;
@@ -214,7 +179,6 @@ export function generateLoopRoutes(
   const radiusTolerance = options.radiusTolerance ?? DEFAULT_RADIUS_TOLERANCE;
   const overlapThreshold = options.overlapThreshold ?? DEFAULT_OVERLAP_THRESHOLD;
   const candidatesPerBucket = options.candidatesPerBucket ?? CANDIDATES_PER_BUCKET;
-  const avoidRouteEdgeSets = options.avoidRouteEdgeSets ?? [];
 
   const estimatedRadiusM = targetDistanceM / 2 / circuityFactor;
   const waypointCandidates = findCandidateWaypoints(
@@ -226,7 +190,7 @@ export function generateLoopRoutes(
     candidatesPerBucket
   );
 
-  const candidates: LoopCandidateDraft[] = [];
+  const candidates: LoopCandidate[] = [];
   let outboundFailed = 0;
   let inboundFailed = 0;
 
@@ -262,12 +226,7 @@ export function generateLoopRoutes(
   candidates.sort((a, b) => a.deviationM - b.deviationM);
 
   const accepted: LoopCandidate[] = [];
-  const historyMatchedFallback: LoopCandidateDraft[] = [];
   let duplicateRejected = 0;
-  let historyRejected = 0;
-
-  // Eerste doorgang: FRISSE routes (nog niet eerder gereden) hebben de voorkeur, op volgorde
-  // van beste afstandspassing.
   for (const candidate of candidates) {
     if (accepted.length >= count) break;
     const isDuplicate = accepted.some(
@@ -277,38 +236,7 @@ export function generateLoopRoutes(
       duplicateRejected++;
       continue;
     }
-    const matchesRiddenHistory = avoidRouteEdgeSets.some(
-      (riddenEdges) => edgeOverlapRatio(riddenEdges, candidate.route.edges) > overlapThreshold
-    );
-    if (matchesRiddenHistory) {
-      historyRejected++;
-      historyMatchedFallback.push(candidate); // bewaren -- mogelijk toch nodig, zie hieronder
-      continue;
-    }
-    accepted.push({
-      ...candidate,
-      resolvedEdges: resolveRouteEdges(provider, candidate.route),
-      nodeDisplayNumbers: candidate.route.nodes.map((nodeId) => provider.getNode(nodeId)?.displayNumber ?? nodeId),
-    });
-  }
-
-  // Zachte voorkeur, GEEN harde uitsluiting (bugfix 30-8-2026: na een dag intensief testen in
-  // hetzelfde gebied bleken vrijwel alle goed-passende routes al "gereden" en dus uitgesloten
-  // te zijn, waardoor alleen sterk afwijkende (bijv. 65km i.p.v. 20km) opties overbleven --
-  // duidelijk een regressie t.o.v. het doel). Als er na het vermijden van geschiedenis te
-  // weinig frisse opties overblijven, vul aan met de best passende eerder-gereden routes --
-  // afstandskwaliteit mag niet drastisch verslechteren alleen om herhaling te vermijden.
-  for (const candidate of historyMatchedFallback) {
-    if (accepted.length >= count) break;
-    const isDuplicate = accepted.some(
-      (a) => edgeOverlapRatio(a.route.edges, candidate.route.edges) > overlapThreshold
-    );
-    if (isDuplicate) continue;
-    accepted.push({
-      ...candidate,
-      resolvedEdges: resolveRouteEdges(provider, candidate.route),
-      nodeDisplayNumbers: candidate.route.nodes.map((nodeId) => provider.getNode(nodeId)?.displayNumber ?? nodeId),
-    });
+    accepted.push(candidate);
   }
 
   return {
@@ -322,99 +250,7 @@ export function generateLoopRoutes(
       outboundFailed,
       inboundFailed,
       duplicateRejected,
-      historyRejected,
       succeeded: candidates.length,
     },
-  };
-}
-
-/**
- * Startknooppunt-kandidaat, in afstandsvolgorde -- zelfde vorm als
- * `LocationCandidate` uit `location-resolver.ts` (geen dubbel type, alleen
- * de velden die deze functie nodig heeft).
- */
-export type LoopStartCandidate = {
-  logicalNodeId: string;
-  distanceM?: number;
-};
-
-export type LoopGenerationWithFallbackResult = LoopGenerationResult & {
-  /** Het knooppunt waar de teruggegeven routes daadwerkelijk vandaan komen -- niet per se candidates[0]. */
-  selectedStartNodeId: string;
-  selectedStartNodeDisplayNumber: string;
-  /** null als de aanroeper geen afstand voor dit kandidaat heeft meegegeven. */
-  selectedStartNodeDistanceM: number | null;
-  /** 1-based: 1 = eerste (dichtstbijzijnde) kandidaat werkte al, 2 = tweede kandidaat nodig, enz. */
-  selectedCandidateRank: number;
-  candidatesAttempted: number;
-};
-
-export type LoopGenerationFallbackFailure = {
-  ok: false;
-  reason: "no_usable_candidate";
-  message: string;
-  candidatesAttempted: number;
-  attempts: { logicalNodeId: string; foundCount: number }[];
-};
-
-/**
- * Rondje-generatie MET fallback over meerdere startknooppunt-kandidaten
- * (Volendam-onderzoek 29-8-2026 -- ontwerpbeslissing, GOKNOOP-MASTER.md).
- *
- * KERN VAN DE BESLISSING: de gebruiker vraagt niet om "een route vanaf mijn
- * dichtstbijzijnste knooppunt", maar om "een bruikbare route vanaf mijn
- * locatie". Welke van de kandidaten daarvoor het beste startknooppunt is,
- * is een Route Engine-verantwoordelijkheid, geen UI-beslissing (`app/page.tsx`
- * bevat hierdoor geen fallback-logica).
- *
- * Probeert kandidaten STRIKT in de meegegeven volgorde (afstandsvolgorde,
- * bepaald door de aanroeper -- deze functie herordent niet op eigen
- * initiatief). Stopt bij de EERSTE kandidaat die minstens 1 bruikbare route
- * oplevert -- geen kwaliteitsvergelijking tussen kandidaten (bewust nog niet:
- * "eerst de 1->5 fallback bouwen en testen, daarna pas eventueel een
- * start-node-score met afstand+beschikbaarheid+kwaliteit").
- *
- * Onderscheid, bewust zo geformuleerd: dit is niet "kandidaat 1 heeft geen
- * routes -> neem kandidaat 2", maar "kandidaat 1 kan geen bruikbare route
- * leveren -> probeer de volgende kandidaat" -- foundCount === 0 is het enige
- * criterium hier, geen aanname over WAAROM een kandidaat faalt.
- */
-export function generateLoopRoutesWithFallback(
-  provider: GraphProvider,
-  datasetVersionId: string,
-  candidates: readonly LoopStartCandidate[],
-  targetDistanceM: number,
-  options: Parameters<typeof generateLoopRoutes>[4] = {}
-): LoopGenerationWithFallbackResult | LoopGenerationFallbackFailure {
-  const attempts: { logicalNodeId: string; foundCount: number }[] = [];
-
-  for (let i = 0; i < candidates.length; i++) {
-    const candidate = candidates[i];
-    if (!provider.getNode(candidate.logicalNodeId)) {
-      attempts.push({ logicalNodeId: candidate.logicalNodeId, foundCount: 0 });
-      continue; // onbekend knooppunt -- geen crash, gewoon de volgende kandidaat proberen
-    }
-
-    const result = generateLoopRoutes(provider, datasetVersionId, candidate.logicalNodeId, targetDistanceM, options);
-    attempts.push({ logicalNodeId: candidate.logicalNodeId, foundCount: result.foundCount });
-
-    if (result.foundCount > 0) {
-      return {
-        ...result,
-        selectedStartNodeId: candidate.logicalNodeId,
-        selectedStartNodeDisplayNumber: provider.getNode(candidate.logicalNodeId)?.displayNumber ?? candidate.logicalNodeId,
-        selectedStartNodeDistanceM: candidate.distanceM ?? null,
-        selectedCandidateRank: i + 1,
-        candidatesAttempted: i + 1,
-      };
-    }
-  }
-
-  return {
-    ok: false,
-    reason: "no_usable_candidate",
-    message: `Geen van de ${candidates.length} kandidaat-knooppunten leverde een bruikbare route op voor ${targetDistanceM}m.`,
-    candidatesAttempted: candidates.length,
-    attempts,
   };
 }

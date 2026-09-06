@@ -3,18 +3,13 @@ import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { resolveFromWgs84, resolveFromPlaceName } from "@/lib/route-engine/location-resolver";
 
-export const maxDuration = 10; // BUGFIX 30-8-2026: Vercel Hobby-plan kapt hoe dan ook af bij 10s, ongeacht wat hier stond -- gecorrigeerd naar de echte limiet.
+export const maxDuration = 30;
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/location/resolve
  * Body: { lat, lon } OF { placeName }, optioneel { limit }
- * Response: { candidates: LocationCandidate[], geocodedAs?, geocodedLat?, geocodedLon? }
- *
- * UITGEBREID (30-8-2026, "route naar een adres"-feature, sectie 9.21): geeft bij
- * plaatsnaam-resolutie nu ook het geocodede punt zelf terug (`geocodedLat`/`geocodedLon`),
- * niet alleen de dichtstbijzijnde knooppunt-kandidaten -- nodig voor het laatste stukje
- * (aankomst-knooppunt -> exact adres, via LocalBikeRouter). Puur additief.
+ * Response: { candidates: LocationCandidate[], geocodedAs?: string }
  */
 
 export async function POST(req: NextRequest) {
@@ -42,11 +37,11 @@ export async function POST(req: NextRequest) {
     await provider.load();
 
     if (placeName) {
-      const { candidates, geocodedAs, geocodedLat, geocodedLon } = await resolveFromPlaceName(provider, placeName, limit);
+      const { candidates, geocodedAs } = await resolveFromPlaceName(provider, placeName, limit);
       if (!geocodedAs) {
         return NextResponse.json({ error: `Kon '${placeName}' niet vinden.` }, { status: 404 });
       }
-      return NextResponse.json({ candidates, geocodedAs, geocodedLat, geocodedLon, datasetVersionId });
+      return NextResponse.json({ candidates, geocodedAs, datasetVersionId });
     }
 
     const candidates = resolveFromWgs84(provider, lat!, lon!, limit);

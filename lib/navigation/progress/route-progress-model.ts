@@ -1,6 +1,6 @@
 import { GraphEdge, Point } from "../../route-engine/types";
 import { MatchedPosition } from "../types";
-import { segmentLengths, cumulativeDistances, bearingDegrees } from "../matching/geometry";
+import { segmentLengths, cumulativeDistances } from "../matching/geometry";
 
 /**
  * Progress calculation (ontwerp sectie 8) -- implementatiestap 5.
@@ -42,45 +42,25 @@ export type RouteProgressModel = {
 /**
  * Bouwt het progress-model uit een geordende lijst edges (Phase 2
  * `GraphEdge[]`, zoals `Route.edges[]` na het opzoeken van de bijbehorende
- * edge-objecten) EN de bijbehorende knooppuntvolgorde (`Route.nodes[]`,
- * lengte = edges.length + 1). Vereist minstens 1 edge -- een route zonder
- * edges is geen geldige route (Phase 2-contract), geen stilzwijgend leeg
- * model.
+ * edge-objecten). Vereist minstens 1 edge -- een route zonder edges is geen
+ * geldige route (Phase 2-contract), geen stilzwijgend leeg model.
  *
- * BUGFIX (Naarden-onderzoek 29-8-2026): een edge is BIDIRECTIONEEL
- * doorloopbaar (`isTraversable()`, Phase 2), maar de brongeometrie ligt
- * vast in ÉÉN richting (`edge.fromLogicalNodeId` -> `edge.toLogicalNodeId`).
- * Als de route een edge in de OMGEKEERDE richting doorloopt, moet de
- * geometrie omgekeerd worden -- anders "springt" de samengevoegde lijn naar
- * het verkeerde uiteinde van die edge, zichtbaar als een kaarsrechte lijn
- * die geen enkel pad volgt. Dit was eerder gemist (naïeve concatenatie
- * zonder richtingscontrole); nu gefixt met EXACT dezelfde, al bewezen
- * logica als `route-builder.ts`'s `concatenateGeometry()` (Phase 2) -- geen
- * nieuwe, afwijkende implementatie, hergebruik van het bestaande, correcte
- * patroon.
+ * Aanname, gegrond in Phase 2-ontwerp sectie 6 ("aaneengesloten
+ * lijngeometrie, coords[] per edge, juiste richting samengevoegd"):
+ * opeenvolgende edges delen hun grenspunt (edges[i].geometry laatste punt ==
+ * edges[i+1].geometry eerste punt). Dat gedeelde punt wordt hier niet
+ * gedupliceerd in de samengevoegde geometrie.
  */
-export function buildRouteProgressModel(edges: readonly GraphEdge[], nodeSequence: readonly string[]): RouteProgressModel {
+export function buildRouteProgressModel(edges: readonly GraphEdge[]): RouteProgressModel {
   if (edges.length === 0) {
     throw new Error("buildRouteProgressModel: een route zonder edges is ongeldig (Phase 2-contract).");
-  }
-  if (nodeSequence.length !== edges.length + 1) {
-    throw new Error(
-      `buildRouteProgressModel: nodeSequence.length (${nodeSequence.length}) moet gelijk zijn aan edges.length + 1 (${edges.length + 1}).`
-    );
   }
 
   const geometry: Point[] = [];
   const edgeSegmentRanges: { startSegmentIndex: number; endSegmentIndexExclusive: number }[] = [];
 
   for (let i = 0; i < edges.length; i++) {
-    const edge = edges[i];
-    const fromNodeAtThisStep = nodeSequence[i];
-    // Zelfde richtingscorrectie als route-builder.ts: de brongeometrie staat vast in de
-    // richting from -> to; bij omgekeerd doorlopen (bidirectioneel, isTraversable) moet de
-    // coördinatenreeks omgekeerd worden zodat 'ie de daadwerkelijke reisrichting volgt.
-    const forward = edge.fromLogicalNodeId === fromNodeAtThisStep;
-    const edgeGeometry = forward ? edge.geometry : [...edge.geometry].reverse();
-
+    const edgeGeometry = edges[i].geometry;
     const pointsToAdd = i === 0 ? edgeGeometry : edgeGeometry.slice(1); // grenspunt niet dupliceren
     const segmentsInThisEdge = Math.max(0, edgeGeometry.length - 1);
 
@@ -184,66 +164,4 @@ export function calculateProgress(model: RouteProgressModel, matchedPosition: Ma
     currentEdgeIndex: edgeIndex,
     currentEdgeId: edge.id,
   };
-}
-
-/**
- * Segment-index in `model.geometry` waar knooppunt `nodeIndex` (0-based,
- * 0..edges.length, dus dezelfde indexering als `Route.nodes[]`) zich
- * bevindt. Gedeelde helper -- hergebruikt door zowel deze module
- * (`calculateNextNodeInfo`, stap 12.5) als `lib/map/route-geometry-
- * adapter.ts` (stap 12.3B), zodat er niet twee plekken zijn die apart
- * "welk punt hoort bij welk knooppunt" berekenen (TypeScript-regel: geen
- * dubbele utilities).
- */
-export function getNodeSegmentIndex(model: RouteProgressModel, nodeIndex: number): number {
-  if (nodeIndex === 0) return 0;
-  if (nodeIndex === model.edges.length) return model.geometry.length - 1;
-  return model.edgeSegmentRanges[nodeIndex].startSegmentIndex;
-}
-
-export type NextNodeInfo = {
-  currentNodeId: string;
-  nextNodeId: string;
-  /** ECHTE afstand (edge.distanceM-gebaseerd) tot het volgende knooppunt, nooit negatief. */
-  distanceToNextNodeM: number;
-  /** 0-360°, 0 = noord -- absolute richting van de huidige positie naar het volgende
-   *  knooppunt. GEEN correctie voor bewegingsrichting/heading (dat is stap 12.7,
-   *  Start Guidance -> normale navigatie-overgang) -- hier bewust nog niet vooruitgelopen. */
-  bearingToNextNodeDeg: number;
-};
-
-/**
- * Huidig/volgend knooppunt + afstand + richting (ontwerp sectie 6/7,
- * geïmplementeerd bij implementatiestap 12.5 -- dit gat stond sinds stap 5
- * open, hier ingevuld als kleine, geïsoleerde uitbreiding van de bestaande
- * progress-laag, geen nieuwe navigatielogica).
- *
- * Gebruikt uitsluitend al-bestaande brongegevens: `progress.currentEdgeIndex`
- * (stap 5), `model.edgeCumulativeEndM` (ECHTE afstanden, stap 5),
- * `matchedPosition.point` + `bearingDegrees` (stap 4). Geen nieuwe afstands-
- * of positieberekening.
- */
-export function calculateNextNodeInfo(
-  model: RouteProgressModel,
-  progress: ProgressSnapshot,
-  matchedPosition: MatchedPosition,
-  nodeIds: readonly string[]
-): NextNodeInfo {
-  if (nodeIds.length !== model.edges.length + 1) {
-    throw new Error(
-      `calculateNextNodeInfo: nodeIds.length (${nodeIds.length}) moet gelijk zijn aan edges.length + 1 (${model.edges.length + 1}).`
-    );
-  }
-
-  const currentNodeId = nodeIds[progress.currentEdgeIndex];
-  const nextNodeId = nodeIds[progress.currentEdgeIndex + 1];
-
-  const edgeEndRealM = model.edgeCumulativeEndM[progress.currentEdgeIndex];
-  const distanceToNextNodeM = Math.max(0, edgeEndRealM - progress.distanceAlongRouteM);
-
-  const nextNodeSegmentIndex = getNodeSegmentIndex(model, progress.currentEdgeIndex + 1);
-  const nextNodePoint = model.geometry[nextNodeSegmentIndex];
-  const bearingToNextNodeDeg = bearingDegrees(matchedPosition.point, nextNodePoint);
-
-  return { currentNodeId, nextNodeId, distanceToNextNodeM, bearingToNextNodeDeg };
 }
