@@ -3,48 +3,80 @@
 /**
  * LiveLocationScreen (GOKNOOP-MASTER.md, live-locatiekaart, 29-8-2026).
  *
- * Toont een live MapLibre/Liberty-kaart met de actuele GPS-positie + rijrichting,
- * als bevestigingsstap ná "Mijn locatie" en VÓÓR de bestaande afstandskeuze --
+ * Toont een live kaart met de actuele GPS-positie + rijrichting, als
+ * bevestigingsstap ná "Mijn locatie" en VÓÓR de bestaande afstandskeuze --
  * bewust GEEN route, GEEN matching, GEEN NavigationSession (die horen bij een
  * gekozen route, die is hier nog niet gekozen). Puur "waar ben ik nu".
  *
- * Hergebruikt bewust dezelfde, al bewezen bouwstenen als NavigationScreen:
- * dezelfde worker-URL-fix, dezelfde Liberty-stijl-URL, dezelfde
- * BrowserGeolocationSource (stap 11) -- maar zonder de navigatie-engine
- * (geen state machine/deviation detector nodig, er is nog geen route).
+ * MIGRATIE 6-9-2026 (Fase 1+2, migratieplan MapLibre -> Leaflet): dit scherm
+ * gebruikte MapLibre GL JS + OpenFreeMap/Liberty. Na een uitgebreid, hard
+ * onderzoek (regio-audit, to-string()-stijlpatch, tegelaanbieder-vergelijking
+ * OpenFreeMap vs CARTO) bleek een reproduceerbare Safari-crash
+ * ("i.codePointAt is not a function") in MapLibre's client-side
+ * labelweergave zelf te zitten -- onafhankelijk van brondata, stijl-instelling
+ * of tegelaanbieder. Dit scherm gebruikt daarom nu Leaflet + CARTO-rastertegels
+ * (kant-en-klare afbeeldingen, GEEN client-side vector-labelweergave -- deze
+ * hele bugklasse is daarmee principieel uitgesloten).
  *
- * `compassAbbreviation` (lib/navigation/direction/) voor de NW/315°-weergave --
- * puur formattering, geen navigatiebeslissing.
+ * BEWUST ANDERS DAN VOORHEEN: de kaart draait niet meer mee met de rijrichting
+ * (blijft altijd noord-boven). Leaflet heeft geen ingebouwde rotatie; de enige
+ * beschikbare plugin (leaflet-rotate) overschrijft een groot deel van
+ * Leaflet's kern en heeft bekende compatibiliteitsproblemen -- een bewuste,
+ * expliciet afgestemde keuze (zie leaflet-migration-plan.md), geen vergeten
+ * functionaliteit. Het bestaande kompaslabel ("Richting", NW/315°) blijft
+ * ongewijzigd werken -- dat gebruikte toch al de rauwe headingDeg, niet de
+ * (voorheen kaart-rotatie-specifieke) smoothedHeadingRef.
+ *
+ * NIET GEWIJZIGD: GPS-logica (BrowserGeolocationSource, sample-frequentie,
+ * headingDeg/accuracyM-afhandeling), layout, teksten, knoppen, state,
+ * route-engine, navigatie-elders -- uitsluitend de kaart-renderinglaag is
+ * vervangen.
  */
 
 import { useEffect, useRef, useState } from "react";
-import * as maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import * as L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-geolocation-source";
 import { selectHeadingDeg, smoothHeadingDeg } from "@/lib/navigation/direction/relative-direction";
 import { compassAbbreviation } from "@/lib/navigation/direction/relative-direction";
-import { logMapError } from "@/lib/map/log-client-error";
-import { loadPatchedLibertyStyle } from "@/lib/map/patched-style";
 
-let workerUrlConfigured = false;
-function ensureWorkerUrlConfigured() {
-  if (workerUrlConfigured) return;
-  maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
-  workerUrlConfigured = true;
+// Leaflet's standaard marker-icoon-assets verwachten een relatief pad dat in een
+// Next.js-webpack-bundel niet automatisch klopt. Dit scherm gebruikt zelf geen
+// L.marker/divIcon (alleen L.circleMarker voor de positie-halo/-stip, die geen
+// icoon-assets nodig heeft), maar deze config hoort bij "Leaflet basis" (Fase 1)
+// en wordt hier eenmalig gezet zodat een toekomstig scherm dat wél L.marker
+// gebruikt hier niet opnieuw over hoeft na te denken. Verwijst naar de exacte,
+// bij package.json vastgepinde Leaflet-versie op de officiële unpkg-CDN --
+// geen extra pakket, geen gok: dit is het door Leaflet zelf gedocumenteerde
+// patroon voor bundlers die de standaard relatieve icoon-paths niet oplossen.
+let leafletIconsConfigured = false;
+function ensureLeafletIconsConfigured() {
+  if (leafletIconsConfigured) return;
+  delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  });
+  leafletIconsConfigured = true;
 }
 
-const LIBERTY_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const CARTO_RASTER_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
+const CARTO_ATTRIBUTION = "&copy; CARTO, &copy; OpenStreetMap contributors";
+const CARTO_SUBDOMAINS = ["a", "b", "c", "d"];
+const CARTO_MAX_ZOOM = 20;
+
 const POSITION_COLOR = "#3B82F6"; // zelfde blauw als de live-positiemarker op het navigatiescherm
 // Heading-up op het Home-scherm (op verzoek, 29-8-2026) -- ALLEEN rotatie, GEEN automatisch
 // inzoomen (dat hoort bij actieve navigatie, sectie 6H, niet bij dit rustige overzicht --
-// bewust bevestigd met de gebruiker vóór het bouwen).
+// bewust bevestigd met de gebruiker vóór het bouwen). NA DE LEAFLET-MIGRATIE: de rotatie zelf
+// is losgelaten (zie toelichting bovenaan), maar de heading-berekening zelf blijft ongewijzigd
+// draaien -- dit blijft "alleen de kaart-renderer vervangen", geen wijziging aan navigatielogica.
 const HEADING_SMOOTHING_ALPHA = 0.35;
 const MOVEMENT_SPEED_THRESHOLD_MPS = 0.5;
-// Verlengd van 500 naar 900ms (30-8-2026, op basis van "draaien gaat stukje voor stukje"):
-// bij een pauze tussen GPS-samples die langer is dan de animatieduur voelt elke afzonderlijke
-// beweging aan als een korte ruk i.p.v. een doorlopende beweging. Uitgangspunt, nog niet
-// definitief -- zelfde discipline als de andere kalibratiewaarden (sectie 8A).
-const EASE_DURATION_MS = 900;
+// Duration in SECONDEN voor Leaflet (was 900ms voor MapLibre se easeTo -- Leaflet's panTo/flyTo
+// duration-optie is in seconden, geen 1-op-1 hernoeming, wel exact dezelfde bedoelde duur).
+const PAN_DURATION_S = 0.9;
 
 export type LiveLocationScreenProps = {
   /** Aangeroepen zodra de gebruiker deze locatie bevestigt om door te gaan naar afstandskeuze. */
@@ -65,9 +97,26 @@ function accuracyLabel(accuracyM: number): string {
   return "GPS onnauwkeurig";
 }
 
+/** Eenvoudige Leaflet-tegelfout-logging naar dezelfde bestaande debug-endpoint (ongewijzigd). */
+function logTileError(context: Record<string, unknown>) {
+  try {
+    fetch("/api/debug/log-client-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Leaflet tileerror", stack: null, context }),
+    }).catch(() => {
+      // Bewust genegeerd -- logging mag de app nooit breken.
+    });
+  } catch {
+    // Idem.
+  }
+}
+
 export default function LiveLocationScreen({ onConfirm, onCancel, embedded = false }: LiveLocationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const positionHaloRef = useRef<L.CircleMarker | null>(null);
+  const positionDotRef = useRef<L.CircleMarker | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const hasCenteredRef = useRef(false);
   const smoothedHeadingRef = useRef<number | null>(null);
@@ -79,81 +128,79 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
   // Kaart eenmalig opzetten.
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
-    ensureWorkerUrlConfigured();
-    let cancelled = false;
+    ensureLeafletIconsConfigured();
 
-    (async () => {
-      // to-string()-patch op de labeltekst-expressies (6-9-2026) -- zie
-      // lib/map/patched-style.ts voor de volledige toelichting/kanttekening.
-      // Valt bij een netwerkfout veilig terug op de kale URL.
-      const patchResult = await loadPatchedLibertyStyle(LIBERTY_STYLE_URL);
-      if (cancelled || !containerRef.current || mapRef.current) return;
+    const map = L.map(containerRef.current, {
+      center: [52.0907, 5.1214], // uitgangspunt, wordt direct overschreven zodra de eerste GPS-fix binnenkomt
+      zoom: 15,
+      zoomControl: false, // hieronder handmatig top-right toegevoegd, zelfde plek als voorheen
+      attributionControl: true,
+    });
 
-      const map = new maplibregl.Map({
-        container: containerRef.current,
-        style: patchResult.style,
-        center: [5.1214, 52.0907], // uitgangspunt, wordt direct overschreven zodra de eerste GPS-fix binnenkomt
-        zoom: 15,
-        bearing: 0,
-        pitch: 0,
-        dragRotate: false,
-        pitchWithRotate: false,
-        touchPitch: false,
-        attributionControl: { compact: true },
+    L.control.zoom({ position: "topright" }).addTo(map);
+
+    const tileLayer = L.tileLayer(CARTO_RASTER_URL, {
+      attribution: CARTO_ATTRIBUTION,
+      subdomains: CARTO_SUBDOMAINS,
+      maxZoom: CARTO_MAX_ZOOM,
+    });
+
+    tileLayer.on("tileerror", (e) => {
+      const message = "Leaflet tileerror (CARTO)";
+      logTileError({
+        screen: "LiveLocationScreen",
+        tileUrl: CARTO_RASTER_URL,
+        errorTile: (e as unknown as { coords?: { x: number; y: number; z: number } }).coords ?? null,
+        centerLat: map.getCenter().lat,
+        centerLon: map.getCenter().lng,
+        zoom: map.getZoom(),
+        timestamp: new Date().toISOString(),
       });
-      map.touchZoomRotate.disableRotation();
-      map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
+      setMapStatus("error");
+      setError(message);
+    });
 
-      map.on("load", () => {
-        // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026) -- zelfde
-        // aanpak als NavigationScreen.tsx, zie de uitgebreide toelichting daar.
-        const attribContainer = map.getContainer().querySelector<HTMLElement>(".maplibregl-ctrl-bottom-right");
-        if (attribContainer) {
-          attribContainer.style.left = "50%";
-          attribContainer.style.right = "auto";
-          attribContainer.style.transform = "translateX(-50%)";
-        }
+    tileLayer.addTo(map);
 
-        map.addSource("goknoop-live-position", {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: [] },
-        });
-        // Buitenste, subtiele "nauwkeurigheids"-gloed + de blauwe stip zelf -- zelfde taal als de mockup.
-        map.addLayer({
-          id: "goknoop-live-position-halo",
-          type: "circle",
-          source: "goknoop-live-position",
-          paint: { "circle-radius": 22, "circle-color": POSITION_COLOR, "circle-opacity": 0.15 },
-        });
-        map.addLayer({
-          id: "goknoop-live-position-dot",
-          type: "circle",
-          source: "goknoop-live-position",
-          paint: { "circle-radius": 8, "circle-color": POSITION_COLOR, "circle-stroke-color": "#FFFFFF", "circle-stroke-width": 3 },
-        });
+    // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026, zelfde
+    // aanpak als voorheen bij MapLibre -- alleen de CSS-klasse hoort nu bij Leaflet).
+    const attribContainer = map.getContainer().querySelector<HTMLElement>(".leaflet-control-attribution");
+    if (attribContainer) {
+      attribContainer.style.position = "absolute";
+      attribContainer.style.left = "50%";
+      attribContainer.style.right = "auto";
+      attribContainer.style.transform = "translateX(-50%)";
+    }
 
-        setMapStatus("loaded");
-      });
+    // Buitenste, subtiele "nauwkeurigheids"-gloed + de blauwe stip zelf -- zelfde taal als
+    // voorheen (MapLibre circle-lagen), nu als twee Leaflet circleMarkers die bij elke
+    // GPS-sample van positie verplaatst worden i.p.v. opnieuw aangemaakt.
+    positionHaloRef.current = L.circleMarker([52.0907, 5.1214], {
+      radius: 22,
+      color: POSITION_COLOR,
+      weight: 0,
+      fillColor: POSITION_COLOR,
+      fillOpacity: 0.15,
+    }).addTo(map);
+    positionDotRef.current = L.circleMarker([52.0907, 5.1214], {
+      radius: 8,
+      color: "#FFFFFF",
+      weight: 3,
+      fillColor: POSITION_COLOR,
+      fillOpacity: 1,
+    }).addTo(map);
+    // Nog geen echte positie bekend -- pas zichtbaar zodra de eerste GPS-sample binnenkomt.
+    positionHaloRef.current.setStyle({ opacity: 0, fillOpacity: 0 });
+    positionDotRef.current.setStyle({ opacity: 0, fillOpacity: 0 });
 
-      map.on("error", (e) => {
-        const message = e?.error?.message ?? "Onbekende kaartfout.";
-        logMapError(map, e, "LiveLocationScreen", LIBERTY_STYLE_URL, patchResult);
-        // Teruggezet naar de simpele, bewezen basis (6-9-2026): altijd de fout
-        // tonen. De eerdere onderdrukking + resize-gok voor de bekende
-        // codePointAt-fout is verwijderd -- ongetest, mogelijk zelfs schadelijk
-        // (blanco kaart zonder enige melding). Eerst stabiliseren, dan pas
-        // gericht verder onderzoeken.
-        setMapStatus("error");
-        setError(message);
-      });
-
-      mapRef.current = map;
-    })();
+    setMapStatus("loaded");
+    mapRef.current = map;
 
     return () => {
-      cancelled = true;
-      mapRef.current?.remove();
+      map.remove();
       mapRef.current = null;
+      positionHaloRef.current = null;
+      positionDotRef.current = null;
     };
   }, []);
 
@@ -175,33 +222,27 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
       const map = mapRef.current;
       if (map) {
-        const src = map.getSource("goknoop-live-position") as maplibregl.GeoJSONSource | undefined;
-        src?.setData({
-          type: "FeatureCollection",
-          features: [{ type: "Feature", geometry: { type: "Point", coordinates: [sample.lon, sample.lat] }, properties: {} }],
-        });
+        const latlng: L.LatLngExpression = [sample.lat, sample.lon];
+        positionHaloRef.current?.setLatLng(latlng).setStyle({ opacity: 1, fillOpacity: 0.15 });
+        positionDotRef.current?.setLatLng(latlng).setStyle({ opacity: 1, fillOpacity: 1 });
 
         if (!hasCenteredRef.current) {
-          map.jumpTo({ center: [sample.lon, sample.lat], zoom: 16 });
+          map.setView(latlng, 16, { animate: false });
           hasCenteredRef.current = true;
+        } else {
+          map.panTo(latlng, { animate: true, duration: PAN_DURATION_S });
         }
 
-        // Heading-up (op verzoek, 29-8-2026): hergebruikt exact dezelfde, al geteste functies
-        // als het navigatiescherm (sectie 6H) -- bewust GEEN zoom-wijziging (dit is geen
-        // actieve navigatie, gewoon het rustige overzicht -- "het scherm blijft groot").
-        // WEL positie-volgend (center), anders loopt je stipje tijdens het fietsen uit beeld --
-        // zelfde patroon als NavigationScreen al gebruikte, hier ontbrak het nog.
+        // Heading-berekening blijft ongewijzigd draaien (zelfde functies als voorheen) --
+        // alleen wordt het resultaat niet langer op de kaart zelf toegepast (geen bearing/
+        // rotatie meer in Leaflet, zie toelichting bovenaan). Het bestaande kompaslabel
+        // ("Richting") gebruikt de rauwe position.headingDeg hieronder, niet deze waarde.
         const selectedHeading = selectHeadingDeg(
           { gpsHeadingDeg: sample.headingDeg, speedMps: sample.speedMps, previousStableHeadingDeg: smoothedHeadingRef.current },
           { speedThresholdMps: MOVEMENT_SPEED_THRESHOLD_MPS }
         );
         if (selectedHeading !== null) {
           smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
-          map.easeTo({ center: [sample.lon, sample.lat], bearing: smoothedHeadingRef.current, duration: EASE_DURATION_MS });
-        } else {
-          // Geen betrouwbare richting (bijv. stilstand) -- toch meebewegen met de positie,
-          // zonder de bearing aan te passen.
-          map.easeTo({ center: [sample.lon, sample.lat], duration: EASE_DURATION_MS });
         }
       }
     });
@@ -216,7 +257,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
   function recenter() {
     if (position && mapRef.current) {
-      mapRef.current.flyTo({ center: [position.lon, position.lat], zoom: 16 });
+      mapRef.current.flyTo([position.lat, position.lon], 16);
     }
   }
 
