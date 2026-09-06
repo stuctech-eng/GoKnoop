@@ -372,6 +372,11 @@ export async function GET(req: NextRequest) {
         actualNetworkBridgesTotalForDataset: allNetworkBridgesForDatasetSnap.docs.length,
         actualNetworkBridgesWithScopeCount: networkBridgesWithScopeSnap.docs.length,
         actualNetworkBridgesWithoutScopeField: networkBridgesWithoutScopeField,
+        validationStatusBreakdown: attemptsWithScopeSnap.docs.reduce((acc: Record<string, number>, d) => {
+          const status = d.data().validationStatus as string;
+          acc[status] = (acc[status] || 0) + 1;
+          return acc;
+        }, {}),
       };
 
       if (!metaSnap.exists) {
