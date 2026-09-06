@@ -23,6 +23,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-geolocation-source";
 import { selectHeadingDeg, smoothHeadingDeg } from "@/lib/navigation/direction/relative-direction";
 import { compassAbbreviation } from "@/lib/navigation/direction/relative-direction";
+import { logMapError } from "@/lib/map/log-client-error";
 
 let workerUrlConfigured = false;
 function ensureWorkerUrlConfigured() {
@@ -128,6 +129,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
     map.on("error", (e) => {
       setMapStatus("error");
       setError(e?.error?.message ?? "Onbekende kaartfout.");
+      logMapError(map, e, "LiveLocationScreen", LIBERTY_STYLE_URL);
     });
 
     mapRef.current = map;
