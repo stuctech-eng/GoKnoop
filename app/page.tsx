@@ -1,8 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import Link from "next/link";
 import { KnoopBadge } from "@/components/KnoopBadge";
 import { RoutePreview } from "@/components/RoutePreview";
+import NavigationScreen from "@/components/navigation/NavigationScreen";
+import LiveLocationScreen from "@/components/location/LiveLocationScreen";
+import TabBar, { type TabId } from "@/components/layout/TabBar";
+import { getRiddenRoutes, getRecentRiddenRoutesForDedup, type RiddenRoute } from "@/lib/history/ridden-routes-store";
+import { edgeOverlapRatio } from "@/lib/route-engine/route-diversity";
+import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, type SavedRoute } from "@/lib/history/saved-routes-store";
+import { getSharedRoutes, recordSharedRoute, updateSharedWith, type SharedRouteRecord } from "@/lib/history/shared-routes-store";
+import { encodeRouteShareCode, decodeRouteShareCode, buildShareUrl } from "@/lib/sharing/route-share-link";
+import { pickNamingPoints, makeNameUnique } from "@/lib/naming/route-naming";
+import { rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
+import { getPausedRide, savePausedRide, clearPausedRide, type PausedRideSnapshot } from "@/lib/navigation/paused-ride-store";
+import PauseScreen from "@/components/navigation/PauseScreen";
+import type { GraphEdge } from "@/lib/route-engine/types";
+import type { PhysicalAnchor } from "@/lib/navigation/physical-anchor";
+import { loopOrientation } from "@/lib/route-engine/loop-orientation";
 
 type Point = { x: number; y: number };
 type Route = {
@@ -10,11 +26,20 @@ type Route = {
   edges: string[];
   geometry: Point[];
   distanceM: number;
+  /** Nodig om de NavigationSession aan de juiste dataset-versie te pinnen (ontwerp sectie 19). */
+  datasetVersionId: string;
 };
 type LoopCandidate = {
   route: Route;
   actualDistanceM: number;
   deviationPercent: number;
+  /** Volledige GraphEdge-objecten voor route.edges[] -- additief toegevoegd door de
+   *  dataketen-fix (/api/route/loop), nodig om de Navigation Engine te voeden zonder
+   *  edges te reconstrueren uit de platte geometrie. */
+  resolvedEdges: GraphEdge[];
+  /** Echte knooppuntnummers (GraphNode.displayNumber) voor route.nodes[], additief
+   *  toegevoegd -- bugfix: route.nodes[] zijn interne Firestore-ID's, geen weergavenummers. */
+  nodeDisplayNumbers: string[];
 };
 type LocationCandidate = {
   logicalNodeId: string;
@@ -23,7 +48,7 @@ type LocationCandidate = {
   distanceM: number;
 };
 
-type Step = "location" | "distance" | "loading" | "results" | "detail" | "error";
+type Step = "distance" | "loading" | "results" | "detail" | "navigating" | "paused" | "sharedPreview" | "error";
 
 const DISTANCE_OPTIONS = [20, 30, 40, 50];
 
@@ -44,15 +69,191 @@ function qualifyDeviation(deviationPercent: number): { label: string; icon: stri
   return { label: "Alternatief", icon: "↘" };
 }
 
+/**
+ * Keert de rijrichting van een gekozen lus om (linksom <-> rechtsom) --
+ * puur client-side, geen nieuwe serveraanroep nodig. Werkt correct dankzij
+ * de richtingscorrectie in `buildRouteProgressModel` (Naarden-bugfix,
+ * GOKNOOP-MASTER.md sectie 6D): die bepaalt per edge de juiste geometrie-
+ * richting aan de hand van de knooppuntvolgorde, dus simpelweg de
+ * nodes/edges-volgorde omkeren is voldoende -- geen handmatige edge-voor-
+ * edge geometrie-omkering nodig.
+ */
+function reverseLoopCandidate(loop: LoopCandidate): LoopCandidate {
+  return {
+    ...loop,
+    route: {
+      ...loop.route,
+      nodes: [...loop.route.nodes].reverse(),
+      edges: [...loop.route.edges].reverse(),
+      geometry: [...loop.route.geometry].reverse(),
+    },
+    resolvedEdges: [...loop.resolvedEdges].reverse(),
+    nodeDisplayNumbers: [...loop.nodeDisplayNumbers].reverse(),
+  };
+}
+
 export default function Home() {
-  const [step, setStep] = useState<Step>("location");
+  const [activeTab, setActiveTab] = useState<TabId>("kaart");
+  const [step, setStep] = useState<Step | null>(null);
+  const [activeSavedRoute, setActiveSavedRoute] = useState<{
+    edges: GraphEdge[];
+    nodeSequence: string[];
+    nodeDisplayNumbers: string[];
+    datasetVersionId: string;
+    /** Sectie 9.31 ("Rit hervatten"): alleen gevuld als dit een hervatte gepauzeerde rit is
+     *  -- laat NavigationScreen fase A/B overslaan en direct in matching-modus starten. */
+    resumeContext?: { physicalStart: PhysicalAnchor | null; elapsedRideTimeS: number; skipToMatching: boolean };
+  } | null>(null);
+  /** Fase 5 (sectie 9.18): het "terug naar het startknooppunt"-been van een Back to Start-rit. */
+  const [activeBackToStartRoute, setActiveBackToStartRoute] = useState<{
+    edges: GraphEdge[];
+    nodeSequence: string[];
+    nodeDisplayNumbers: string[];
+    datasetVersionId: string;
+    lastMileInfo: { distanceM: number; destinationLat: number; destinationLon: number; destinationLabel?: string; kind?: "parking" | "destination" };
+  } | null>(null);
+  /** Pauzeknop (sectie 9.19): bij mount gecheckt op een bestaande gepauzeerde rit (app opnieuw
+   *  geopend/telefoon herstart). */
+  const [pausedRide, setPausedRide] = useState<PausedRideSnapshot | null>(null);
+  useEffect(() => {
+    setPausedRide(getPausedRide());
+  }, []);
+
+  /**
+   * Deelbare route-link (sectie 9.33, 30-8-2026): een `?share=`-parameter bevat de route
+   * RECHTSTREEKS gecodeerd (geen backend-opslag/Route-ID, bewuste architectuurkeuze). Bij het
+   * openen: decoderen, resolven via het bestaande `/api/route/resolve` (zelfde patroon als
+   * opgeslagen/gereden routes), en TONEN als voorbeeld -- NIET automatisch starten of opslaan,
+   * de ontvanger kiest zelf.
+   */
+  const [sharedPreview, setSharedPreview] = useState<{
+    edges: GraphEdge[];
+    nodeSequence: string[];
+    nodeDisplayNumbers: string[];
+    datasetVersionId: string;
+    name: string | null;
+    distanceM: number;
+  } | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const shareCode = params.get("share");
+    if (!shareCode) return;
+
+    const payload = decodeRouteShareCode(shareCode);
+    if (!payload) {
+      setErrorMessage("Deze gedeelde route-link is ongeldig of beschadigd.");
+      setStep("error");
+      return;
+    }
+
+    setStep("loading");
+    fetch("/api/route/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ datasetVersionId: payload.d, edgeIds: payload.e, nodeIds: payload.n }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          setErrorMessage(data.error ?? "Deze gedeelde route kon niet worden geladen.");
+          setStep("error");
+          return;
+        }
+        setSharedPreview({
+          edges: data.resolvedEdges,
+          nodeSequence: payload.n,
+          nodeDisplayNumbers: data.nodeDisplayNumbers,
+          datasetVersionId: payload.d,
+          name: payload.nm,
+          distanceM: data.distanceM ?? 0,
+        });
+        setStep("sharedPreview");
+      })
+      .catch(() => {
+        setErrorMessage("Er ging iets mis bij het laden van de gedeelde route.");
+        setStep("error");
+      });
+  }, []);
+
+  /** "Delen"-knop: bouwt de link en gebruikt de iPhone-deelfunctie (WhatsApp etc.), met een
+   *  kopieer-terugval als `navigator.share` niet beschikbaar is (bijv. desktop-Safari). */
+  async function shareRoute(saved: SavedRoute) {
+    const url = buildShareUrl({ n: saved.nodeIds, e: saved.edgeIds, d: saved.datasetVersionId, nm: saved.name }, window.location.origin);
+    const routeName = saved.name ?? defaultSavedRouteName(saved.savedAt);
+    const shareText = `🚲 ${routeName}\n${formatKm(saved.distanceM)} km\n\nOpen deze GoKnoop-route:\n${url}`;
+    const recordShare = () => {
+      recordSharedRoute({
+        routeName,
+        edgeIds: saved.edgeIds,
+        nodeIds: saved.nodeIds,
+        datasetVersionId: saved.datasetVersionId,
+        distanceM: saved.distanceM,
+      });
+      setSharedRoutesVersion((v) => v + 1);
+    };
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: routeName, text: shareText, url });
+        // Alleen registreren als het delen daadwerkelijk lukte -- niet bij annuleren
+        // (sectie 9.35): iOS geeft geen "met wie" terug, maar WEL of het delen zelf slaagde.
+        recordShare();
+      } catch {
+        // Gebruiker annuleerde het deelvenster -- geen foutmelding, geen registratie, normaal gedrag.
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(shareText);
+        recordShare();
+        alert("Link gekopieerd naar het klembord.");
+      } catch {
+        alert(url);
+      }
+    }
+  }
+  const [savedRoutesVersion, setSavedRoutesVersion] = useState(0); // bumpen om de Mijn-routes-lijst opnieuw te lezen
+  const [sharedRoutesVersion, setSharedRoutesVersion] = useState(0); // idem, voor de Gedeelde-routes-lijst
+  const [showSaveNamePrompt, setShowSaveNamePrompt] = useState(false);
+  const [routeNameInput, setRouteNameInput] = useState("");
+  const [suggestingName, setSuggestingName] = useState(false);
   const [placeName, setPlaceName] = useState("");
+  /** Sectie 9.21 ("route naar een adres") -- eigen, apart veld/state van de bestaande plaatsnaam-zoekfunctie. */
+  const [destinationInput, setDestinationInput] = useState("");
+  const [routeToDestinationLoading, setRouteToDestinationLoading] = useState(false);
+  /** "Plus lusje" (sectie 9.49, 30-8-2026): 0 = geen omweg, gewoon de kortste route. */
+  const [extraKm, setExtraKm] = useState(0);
+  /** Parkeerplaats-zoekfunctie (sectie 9.42, 30-8-2026). */
+  const [parkingOptions, setParkingOptions] = useState<{ name: string | null; lat: number; lon: number; distanceM: number }[] | null>(null);
+  /** Tijdelijk diagnostisch (30-8-2026, "geen parkeerplaatsen" bij Hilversum -- om te zien of
+   *  de geocodede coördinaten kloppen, zonder verder te gokken). */
+  const [parkingDebugInfo, setParkingDebugInfo] = useState<{ displayName: string; lat: number; lon: number } | null>(null);
+  /** Tijdelijk diagnostisch (30-8-2026, "Hilversum doet een omweg" -- om te zien of de
+   *  geocoding en kandidaat-selectie zelf kloppen, zonder verder te gokken). */
+  const [routeDebugInfo, setRouteDebugInfo] = useState<{
+    geocodedAs: string;
+    geocodedLat: number;
+    geocodedLon: number;
+    selectedDestinationNodeId: string;
+    selectedDestinationNodeDisplayNumber: string;
+    selectedDestinationCandidateRank: number;
+    selectedStartNodeId: string;
+    selectedStartNodeDisplayNumber: string;
+    selectedCandidateRank: number;
+    totalDistanceM: number;
+  } | null>(null);
+  const [parkingLoading, setParkingLoading] = useState(false);
   const [startLocation, setStartLocation] = useState<LocationCandidate | null>(null);
+  const [locationCandidates, setLocationCandidates] = useState<LocationCandidate[]>([]);
+  const [resolvedStartNode, setResolvedStartNode] = useState<{
+    logicalNodeId: string;
+    displayNumber: string;
+    distanceM: number | null;
+    rank: number;
+  } | null>(null);
   const [targetDistanceKm, setTargetDistanceKm] = useState<number | null>(null);
   const [loops, setLoops] = useState<LoopCandidate[]>([]);
   const [selectedLoop, setSelectedLoop] = useState<LoopCandidate | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-  const [navigationStarted, setNavigationStarted] = useState(false);
 
   async function resolveByPlaceName() {
     if (!placeName.trim()) return;
@@ -70,6 +271,7 @@ export default function Home() {
         return;
       }
       setStartLocation(data.candidates[0]);
+      setLocationCandidates(data.candidates);
       setStep("distance");
     } catch {
       setErrorMessage("Er ging iets mis bij het zoeken. Probeer het opnieuw.");
@@ -77,43 +279,31 @@ export default function Home() {
     }
   }
 
-  async function resolveByGps() {
+  async function resolveFromConfirmedCoords(lat: number, lon: number) {
     setStep("loading");
-    if (!navigator.geolocation) {
-      setErrorMessage("Dit toestel ondersteunt geen locatiebepaling. Zoek op plaatsnaam.");
-      setStep("error");
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        try {
-          const res = await fetch("/api/location/resolve", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lat: position.coords.latitude, lon: position.coords.longitude }),
-          });
-          const data = await res.json();
-          if (!res.ok || !data.candidates?.[0]) {
-            setErrorMessage("Geen knooppunten gevonden bij je locatie.");
-            setStep("error");
-            return;
-          }
-          setStartLocation(data.candidates[0]);
-          setStep("distance");
-        } catch {
-          setErrorMessage("Er ging iets mis bij het bepalen van je locatie. Probeer het opnieuw.");
-          setStep("error");
-        }
-      },
-      () => {
-        setErrorMessage("We konden je locatie niet gebruiken. Zoek op plaatsnaam, of geef locatietoegang in je instellingen.");
+    try {
+      const res = await fetch("/api/location/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat, lon }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.candidates?.[0]) {
+        setErrorMessage("Geen knooppunten gevonden bij je locatie.");
         setStep("error");
+        return;
       }
-    );
+      setStartLocation(data.candidates[0]);
+      setLocationCandidates(data.candidates);
+      setStep("distance");
+    } catch {
+      setErrorMessage("Er ging iets mis bij het bepalen van je locatie. Probeer het opnieuw.");
+      setStep("error");
+    }
   }
 
   async function searchRoutes(km: number) {
-    if (!startLocation) return;
+    if (!startLocation || locationCandidates.length === 0) return;
     setTargetDistanceKm(km);
     setStep("loading");
     try {
@@ -121,18 +311,36 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          startLogicalNodeId: startLocation.logicalNodeId,
+          candidateNodeIds: locationCandidates.map((c) => c.logicalNodeId),
+          candidateDistancesM: locationCandidates.map((c) => c.distanceM),
           targetDistanceM: km * 1000,
           count: 4,
+          avoidRouteEdgeSets: getRecentRiddenRoutesForDedup().map((r) => r.edgeIds),
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setErrorMessage("Er ging iets mis bij het zoeken naar routes.");
+        // "no_usable_candidate" (Volendam-onderzoek 29-8-2026): geen van de kandidaat-
+        // knooppunten leverde een bruikbare route op -- expliciet andere melding dan een
+        // generieke serverfout, zodat de gebruiker begrijpt dat het aan de lokale
+        // netwerktopologie ligt, niet aan een kapotte aanvraag.
+        setErrorMessage(
+          data.reason === "no_usable_candidate"
+            ? `We konden geen bruikbare route van ${km} km vinden vanaf ${data.candidatesAttempted ?? locationCandidates.length} knooppunten bij je locatie. Probeer een andere afstand of locatie.`
+            : "Er ging iets mis bij het zoeken naar routes."
+        );
         setStep("error");
         return;
       }
       setLoops(data.loops || []);
+      if (data.selectedStartNodeId) {
+        setResolvedStartNode({
+          logicalNodeId: data.selectedStartNodeId,
+          displayNumber: data.selectedStartNodeDisplayNumber,
+          distanceM: data.selectedStartNodeDistanceM,
+          rank: data.selectedCandidateRank,
+        });
+      }
       setStep("results");
     } catch {
       setErrorMessage("Er ging iets mis bij het zoeken naar routes. Probeer het opnieuw.");
@@ -140,14 +348,494 @@ export default function Home() {
     }
   }
 
+  function confirmSaveRoute() {
+    if (!selectedLoop) return;
+    const trimmed = routeNameInput.trim();
+    const existingNames = getSavedRoutes().map((r) => r.name).filter((n): n is string => n !== null);
+    const finalName = trimmed ? makeNameUnique(trimmed, existingNames) : null;
+    saveRoute({
+      name: finalName,
+      edgeIds: selectedLoop.route.edges,
+      nodeIds: selectedLoop.route.nodes,
+      startNodeId: selectedLoop.route.nodes[0],
+      distanceM: selectedLoop.actualDistanceM,
+      datasetVersionId: selectedLoop.route.datasetVersionId,
+    });
+    setShowSaveNamePrompt(false);
+    setRouteNameInput("");
+    setSavedRoutesVersion((v) => v + 1);
+  }
+
+  /** Gedeeld door `startSavedRoute` en `startRiddenRoute` (30-8-2026) -- zelfde patroon, andere bron. */
+  async function startRouteFromReference(ref: { datasetVersionId: string; edgeIds: string[]; nodeIds: string[] }, errorContext: string) {
+    setStep("loading");
+    try {
+      const res = await fetch("/api/route/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ datasetVersionId: ref.datasetVersionId, edgeIds: ref.edgeIds, nodeIds: ref.nodeIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.error ?? `Deze ${errorContext} kon niet worden geladen.`);
+        setStep("error");
+        return;
+      }
+      setActiveSavedRoute({
+        edges: data.resolvedEdges,
+        nodeSequence: ref.nodeIds,
+        nodeDisplayNumbers: data.nodeDisplayNumbers,
+        datasetVersionId: ref.datasetVersionId,
+      });
+      setStep("navigating");
+    } catch {
+      setErrorMessage(`Er ging iets mis bij het laden van deze ${errorContext}.`);
+      setStep("error");
+    }
+  }
+
+  async function startSavedRoute(saved: SavedRoute) {
+    await startRouteFromReference(saved, "opgeslagen route");
+  }
+
+  async function startRiddenRoute(ridden: RiddenRoute) {
+    await startRouteFromReference(ridden, "gereden route");
+  }
+
+  function saveRiddenRouteAsFavorite(ridden: RiddenRoute) {
+    saveRoute({
+      name: null,
+      edgeIds: ridden.edgeIds,
+      nodeIds: ridden.nodeIds,
+      startNodeId: ridden.startNodeId,
+      distanceM: ridden.distanceM,
+      datasetVersionId: ridden.datasetVersionId,
+    });
+    setSavedRoutesVersion((v) => v + 1);
+  }
+
+  /** Gedeelde-link-voorbeeldscherm (sectie 9.33): starten gebeurt met de al opgehaalde data,
+   *  geen nieuwe /api/route/resolve-aanroep nodig. */
+  function startSharedPreview() {
+    if (!sharedPreview) return;
+    setActiveSavedRoute({
+      edges: sharedPreview.edges,
+      nodeSequence: sharedPreview.nodeSequence,
+      nodeDisplayNumbers: sharedPreview.nodeDisplayNumbers,
+      datasetVersionId: sharedPreview.datasetVersionId,
+    });
+    setSharedPreview(null);
+    window.history.replaceState({}, "", window.location.pathname); // ?share= uit de URL, voorkomt opnieuw openen bij verversen
+    setStep("navigating");
+  }
+
+  function saveSharedPreviewToMyRoutes() {
+    if (!sharedPreview) return;
+    saveRoute({
+      name: sharedPreview.name,
+      edgeIds: sharedPreview.edges.map((e) => e.id),
+      nodeIds: sharedPreview.nodeSequence,
+      startNodeId: sharedPreview.nodeSequence[0],
+      distanceM: sharedPreview.distanceM,
+      datasetVersionId: sharedPreview.datasetVersionId,
+    });
+    setSavedRoutesVersion((v) => v + 1);
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+
+  /**
+   * Automatische routenaam (sectie 9.34, 30-8-2026): kiest 2 punten uit de route-geometrie
+   * (`pickNamingPoints` -- NOOIT meer, respecteert Nominatim's verbod op systematische
+   * bevragingen), roept `/api/route/suggest-name` aan, en maakt de naam uniek t.o.v. de al
+   * opgeslagen routenamen. Vult het naamveld alleen in als de gebruiker nog niets zelf heeft
+   * ingetypt -- overschrijft nooit een bewuste eigen keuze.
+   */
+  async function suggestRouteNameFor(geometryRd: { x: number; y: number }[]) {
+    setSuggestingName(true);
+    try {
+      const points = pickNamingPoints(geometryRd);
+      if (!points) return;
+      const wgs84Points = points.map((p) => rdToWgs84(p.x, p.y));
+      const res = await fetch("/api/route/suggest-name", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ points: wgs84Points }),
+      });
+      const data = await res.json();
+      if (data.name && !routeNameInput.trim()) {
+        const existingNames = getSavedRoutes().map((r) => r.name).filter((n): n is string => n !== null);
+        setRouteNameInput(makeNameUnique(data.name, existingNames));
+      }
+    } catch {
+      // Best-effort: als de suggestie mislukt, blijft het veld gewoon leeg -- de gebruiker
+      // kan altijd zelf een naam intypen.
+    } finally {
+      setSuggestingName(false);
+    }
+  }
+
+  /**
+   * FASE 5 (sectie 9.18): berekent beide benen van "terug naar de parkeerplaats" in één
+   * serveraanroep (`/api/route/back-to-start`) en remount NavigationScreen met het eerste been
+   * (terug naar het startknooppunt, via de bestaande knooppunten-navigatie) als nieuwe actieve
+   * route. Het tweede been (startknooppunt → parkeerplaats) wordt NIET als nieuwe in-app-
+   * navigatie opgestart -- alleen de afstand + een Kaarten-link, getoond zodra het eerste been
+   * "Aangekomen" bereikt (zelfde bewuste keuze als "auto naar parkeerplaats", sectie 9.6).
+   */
+  async function startBackToStart(payload: { currentLat: number; currentLon: number; physicalStart: PhysicalAnchor; routeStartNodeId: string }) {
+    setStep("loading");
+    try {
+      const resolveRes = await fetch("/api/location/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: payload.currentLat, lon: payload.currentLon, limit: 5 }),
+      });
+      const resolveData = await resolveRes.json();
+      if (!resolveRes.ok || !resolveData.candidates?.length) {
+        setErrorMessage("Kon je huidige locatie niet bepalen voor Back to Start.");
+        setStep("error");
+        return;
+      }
+
+      const backRes = await fetch("/api/route/back-to-start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateNodeIds: resolveData.candidates.map((c: { logicalNodeId: string }) => c.logicalNodeId),
+          candidateDistancesM: resolveData.candidates.map((c: { distanceM: number }) => c.distanceM),
+          routeStartNodeId: payload.routeStartNodeId,
+          physicalStart: { lat: payload.physicalStart.lat, lon: payload.physicalStart.lon },
+        }),
+      });
+      const backData = await backRes.json();
+      if (!backRes.ok) {
+        setErrorMessage(backData.error ?? "Back to Start kon niet berekend worden.");
+        setStep("error");
+        return;
+      }
+
+      setActiveBackToStartRoute({
+        edges: backData.knotLeg.resolvedEdges,
+        nodeSequence: backData.knotLeg.route.nodes,
+        nodeDisplayNumbers: backData.knotLeg.nodeDisplayNumbers,
+        datasetVersionId: backData.knotLeg.route.datasetVersionId,
+        lastMileInfo: {
+          distanceM: backData.lastMileLeg.distanceM,
+          destinationLat: payload.physicalStart.lat,
+          destinationLon: payload.physicalStart.lon,
+          destinationLabel: payload.physicalStart.name,
+          kind: "parking" as const,
+        },
+      });
+      setStep("navigating");
+    } catch {
+      setErrorMessage("Er ging iets mis bij het berekenen van Back to Start.");
+      setStep("error");
+    }
+  }
+
+  /**
+   * "Route naar een adres" (sectie 9.21): resolvet zowel de herkomst (huidige GPS-positie,
+   * eenmalig opgevraagd) als de bestemming (plaatsnaam/adres, via het bestaande
+   * `/api/location/resolve` -- ondersteunt al plaatsnamen sinds eerder), en berekent dan de
+   * volledige route. Hergebruikt bewust dezelfde `activeBackToStartRoute`-state/render-pad als
+   * Back to Start (sectie 9.18) -- structureel identiek (knooppunten-been + laatste-stukje-info).
+   */
+  function startRouteToDestination() {
+    if (!destinationInput.trim()) return;
+    if (!navigator.geolocation) {
+      setErrorMessage("Dit toestel ondersteunt geen locatiebepaling.");
+      setStep("error");
+      return;
+    }
+    setRouteToDestinationLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const originRes = await fetch("/api/location/resolve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lat: position.coords.latitude, lon: position.coords.longitude, limit: 5 }),
+          });
+          const originData = await originRes.json();
+          if (!originRes.ok || !originData.candidates?.length) {
+            setErrorMessage("Kon je huidige locatie niet bepalen.");
+            setStep("error");
+            return;
+          }
+
+          const destRes = await fetch("/api/location/resolve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ placeName: destinationInput, limit: 5 }),
+          });
+          const destData = await destRes.json();
+          if (!destRes.ok || !destData.candidates?.length || destData.geocodedLat == null) {
+            setErrorMessage(`We konden '${destinationInput}' niet vinden.`);
+            setStep("error");
+            return;
+          }
+
+          const routeRes = await fetch("/api/route/to-destination", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              originCandidateNodeIds: originData.candidates.map((c: { logicalNodeId: string }) => c.logicalNodeId),
+              originCandidateDistancesM: originData.candidates.map((c: { distanceM: number }) => c.distanceM),
+              destinationCandidateNodeIds: destData.candidates.map((c: { logicalNodeId: string }) => c.logicalNodeId),
+              destinationCandidateDistancesM: destData.candidates.map((c: { distanceM: number }) => c.distanceM),
+              destinationLat: destData.geocodedLat,
+              destinationLon: destData.geocodedLon,
+              extraM: extraKm > 0 ? extraKm * 1000 : undefined,
+            }),
+          });
+          const routeData = await routeRes.json();
+          if (!routeRes.ok) {
+            setErrorMessage(routeData.error ?? "Kon geen route naar dit adres vinden.");
+            setStep("error");
+            return;
+          }
+
+          setRouteDebugInfo({
+            geocodedAs: destData.geocodedAs ?? destinationInput,
+            geocodedLat: destData.geocodedLat,
+            geocodedLon: destData.geocodedLon,
+            selectedDestinationNodeId: routeData.knotLeg.selectedDestinationNodeId,
+            selectedDestinationNodeDisplayNumber: routeData.knotLeg.selectedDestinationNodeDisplayNumber,
+            selectedDestinationCandidateRank: routeData.knotLeg.selectedDestinationCandidateRank,
+            selectedStartNodeId: routeData.knotLeg.selectedStartNodeId,
+            selectedStartNodeDisplayNumber: routeData.knotLeg.selectedStartNodeDisplayNumber,
+            selectedCandidateRank: routeData.knotLeg.selectedCandidateRank,
+            totalDistanceM: routeData.knotLeg.route.distanceM,
+          });
+
+          // Tijdelijk, puur diagnostisch (30-8-2026, "Hilversum doet een omweg") -- blokkerende
+          // melding zodat dit gegarandeerd zichtbaar is vóórdat het navigatiescherm het
+          // overneemt, zonder een heel nieuw tussenscherm te bouwen voor iets tijdelijks.
+          // BIJGESTELD: ook de ECHTE, interne knooppunt-ID's tonen -- weergavenummers bleken
+          // NIET landelijk uniek (106x "60", 109x "36" in de hele dataset -- regionale
+          // hernummering), dus alleen een weergavenummer is niet genoeg om een specifiek
+          // knooppunt terug te vinden voor een directe test.
+          alert(
+            `Diagnose:\nGezocht: ${destData.geocodedAs ?? destinationInput}\nGeocoded: ${destData.geocodedLat.toFixed(5)}, ${destData.geocodedLon.toFixed(5)}\nStart: knooppunt ${routeData.knotLeg.selectedStartNodeDisplayNumber} / ID ${routeData.knotLeg.selectedStartNodeId} (kandidaat #${routeData.knotLeg.selectedCandidateRank})\nBestemming: knooppunt ${routeData.knotLeg.selectedDestinationNodeDisplayNumber} / ID ${routeData.knotLeg.selectedDestinationNodeId} (kandidaat #${routeData.knotLeg.selectedDestinationCandidateRank})\nTotale afstand: ${(routeData.knotLeg.route.distanceM / 1000).toFixed(1)} km`
+          );
+
+          setActiveBackToStartRoute({
+            edges: routeData.knotLeg.resolvedEdges,
+            nodeSequence: routeData.knotLeg.route.nodes,
+            nodeDisplayNumbers: routeData.knotLeg.nodeDisplayNumbers,
+            datasetVersionId: routeData.knotLeg.route.datasetVersionId,
+            lastMileInfo: {
+              distanceM: routeData.lastMileLeg.distanceM,
+              destinationLat: destData.geocodedLat,
+              destinationLon: destData.geocodedLon,
+              destinationLabel: destData.geocodedAs ?? destinationInput,
+              kind: "destination",
+            },
+          });
+          setStep("navigating");
+        } catch {
+          setErrorMessage("Er ging iets mis bij het berekenen van de route.");
+          setStep("error");
+        } finally {
+          setRouteToDestinationLoading(false);
+        }
+      },
+      () => {
+        setErrorMessage("Kon je locatie niet bepalen. Geef locatietoegang, of probeer het opnieuw.");
+        setStep("error");
+        setRouteToDestinationLoading(false);
+      }
+    );
+  }
+
+  /**
+   * Parkeerplaats-zoekfunctie (sectie 9.42, 30-8-2026, oorspronkelijk vastgelegd/onderzocht in
+   * sectie 9.23). Geocodet het ingetypte adres (hergebruikt `/api/location/resolve`'s
+   * plaatsnaam-geocoding, precies zoals `startRouteToDestination` al doet), en zoekt dan
+   * parkeerplaatsen rond die coördinaten -- los van het daadwerkelijk starten van een route,
+   * puur informatief zodat de gebruiker zelf een parkeerplek kan kiezen en ernaartoe kan
+   * navigeren (Kaarten-link per resultaat), voordat/naast het fietsen zelf.
+   */
+  async function showParkingNearDestination() {
+    if (!destinationInput.trim()) return;
+    setParkingLoading(true);
+    setParkingOptions(null);
+    try {
+      // BUGFIX (30-8-2026, "Vercel Runtime Timeout Error", sectie 9.44): hergebruikte eerst
+      // /api/location/resolve -- dat laadt ALTIJD de volledige knooppuntengraaf, ook al is hier
+      // uitsluitend de geocodede coördinaat nodig, geen knooppunt-kandidaten. Nu het lichte,
+      // geocoding-only endpoint, geen onnodige Firestore-graafload meer.
+      const destRes = await fetch("/api/location/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ placeName: destinationInput }),
+      });
+      const destData = await destRes.json();
+      if (!destRes.ok || destData.lat == null) {
+        setErrorMessage(`We konden '${destinationInput}' niet vinden.`);
+        setStep("error");
+        return;
+      }
+      setParkingDebugInfo({ displayName: destData.displayName ?? destinationInput, lat: destData.lat, lon: destData.lon });
+
+      const parkingRes = await fetch("/api/places/parking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: destData.lat, lon: destData.lon }),
+      });
+      const parkingData = await parkingRes.json();
+      if (!parkingRes.ok) {
+        setErrorMessage(parkingData.error ?? "Kon geen parkeerplaatsen vinden bij dit adres.");
+        setStep("error");
+        return;
+      }
+      setParkingOptions(parkingData.results);
+    } catch {
+      setErrorMessage("Er ging iets mis bij het zoeken naar parkeerplaatsen.");
+      setStep("error");
+    } finally {
+      setParkingLoading(false);
+    }
+  }
+
+  /**
+   * Geeft de nodes/edges/datasetVersionId van de HUIDIG actieve route terug, ongeacht welke
+   * van de drie bronnen (Back to Start-been, opgeslagen route, of normaal gekozen rondje) op
+   * dit moment NavigationScreen aandrijft -- nodig om een pauze-snapshot samen te stellen.
+   */
+  function getActiveRouteForPause(): { nodes: string[]; edges: string[]; datasetVersionId: string } | null {
+    if (activeBackToStartRoute) {
+      return {
+        nodes: activeBackToStartRoute.nodeSequence,
+        edges: activeBackToStartRoute.edges.map((e) => e.id),
+        datasetVersionId: activeBackToStartRoute.datasetVersionId,
+      };
+    }
+    if (activeSavedRoute) {
+      return {
+        nodes: activeSavedRoute.nodeSequence,
+        edges: activeSavedRoute.edges.map((e) => e.id),
+        datasetVersionId: activeSavedRoute.datasetVersionId,
+      };
+    }
+    if (selectedLoop) {
+      return { nodes: selectedLoop.route.nodes, edges: selectedLoop.route.edges, datasetVersionId: selectedLoop.route.datasetVersionId };
+    }
+    return null;
+  }
+
+  /** Pauzeknop (sectie 9.19): legt een snapshot vast en toont het aparte PauseScreen. */
+  function handlePause(data: {
+    lastKnownPosition: { lat: number; lon: number } | null;
+    distanceTraveledM: number;
+    rideTimeS: number;
+    physicalStart: PhysicalAnchor | null;
+    hasSessionStarted: boolean;
+  }) {
+    const activeRoute = getActiveRouteForPause();
+    if (!activeRoute) return;
+    savePausedRide({
+      routeNodes: activeRoute.nodes,
+      routeEdges: activeRoute.edges,
+      datasetVersionId: activeRoute.datasetVersionId,
+      physicalStart: data.physicalStart,
+      lastKnownPosition: data.lastKnownPosition,
+      distanceTraveledM: data.distanceTraveledM,
+      rideTimeS: data.rideTimeS,
+      hasSessionStarted: data.hasSessionStarted,
+    });
+    setPausedRide(getPausedRide());
+    setStep("paused");
+  }
+
+  /** Hervatten (sectie 9.19): zelfde patroon als startSavedRoute -- edges vers ophalen via /api/route/resolve. */
+  async function resumePausedRide() {
+    if (!pausedRide) return;
+    setStep("loading");
+    try {
+      const res = await fetch("/api/route/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          datasetVersionId: pausedRide.datasetVersionId,
+          edgeIds: pausedRide.routeEdges,
+          nodeIds: pausedRide.routeNodes,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.error ?? "Deze gepauzeerde rit kon niet worden hervat.");
+        setStep("error");
+        return;
+      }
+      setActiveSavedRoute({
+        edges: data.resolvedEdges,
+        nodeSequence: pausedRide.routeNodes,
+        nodeDisplayNumbers: data.nodeDisplayNumbers,
+        datasetVersionId: pausedRide.datasetVersionId,
+        // BUGFIX (sectie 9.41, 30-8-2026): "hervatten" mag fase A/B alleen overslaan als de
+        // matching op het moment van pauzeren ECHT al gestart was (fase C bereikt). Was je nog
+        // onderweg naar het startknooppunt (fase A), dan moet hervatten gewoon opnieuw fase A/B
+        // doorlopen -- forceren-naar-matching zonder dat je ooit op de route was, gaf eerder een
+        // rit die "niets deed".
+        resumeContext: {
+          physicalStart: pausedRide.physicalStart,
+          elapsedRideTimeS: pausedRide.rideTimeS,
+          skipToMatching: pausedRide.hasSessionStarted ?? false,
+        },
+      });
+      clearPausedRide();
+      setPausedRide(null);
+      setStep("navigating");
+    } catch {
+      setErrorMessage("Er ging iets mis bij het hervatten van deze rit.");
+      setStep("error");
+    }
+  }
+
+  /** Naar startpunt, vanuit het pauzescherm (sectie 9.19/9.22: altijd naar physicalStart, nooit iets anders). */
+  function backToStartFromPause() {
+    if (!pausedRide || !pausedRide.physicalStart || !pausedRide.lastKnownPosition) return;
+    clearPausedRide();
+    setPausedRide(null);
+    startBackToStart({
+      currentLat: pausedRide.lastKnownPosition.lat,
+      currentLon: pausedRide.lastKnownPosition.lon,
+      physicalStart: pausedRide.physicalStart,
+      routeStartNodeId: pausedRide.routeNodes[0],
+    });
+  }
+
+  /** Rit beëindigen vanuit pauze (sectie 9.19/9.23): voortgang tot nu toe onthouden, net als een normaal voltooide rit. */
+  /**
+   * BIJGESTELD (30-8-2026, "gereden routes zijn gereden, niet op de helft gestopt"): riep
+   * eerder `recordRiddenRoute()` aan -- dat was fout, een voortijdig beëindigde rit telt niet
+   * als "gereden". Alleen een échte aankomst (NavigationScreen.tsx, ARRIVED-stabiliteitslaag)
+   * legt een gereden route vast.
+   */
+  function endPausedRide() {
+    if (!pausedRide) return;
+    clearPausedRide();
+    setPausedRide(null);
+    reset();
+  }
+
   function reset() {
-    setStep("location");
+    setStep(null);
+    setActiveTab("kaart");
+    setActiveSavedRoute(null);
+    setActiveBackToStartRoute(null);
+    setSharedPreview(null);
     setPlaceName("");
+    setDestinationInput("");
+    setParkingOptions(null);
     setStartLocation(null);
+    setLocationCandidates([]);
+    setResolvedStartNode(null);
     setTargetDistanceKm(null);
     setLoops([]);
     setSelectedLoop(null);
-    setNavigationStarted(false);
   }
 
   return (
@@ -160,93 +848,440 @@ export default function Home() {
         flexDirection: "column",
       }}
     >
-      <header
-        style={{
-          background: "var(--color-knoop-green)",
-          color: "white",
-          padding: "1.5rem 1.25rem 2rem",
-        }}
-      >
-        <h1 style={{ fontSize: 34, color: "white" }}>GoKnoop</h1>
-        {step !== "location" && (
-          <button
-            onClick={reset}
+      {step === null ? (
+        <>
+          <header
             style={{
-              marginTop: 8,
-              background: "transparent",
-              border: "none",
-              color: "rgba(255,255,255,0.85)",
-              fontSize: 14,
-              padding: 0,
-              textDecoration: "underline",
+              background: "var(--color-knoop-green)",
+              color: "white",
+              padding: "1rem 1.25rem",
             }}
           >
-            Opnieuw beginnen
-          </button>
-        )}
-      </header>
+            <h1 style={{ fontSize: 26, color: "white" }}>GoKnoop</h1>
+          </header>
 
-      <div style={{ flex: 1, padding: "1.5rem 1.25rem 3rem" }}>
-        {step === "location" && (
-          <section>
-            <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Waar wil je fietsen?</h2>
+          <div style={{ flex: 1, position: "relative" }}>
+            {activeTab === "kaart" && <LiveLocationScreen embedded onConfirm={resolveFromConfirmedCoords} />}
 
+            {activeTab === "kaart" && pausedRide && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 12,
+                  left: 12,
+                  right: 12,
+                  zIndex: 5,
+                  background: "#085041",
+                  color: "white",
+                  borderRadius: 14,
+                  padding: "12px 16px",
+                  boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                }}
+              >
+                <div style={{ fontSize: 13 }}>
+                  ⏸ Gepauzeerde rit — {(pausedRide.distanceTraveledM / 1000).toFixed(1)} km
+                </div>
+                <button
+                  onClick={() => setStep("paused")}
+                  style={{ background: "white", color: "#085041", border: "none", borderRadius: 10, padding: "6px 12px", fontSize: 13, fontWeight: 700 }}
+                >
+                  Bekijken
+                </button>
+              </div>
+            )}
+
+            {activeTab === "zoeken" && (
+              <section style={{ padding: "1.5rem 1.25rem 4.5rem" }}>
+                <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Zoek een plaats</h2>
+                <input
+                  value={placeName}
+                  onChange={(e) => setPlaceName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && resolveByPlaceName()}
+                  placeholder="Zoek een plaatsnaam"
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    padding: "0 16px",
+                    fontSize: 17,
+                    border: "2px solid var(--color-sand)",
+                    borderRadius: "var(--radius-card)",
+                    background: "white",
+                  }}
+                />
+                <button
+                  onClick={resolveByPlaceName}
+                  disabled={!placeName.trim()}
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    marginTop: 12,
+                    background: placeName.trim() ? "var(--color-canal-blue)" : "var(--color-sand)",
+                    color: placeName.trim() ? "white" : "var(--color-ink)",
+                    opacity: placeName.trim() ? 1 : 0.5,
+                    border: "none",
+                    borderRadius: "var(--radius-card)",
+                    fontSize: 17,
+                    fontWeight: 600,
+                  }}
+                >
+                  Zoek plaats
+                </button>
+
+                <div style={{ borderTop: "1px solid #e5e5e0", margin: "2rem 0 1.5rem" }} />
+
+                <h2 style={{ fontSize: 20, marginBottom: 8 }}>Route naar een adres</h2>
+                <p style={{ fontSize: 13, opacity: 0.65, marginBottom: 12 }}>
+                  Bijv. "Hilversum, Kerkstraat 5" — GoKnoop brengt je er vanaf je huidige locatie, via het
+                  knooppuntennetwerk plus het laatste stukje straten.
+                </p>
+                <input
+                  value={destinationInput}
+                  onChange={(e) => setDestinationInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && startRouteToDestination()}
+                  placeholder="Plaats + straatnaam"
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    padding: "0 16px",
+                    fontSize: 17,
+                    border: "2px solid var(--color-sand)",
+                    borderRadius: "var(--radius-card)",
+                    background: "white",
+                  }}
+                />
+
+                <p style={{ fontSize: 13, opacity: 0.65, margin: "12px 0 6px" }}>Plus lusje (extra kilometers, optioneel)</p>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[0, 5, 10, 15].map((km) => (
+                    <button
+                      key={km}
+                      onClick={() => setExtraKm(km)}
+                      style={{
+                        flex: 1,
+                        minHeight: 44,
+                        background: extraKm === km ? "var(--color-knoop-green)" : "white",
+                        color: extraKm === km ? "white" : "var(--color-ink)",
+                        border: `2px solid ${extraKm === km ? "var(--color-knoop-green)" : "var(--color-sand)"}`,
+                        borderRadius: 10,
+                        fontSize: 14,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {km === 0 ? "Snelste" : `+${km} km`}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={startRouteToDestination}
+                  disabled={!destinationInput.trim() || routeToDestinationLoading}
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    marginTop: 12,
+                    background: destinationInput.trim() ? "var(--color-knoop-green)" : "var(--color-sand)",
+                    color: destinationInput.trim() ? "white" : "var(--color-ink)",
+                    opacity: destinationInput.trim() ? 1 : 0.5,
+                    border: "none",
+                    borderRadius: "var(--radius-card)",
+                    fontSize: 17,
+                    fontWeight: 600,
+                  }}
+                >
+                  {routeToDestinationLoading ? "Bezig..." : "🚴 Route hierheen vanaf mijn locatie"}
+                </button>
+
+                <button
+                  onClick={showParkingNearDestination}
+                  disabled={!destinationInput.trim() || parkingLoading}
+                  style={{
+                    width: "100%",
+                    minHeight: 48,
+                    marginTop: 10,
+                    background: "white",
+                    color: destinationInput.trim() ? "var(--color-knoop-green)" : "var(--color-ink)",
+                    opacity: destinationInput.trim() ? 1 : 0.5,
+                    border: "2px solid var(--color-knoop-green)",
+                    borderRadius: "var(--radius-card)",
+                    fontSize: 15,
+                    fontWeight: 600,
+                  }}
+                >
+                  {parkingLoading ? "Zoeken..." : "🅿️ Toon parkeerplaatsen bij dit adres"}
+                </button>
+
+                {parkingDebugInfo && (
+                  <p style={{ fontSize: 12, opacity: 0.55, marginTop: 8 }}>
+                    Gezocht bij: {parkingDebugInfo.displayName} ({parkingDebugInfo.lat.toFixed(5)}, {parkingDebugInfo.lon.toFixed(5)})
+                  </p>
+                )}
+
+                {parkingOptions && (
+                  <div style={{ marginTop: 12 }}>
+                    {parkingOptions.length === 0 ? (
+                      <p style={{ fontSize: 14, opacity: 0.6, textAlign: "center" }}>Geen parkeerplaatsen gevonden in de buurt.</p>
+                    ) : (
+                      parkingOptions.map((p, i) => (
+                        <a
+                          key={i}
+                          href={`https://maps.apple.com/?daddr=${p.lat},${p.lon}&dirflg=d`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            background: "white",
+                            border: "1px solid #e5e5e0",
+                            borderRadius: 10,
+                            padding: "10px 14px",
+                            marginBottom: 8,
+                            textDecoration: "none",
+                            color: "var(--color-ink)",
+                          }}
+                        >
+                          <span style={{ fontSize: 14 }}>{p.name ?? "Parkeerplaats"}</span>
+                          <span style={{ fontSize: 13, opacity: 0.6 }}>{Math.round(p.distanceM)} m →</span>
+                        </a>
+                      ))
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {activeTab === "mijnroutes" && (
+              <section style={{ padding: "1.5rem 1.25rem 4.5rem" }}>
+                <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Mijn routes</h2>
+                {getSavedRoutes().length === 0 ? (
+                  <p style={{ fontSize: 15, opacity: 0.6, textAlign: "center" }}>Je hebt nog geen routes opgeslagen.</p>
+                ) : (
+                  getSavedRoutes().map((saved) => (
+                    <div
+                      key={saved.id}
+                      style={{
+                        background: "white",
+                        border: "1px solid #e5e5e0",
+                        borderRadius: "var(--radius-card)",
+                        padding: "1rem",
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 17, fontWeight: 700 }}>{saved.name ?? defaultSavedRouteName(saved.savedAt)}</div>
+                          <div style={{ fontSize: 13, opacity: 0.6 }}>{formatKm(saved.distanceM)} km · {saved.nodeIds.length} knooppunten</div>
+                        </div>
+                        <button
+                          onClick={() => { deleteSavedRoute(saved.id); setSavedRoutesVersion((v) => v + 1); }}
+                          aria-label="Verwijderen"
+                          style={{ background: "transparent", border: "none", color: "#999", fontSize: 13, padding: 4 }}
+                        >
+                          Verwijder
+                        </button>
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => startSavedRoute(saved)}
+                          style={{
+                            flex: 1,
+                            minHeight: 44,
+                            background: "var(--color-knoop-green)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: 8,
+                            fontSize: 15,
+                            fontWeight: 600,
+                          }}
+                        >
+                          Start route
+                        </button>
+                        <button
+                          onClick={() => shareRoute(saved)}
+                          style={{
+                            minHeight: 44,
+                            padding: "0 16px",
+                            background: "white",
+                            color: "var(--color-knoop-green)",
+                            border: "2px solid var(--color-knoop-green)",
+                            borderRadius: 8,
+                            fontSize: 15,
+                            fontWeight: 600,
+                          }}
+                        >
+                          Delen
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                <div style={{ borderTop: "1px solid #e5e5e0", margin: "2rem 0 1.5rem" }} />
+
+                <h2 style={{ fontSize: 24, marginBottom: "0.5rem" }}>Gereden routes</h2>
+                <p style={{ fontSize: 13, opacity: 0.6, marginBottom: "1.25rem" }}>
+                  Automatisch onthouden na een voltooide rit -- blijft altijd bewaard.
+                </p>
+                {getRiddenRoutes().length === 0 ? (
+                  <p style={{ fontSize: 15, opacity: 0.6, textAlign: "center" }}>Je hebt nog geen route uitgereden.</p>
+                ) : (
+                  getRiddenRoutes().map((ridden) => (
+                    <div
+                      key={ridden.id}
+                      style={{
+                        background: "white",
+                        border: "1px solid #e5e5e0",
+                        borderRadius: "var(--radius-card)",
+                        padding: "1rem",
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 17, fontWeight: 700 }}>{formatKm(ridden.distanceM)} km</div>
+                        <div style={{ fontSize: 13, opacity: 0.6 }}>
+                          Gereden op {new Date(ridden.riddenAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => startRiddenRoute(ridden)}
+                          style={{
+                            flex: 1,
+                            minHeight: 44,
+                            background: "var(--color-knoop-green)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: 8,
+                            fontSize: 15,
+                            fontWeight: 600,
+                          }}
+                        >
+                          Start route
+                        </button>
+                        <button
+                          onClick={() => saveRiddenRouteAsFavorite(ridden)}
+                          style={{
+                            minHeight: 44,
+                            padding: "0 16px",
+                            background: "white",
+                            color: "var(--color-knoop-green)",
+                            border: "2px solid var(--color-knoop-green)",
+                            borderRadius: 8,
+                            fontSize: 15,
+                            fontWeight: 600,
+                          }}
+                        >
+                          ♡ Bewaar als favoriet
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                <div style={{ borderTop: "1px solid #e5e5e0", margin: "2rem 0 1.5rem" }} />
+
+                <h2 style={{ fontSize: 24, marginBottom: "0.5rem" }}>Gedeelde routes</h2>
+                <p style={{ fontSize: 13, opacity: 0.6, marginBottom: "1.25rem" }}>
+                  Bijgehouden zodra je op "Delen" drukt. "Met wie" kan iOS niet automatisch doorgeven -- vul dat zelf in als je wilt.
+                </p>
+                {getSharedRoutes().length === 0 ? (
+                  <p style={{ fontSize: 15, opacity: 0.6, textAlign: "center" }}>Je hebt nog geen route gedeeld.</p>
+                ) : (
+                  getSharedRoutes().map((shared) => (
+                    <div
+                      key={shared.id}
+                      style={{
+                        background: "white",
+                        border: "1px solid #e5e5e0",
+                        borderRadius: "var(--radius-card)",
+                        padding: "1rem",
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div style={{ fontSize: 17, fontWeight: 700 }}>{shared.routeName}</div>
+                      <div style={{ fontSize: 13, opacity: 0.6, marginBottom: 8 }}>
+                        Gedeeld op {new Date(shared.sharedAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}
+                      </div>
+                      <input
+                        defaultValue={shared.sharedWith ?? ""}
+                        placeholder="Met wie? (optioneel)"
+                        onBlur={(e) => {
+                          updateSharedWith(shared.id, e.target.value);
+                          setSharedRoutesVersion((v) => v + 1);
+                        }}
+                        style={{
+                          width: "100%",
+                          minHeight: 40,
+                          padding: "0 10px",
+                          fontSize: 14,
+                          border: "1px solid #ccc",
+                          borderRadius: 8,
+                          boxSizing: "border-box",
+                        }}
+                      />
+                    </div>
+                  ))
+                )}
+              </section>
+            )}
+
+            {activeTab === "profiel" && (
+              <section style={{ padding: "1.5rem 1.25rem 4.5rem", textAlign: "center" }}>
+                <h2 style={{ fontSize: 24, marginBottom: "0.75rem" }}>Profiel</h2>
+                <p style={{ fontSize: 15, opacity: 0.6, marginBottom: "1.5rem" }}>Binnenkort beschikbaar.</p>
+                <Link
+                  href="/debug"
+                  style={{
+                    display: "inline-block",
+                    padding: "10px 20px",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: "#085041",
+                    border: "1px solid #085041",
+                    borderRadius: 999,
+                    textDecoration: "none",
+                  }}
+                >
+                  Debug-tools
+                </Link>
+              </section>
+            )}
+          </div>
+
+          <TabBar active={activeTab} onChange={setActiveTab} />
+        </>
+      ) : (
+        <>
+          <header
+            style={{
+              background: "var(--color-knoop-green)",
+              color: "white",
+              padding: "1.5rem 1.25rem 2rem",
+            }}
+          >
+            <h1 style={{ fontSize: 34, color: "white" }}>GoKnoop</h1>
             <button
-              onClick={resolveByGps}
+              onClick={reset}
               style={{
-                width: "100%",
-                minHeight: 52,
-                background: "var(--color-knoop-green)",
-                color: "white",
+                marginTop: 8,
+                background: "transparent",
                 border: "none",
-                borderRadius: "var(--radius-card)",
-                fontSize: 17,
-                fontWeight: 600,
-                marginBottom: 12,
+                color: "rgba(255,255,255,0.85)",
+                fontSize: 14,
+                padding: 0,
+                textDecoration: "underline",
               }}
             >
-              📍 Mijn locatie
+              Opnieuw beginnen
             </button>
+          </header>
 
-            <div style={{ textAlign: "center", color: "var(--color-ink)", opacity: 0.5, fontSize: 13, margin: "10px 0" }}>of</div>
-
-            <input
-              value={placeName}
-              onChange={(e) => setPlaceName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && resolveByPlaceName()}
-              placeholder="Zoek een plaatsnaam"
-              style={{
-                width: "100%",
-                minHeight: 52,
-                padding: "0 16px",
-                fontSize: 17,
-                border: "2px solid var(--color-sand)",
-                borderRadius: "var(--radius-card)",
-                background: "white",
-              }}
-            />
-            <button
-              onClick={resolveByPlaceName}
-              disabled={!placeName.trim()}
-              style={{
-                width: "100%",
-                minHeight: 52,
-                marginTop: 12,
-                background: placeName.trim() ? "var(--color-canal-blue)" : "var(--color-sand)",
-                color: placeName.trim() ? "white" : "var(--color-ink)",
-                opacity: placeName.trim() ? 1 : 0.5,
-                border: "none",
-                borderRadius: "var(--radius-card)",
-                fontSize: 17,
-                fontWeight: 600,
-              }}
-            >
-              Zoek plaats
-            </button>
-          </section>
-        )}
-
-        {step === "distance" && startLocation && (
+          <div style={{ flex: 1, padding: "1.5rem 1.25rem 3rem" }}>
+            {step === "distance" && startLocation && (
           <section>
             <p style={{ fontSize: 14, opacity: 0.65, marginBottom: 4 }}>
               Startpunt: knooppunt {startLocation.displayNumber} — {startLocation.displayRegio}
@@ -312,8 +1347,29 @@ export default function Home() {
                 : `Ik heb ${loops.length} ${loops.length === 1 ? "route" : "routes"} gevonden`}
             </h2>
             <p style={{ fontSize: 14, opacity: 0.65, marginBottom: "1.5rem" }}>
-              Rond {targetDistanceKm} km vanaf knooppunt {startLocation?.displayNumber}
+              Rond {targetDistanceKm} km vanaf knooppunt {resolvedStartNode?.displayNumber ?? startLocation?.displayNumber}
             </p>
+
+            {resolvedStartNode && resolvedStartNode.rank > 1 && (
+              <div
+                style={{
+                  background: "var(--color-sand)",
+                  borderRadius: "var(--radius-card)",
+                  padding: "0.85rem 1rem",
+                  marginBottom: "1.5rem",
+                  fontSize: 14,
+                }}
+              >
+                <strong>Beste startpunt gevonden</strong>
+                <br />
+                📍 Knooppunt {resolvedStartNode.displayNumber}
+                {resolvedStartNode.distanceM != null && <> — {(resolvedStartNode.distanceM / 1000).toFixed(1)} km van je locatie</>}
+                <br />
+                <span style={{ opacity: 0.7 }}>
+                  Knooppunt {startLocation?.displayNumber} lag dichterbij, maar leverde geen bruikbare route op.
+                </span>
+              </div>
+            )}
 
             {loops.length === 0 && (
               <>
@@ -339,35 +1395,103 @@ export default function Home() {
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {loops.map((loop, i) => (
-                <button
-                  key={i}
-                  onClick={() => {
-                    setSelectedLoop(loop);
-                    setStep("detail");
-                  }}
-                  style={{
-                    textAlign: "left",
-                    background: "white",
-                    border: "2px solid var(--color-sand)",
-                    borderRadius: "var(--radius-card)",
-                    padding: 14,
-                    boxShadow: "var(--shadow-card)",
-                  }}
-                >
-                  <RoutePreview geometry={loop.route.geometry} height={140} startLabel={startLocation?.displayNumber} />
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
-                    <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 28, fontWeight: 700 }}>
-                      ~{formatKm(loop.actualDistanceM)} km
-                    </span>
-                    <span style={{ fontSize: 13, opacity: 0.6 }}>{loop.route.nodes.length} knooppunten</span>
-                  </div>
-                  <div style={{ fontSize: 13, marginTop: 4, opacity: 0.75 }}>
-                    {qualifyDeviation(loop.deviationPercent).icon} {qualifyDeviation(loop.deviationPercent).label}
-                  </div>
-                </button>
-              ))}
+              {(() => {
+                // Berekend vóór de map (niet per kaart opnieuw) -- "al eerder gereden"-indicator
+                // op verzoek (30-8-2026), hergebruikt dezelfde overlap-logica als de
+                // server-side dedup (edgeOverlapRatio), puur voor weergave, geen filtering.
+                const riddenEdgeSets = getRiddenRoutes().map((r) => r.edgeIds);
+                return loops.map((loop, i) => {
+                  const alreadyRidden = riddenEdgeSets.some((riddenEdges) => edgeOverlapRatio(riddenEdges, loop.route.edges) > 0.6);
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        setSelectedLoop(loop);
+                        setStep("detail");
+                      }}
+                      style={{
+                        textAlign: "left",
+                        background: "white",
+                        border: "2px solid var(--color-sand)",
+                        borderRadius: "var(--radius-card)",
+                        padding: 14,
+                        boxShadow: "var(--shadow-card)",
+                      }}
+                    >
+                      <RoutePreview geometry={loop.route.geometry} height={140} startLabel={loop.nodeDisplayNumbers[0]} />
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
+                        <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 28, fontWeight: 700 }}>
+                          ~{formatKm(loop.actualDistanceM)} km
+                        </span>
+                        <span style={{ fontSize: 13, opacity: 0.6 }}>{loop.route.nodes.length} knooppunten</span>
+                      </div>
+                      <div style={{ fontSize: 13, marginTop: 4, opacity: 0.75 }}>
+                        {qualifyDeviation(loop.deviationPercent).icon} {qualifyDeviation(loop.deviationPercent).label}
+                      </div>
+                      {alreadyRidden && (
+                        <div style={{ fontSize: 12, marginTop: 6, color: "var(--color-knoop-green)", fontWeight: 600 }}>
+                          ✓ Al eerder gereden
+                        </div>
+                      )}
+                    </button>
+                  );
+                });
+              })()}
             </div>
+          </section>
+        )}
+
+        {step === "sharedPreview" && sharedPreview && (
+          <section>
+            <h2 style={{ fontSize: 22, marginBottom: 4 }}>Gedeelde route</h2>
+            <p style={{ fontSize: 14, opacity: 0.65, marginBottom: "1.5rem" }}>
+              Iemand deelde deze route met je -- bekijk 'm, en start of bewaar 'm als je wilt.
+            </p>
+            <div
+              style={{
+                background: "white",
+                border: "2px solid var(--color-sand)",
+                borderRadius: "var(--radius-card)",
+                padding: 16,
+                marginBottom: 20,
+              }}
+            >
+              <div style={{ fontSize: 20, fontWeight: 700 }}>{sharedPreview.name ?? "Gedeelde route"}</div>
+              <div style={{ fontSize: 15, opacity: 0.7, marginTop: 4 }}>
+                {formatKm(sharedPreview.distanceM)} km · {sharedPreview.nodeSequence.length} knooppunten
+              </div>
+            </div>
+            <button
+              onClick={startSharedPreview}
+              style={{
+                width: "100%",
+                minHeight: 52,
+                background: "var(--color-knoop-green)",
+                color: "white",
+                border: "none",
+                borderRadius: "var(--radius-card)",
+                fontSize: 17,
+                fontWeight: 600,
+                marginBottom: 12,
+              }}
+            >
+              Start deze route
+            </button>
+            <button
+              onClick={saveSharedPreviewToMyRoutes}
+              style={{
+                width: "100%",
+                minHeight: 52,
+                background: "white",
+                color: "var(--color-knoop-green)",
+                border: "2px solid var(--color-knoop-green)",
+                borderRadius: "var(--radius-card)",
+                fontSize: 17,
+                fontWeight: 600,
+              }}
+            >
+              ♡ Bewaar in Mijn routes
+            </button>
           </section>
         )}
 
@@ -380,7 +1504,7 @@ export default function Home() {
               ← Terug naar routes
             </button>
 
-            <RoutePreview geometry={selectedLoop.route.geometry} height={220} startLabel={startLocation?.displayNumber} />
+            <RoutePreview geometry={selectedLoop.route.geometry} height={220} startLabel={selectedLoop.nodeDisplayNumbers[0]} />
 
             <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "1.25rem 0" }}>
               <span style={{ fontFamily: "var(--font-display), -apple-system, sans-serif", fontSize: 40, fontWeight: 700 }}>
@@ -389,35 +1513,161 @@ export default function Home() {
               <span style={{ fontSize: 14, opacity: 0.6 }}>({selectedLoop.route.nodes.length} knooppunten)</span>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "1.5rem" }}>
-              <KnoopBadge label={startLocation?.displayNumber || "?"} size={40} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <KnoopBadge label={selectedLoop.nodeDisplayNumbers[0] || "?"} size={40} />
               <span style={{ fontSize: 14, opacity: 0.7 }}>Start en finish bij dit knooppunt — rondje</span>
             </div>
 
-            {!navigationStarted ? (
+            <button
+              onClick={() => setSelectedLoop(reverseLoopCandidate(selectedLoop))}
+              style={{
+                width: "100%",
+                minHeight: 44,
+                marginBottom: 8,
+                background: "white",
+                color: "var(--color-ink)",
+                border: "1px solid #ccc",
+                borderRadius: "var(--radius-card)",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              ↻ Andere kant op rijden
+            </button>
+            <p style={{ fontSize: 13, opacity: 0.6, textAlign: "center", marginBottom: "1.5rem" }}>
+              Rijdrichting: <strong>{loopOrientation(selectedLoop.route.geometry) === "linksom" ? "linksom" : "rechtsom"}</strong>
+            </p>
+
+            {!showSaveNamePrompt ? (
               <button
-                onClick={() => setNavigationStarted(true)}
+                onClick={() => {
+                  setShowSaveNamePrompt(true);
+                  if (selectedLoop) suggestRouteNameFor(selectedLoop.route.geometry);
+                }}
                 style={{
                   width: "100%",
-                  minHeight: 56,
-                  background: "var(--color-knoop-green)",
-                  color: "white",
-                  border: "none",
+                  minHeight: 48,
+                  marginBottom: 12,
+                  background: "white",
+                  color: "var(--color-knoop-green)",
+                  border: "2px solid var(--color-knoop-green)",
                   borderRadius: "var(--radius-card)",
-                  fontSize: 18,
-                  fontWeight: 700,
+                  fontSize: 15,
+                  fontWeight: 600,
                 }}
               >
-                Start
+                ♡ Opslaan in Mijn routes
               </button>
             ) : (
-              <p style={{ fontSize: 15, textAlign: "center", opacity: 0.7, padding: "1rem 0" }}>
-                Navigatie tijdens het fietsen volgt in een latere fase van GoKnoop.
-              </p>
+              <div style={{ marginBottom: 12, background: "var(--color-sand)", borderRadius: "var(--radius-card)", padding: "0.85rem 1rem" }}>
+                <p style={{ fontSize: 14, marginBottom: 8 }}>
+                  Geef je route een naam (optioneel){suggestingName && " -- suggestie ophalen..."}
+                </p>
+                <input
+                  value={routeNameInput}
+                  onChange={(e) => setRouteNameInput(e.target.value)}
+                  placeholder="Bijv. Rondje Waterland"
+                  style={{ width: "100%", minHeight: 44, padding: "0 12px", fontSize: 15, border: "1px solid #ccc", borderRadius: 8, marginBottom: 8, boxSizing: "border-box" }}
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={confirmSaveRoute}
+                    style={{ flex: 1, minHeight: 44, background: "var(--color-knoop-green)", color: "white", border: "none", borderRadius: 8, fontSize: 15, fontWeight: 600 }}
+                  >
+                    Opslaan
+                  </button>
+                  <button
+                    onClick={() => { setShowSaveNamePrompt(false); setRouteNameInput(""); }}
+                    style={{ flex: 1, minHeight: 44, background: "white", color: "var(--color-ink)", border: "1px solid #ccc", borderRadius: 8, fontSize: 15 }}
+                  >
+                    Annuleren
+                  </button>
+                </div>
+              </div>
             )}
+
+            <button
+              onClick={() => setStep("navigating")}
+              style={{
+                width: "100%",
+                minHeight: 56,
+                background: "var(--color-knoop-green)",
+                color: "white",
+                border: "none",
+                borderRadius: "var(--radius-card)",
+                fontSize: 18,
+                fontWeight: 700,
+              }}
+            >
+              Start
+            </button>
           </section>
         )}
-      </div>
+
+        {step === "navigating" && (activeBackToStartRoute || activeSavedRoute || selectedLoop) && (
+          <NavigationScreen
+            key={
+              activeBackToStartRoute
+                ? `backtostart-${activeBackToStartRoute.datasetVersionId}-${activeBackToStartRoute.nodeSequence[0]}-${activeBackToStartRoute.nodeSequence[activeBackToStartRoute.nodeSequence.length - 1]}`
+                : activeSavedRoute
+                  ? `saved-${activeSavedRoute.datasetVersionId}-${activeSavedRoute.nodeSequence[0]}`
+                  : `${startLocation?.logicalNodeId ?? "navigation"}-${selectedLoop?.route.edges.join(",") ?? ""}`
+            }
+            edges={activeBackToStartRoute ? activeBackToStartRoute.edges : activeSavedRoute ? activeSavedRoute.edges : selectedLoop!.resolvedEdges}
+            nodeSequence={
+              activeBackToStartRoute ? activeBackToStartRoute.nodeSequence : activeSavedRoute ? activeSavedRoute.nodeSequence : selectedLoop!.route.nodes
+            }
+            nodeDisplayNumbers={
+              activeBackToStartRoute
+                ? activeBackToStartRoute.nodeDisplayNumbers
+                : activeSavedRoute
+                  ? activeSavedRoute.nodeDisplayNumbers
+                  : selectedLoop!.nodeDisplayNumbers
+            }
+            datasetVersionId={
+              activeBackToStartRoute ? activeBackToStartRoute.datasetVersionId : activeSavedRoute ? activeSavedRoute.datasetVersionId : selectedLoop!.route.datasetVersionId
+            }
+            lastMileInfo={activeBackToStartRoute?.lastMileInfo}
+            onExit={() => {
+              if (activeBackToStartRoute) {
+                setActiveBackToStartRoute(null);
+                setStep(null);
+                setActiveTab("kaart");
+              } else if (activeSavedRoute) {
+                setActiveSavedRoute(null);
+                setStep(null);
+                setActiveTab("mijnroutes");
+              } else {
+                setStep("detail");
+              }
+            }}
+            onReverseDirection={
+              activeBackToStartRoute || activeSavedRoute || !selectedLoop
+                ? undefined
+                : () => setSelectedLoop(reverseLoopCandidate(selectedLoop))
+            }
+            onPause={handlePause}
+            startInProgress={!!activeSavedRoute?.resumeContext?.skipToMatching}
+            initialPhysicalStart={activeSavedRoute?.resumeContext?.physicalStart ?? undefined}
+            initialElapsedRideTimeS={activeSavedRoute?.resumeContext?.elapsedRideTimeS}
+          />
+        )}
+
+        {step === "paused" && pausedRide && (
+          <PauseScreen
+            snapshot={pausedRide}
+            onResume={resumePausedRide}
+            onBackToStart={backToStartFromPause}
+            onViewMap={() => {
+              setStep(null);
+              setActiveTab("kaart");
+            }}
+            onEndRide={endPausedRide}
+          />
+        )}
+          </div>
+        </>
+      )}
     </main>
   );
 }

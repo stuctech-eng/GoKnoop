@@ -190,3 +190,59 @@ describe("NavigationSessionController — getState", () => {
     expect(controller.getState()).toBe("ON_ROUTE");
   });
 });
+
+describe("NavigationSessionController — aankomst-stabiliteitslaag (backlog-item 8B, 29-8-2026)", () => {
+  const ARRIVAL_CONFIRM_MS = 3000;
+  const ARRIVAL_THRESHOLD_M = 25;
+
+  function setupWithArrivalConfirm() {
+    const clock = new ManualNavigationClock(0);
+    const stateMachine = new NavigationStateMachine({ deviationConfirmDurationMs: CONFIRM_MS, rerouteCooldownMs: COOLDOWN_MS });
+    const detector = new DeviationDetector(STRAIGHT_GEOMETRY, stateMachine, clock, {
+      deviationThresholdM: 15,
+      accuracyThresholdM: 20,
+      gpsTimeoutMs: GPS_TIMEOUT_MS,
+      matchOptions: { baseWindowM: 100, windowMarginPerMps: 10, weights: { distance: 1, heading: 0.1, continuity: 0.5 } },
+    });
+    const controller = new NavigationSessionController(detector, stateMachine, clock, ARRIVAL_CONFIRM_MS);
+    stateMachine.start();
+    return { clock, stateMachine, controller };
+  }
+
+  it("bevestigt aankomst NIET direct bij het eerste sample binnen de radius (voorkomt voortijdige melding)", () => {
+    const { controller } = setupWithArrivalConfirm();
+    const confirmed = controller.checkArrival(10, ARRIVAL_THRESHOLD_M);
+    expect(confirmed).toBe(false);
+  });
+
+  it("bevestigt aankomst pas nadat het bevestigingsvenster volledig verstreken is, continu binnen de radius", () => {
+    const { clock, controller, stateMachine } = setupWithArrivalConfirm();
+    expect(controller.checkArrival(10, ARRIVAL_THRESHOLD_M)).toBe(false);
+    clock.advance(2000);
+    expect(controller.checkArrival(8, ARRIVAL_THRESHOLD_M)).toBe(false); // nog niet 3000ms voorbij
+    clock.advance(1001);
+    expect(controller.checkArrival(6, ARRIVAL_THRESHOLD_M)).toBe(true); // nu wel
+    expect(stateMachine.getState()).toBe("ARRIVED");
+  });
+
+  it("reset het bevestigingsvenster als de gebruiker WEER buiten de radius komt (voorkomt een korte, toevallige dip)", () => {
+    const { clock, controller, stateMachine } = setupWithArrivalConfirm();
+    expect(controller.checkArrival(10, ARRIVAL_THRESHOLD_M)).toBe(false);
+    clock.advance(2500); // bijna bevestigd...
+    expect(controller.checkArrival(40, ARRIVAL_THRESHOLD_M)).toBe(false); // ...maar even buiten de radius -- reset
+    clock.advance(2500); // als de klok niet gereset was, zou dit nu (2500+2500=5000ms) al bevestigd zijn
+    expect(controller.checkArrival(10, ARRIVAL_THRESHOLD_M)).toBe(false); // pas net weer terug binnen de radius, timer begint opnieuw
+    expect(stateMachine.getState()).toBe("ON_ROUTE"); // nog steeds niet aangekomen
+    clock.advance(3001);
+    expect(controller.checkArrival(10, ARRIVAL_THRESHOLD_M)).toBe(true); // nu wel, na een volledig ononderbroken venster
+  });
+
+  it("achterwaartse compatibiliteit: zonder clock/duration (oude 2-argumenten-aanroep) blijft het gedrag direct/eenmalig", () => {
+    // Dit is exact hetzelfde patroon als de bestaande setup()-tests hierboven -- expliciet
+    // nogmaals bevestigd binnen deze beschrijvingsgroep voor de duidelijkheid.
+    const { stateMachine, controller } = setup();
+    stateMachine.start();
+    expect(controller.checkArrival(10, ARRIVAL_THRESHOLD_M)).toBe(true);
+    expect(stateMachine.getState()).toBe("ARRIVED");
+  });
+});

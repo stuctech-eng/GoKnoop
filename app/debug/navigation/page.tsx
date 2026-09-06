@@ -36,6 +36,7 @@ import { NavigationSessionController } from "@/lib/navigation/lifecycle/navigati
 import { buildRouteProgressModel, calculateProgress } from "@/lib/navigation/progress/route-progress-model";
 import { ProgressTracker } from "@/lib/navigation/progress/progress-tracker";
 import { RerouteContextTracker } from "@/lib/navigation/reroute/reroute-context-tracker";
+import { ScreenWakeLockController } from "@/lib/navigation/wake-lock/screen-wake-lock";
 import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
 import type { GraphEdge, Point } from "@/lib/route-engine/types";
 import type { GpsSample, NavigationState } from "@/lib/navigation/types";
@@ -59,6 +60,7 @@ export default function NavigationDebugHarness() {
   const [gpsTimeoutMs, setGpsTimeoutMs] = useState(10000);
 
   const [running, setRunning] = useState(false);
+  const [wakeLockActive, setWakeLockActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<NavigationState>("NOT_STARTED");
   const [rawSample, setRawSample] = useState<GpsSample | null>(null);
@@ -71,6 +73,7 @@ export default function NavigationDebugHarness() {
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const healthIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wakeLockRef = useRef<ScreenWakeLockController | null>(null);
 
   function appendLog(text: string) {
     setLog((prev) => [{ t: new Date().toISOString().slice(11, 23), text }, ...prev].slice(0, 50));
@@ -106,26 +109,12 @@ export default function NavigationDebugHarness() {
       return;
     }
 
-    let source: BrowserGeolocationSource;
-    try {
-      source = new BrowserGeolocationSource({
-        enableHighAccuracy: true,
-        onError: (err) => {
-          appendLog(`GPS-fout: [${err.code}] ${err.message}`);
-          setError(`GPS-fout: ${err.message}`);
-        },
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return;
-    }
-
     const clock = new SystemNavigationClock();
     const stateMachine = new NavigationStateMachine({
       deviationConfirmDurationMs,
       rerouteCooldownMs,
     });
-    const progressModel = buildRouteProgressModel(edges);
+    const progressModel = buildRouteProgressModel(edges, ["debug-from", "debug-to"]);
     const detector = new DeviationDetector(progressModel.geometry, stateMachine, clock, {
       deviationThresholdM,
       accuracyThresholdM,
@@ -140,11 +129,69 @@ export default function NavigationDebugHarness() {
     const progressTracker = new ProgressTracker(3);
     const rerouteTracker = new RerouteContextTracker();
 
-    stateMachine.start();
-    setState(stateMachine.getState());
-    appendLog("Sessie gestart, wacht op eerste GPS-fix...");
+    let source: BrowserGeolocationSource;
+    try {
+      source = new BrowserGeolocationSource({
+        enableHighAccuracy: true,
+        onError: (err) => {
+          appendLog(`GPS-fout: [${err.code}] ${err.message}`);
+          // Geolocation-standaard: code 1 = PERMISSION_DENIED. Dit is een APARTE state
+          // (ontwerp sectie 14), NOOIT hetzelfde pad als GPS_LOST -- code 2 (POSITION_UNAVAILABLE)
+          // en code 3 (TIMEOUT) zijn wél tijdelijke signaalproblemen en veranderen de state hier
+          // NIET; die lopen via de bestaande GPS_LOST-timeoutlogica (checkGpsHealth), niet hier.
+          if (err.code === 1) {
+            try {
+              controller.denyPermission();
+              setState(stateMachine.getState());
+              appendLog("state: -> PERMISSION_DENIED (toestemming geweigerd)");
+            } catch {
+              // al in PERMISSION_DENIED of een eindstadium -- geen actie nodig
+            }
+            // De sessie is feitelijk nooit "actief" geworden -- de knop moet dus geen
+            // "Stop" meer tonen, maar de retry-tekst (zie de render-logica onderaan).
+            setRunning(false);
+            wakeLockRef.current?.release();
+            wakeLockRef.current?.destroy();
+            wakeLockRef.current = null;
+            setWakeLockActive(false);
+            setError("Locatietoestemming geweigerd.");
+          } else {
+            setError(`GPS-fout: ${err.message}`);
+          }
+        },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    let sessionStarted = false; // NavigationStateMachine.start() hoort bij de EERSTE fix, niet bij de knop (ontwerp sectie 14)
 
     const unsubscribe = source.subscribe((sample) => {
+      if (!sessionStarted) {
+        // Als denyPermission() ondertussen al is aangeroepen (state = PERMISSION_DENIED),
+        // start() zou daar een InvalidNavigationTransitionError geven -- dat kan hier
+        // legitiem gebeuren als een late, gebufferde sample nog binnenkomt na een weigering.
+        try {
+          stateMachine.start();
+          sessionStarted = true;
+          appendLog("state: NOT_STARTED -> ON_ROUTE (eerste GPS-fix ontvangen)");
+        } catch {
+          return; // sessie is inmiddels PERMISSION_DENIED/CANCELLED -- deze late sample negeren
+        }
+      }
+
+      // checkGpsHealth() kan op zichzelf al een transitie veroorzaken (bijv. OFF_ROUTE ->
+      // GPS_LOST na een lange stilte) VOORDAT deze sample verwerkt wordt. Expliciet los
+      // loggen, anders toont het paneel alleen de NETTO verandering per sample en blijft
+      // zo'n tussenstap onzichtbaar.
+      const beforeHealthCheck = stateMachine.getState();
+      controller.checkGpsHealth();
+      const afterHealthCheck = stateMachine.getState();
+      if (beforeHealthCheck !== afterHealthCheck) {
+        appendLog(`state: ${beforeHealthCheck} -> ${afterHealthCheck} (GPS-gezondheidscheck)`);
+      }
+
       setRawSample(sample);
       const outcome = controller.processGpsSample(sample);
       setGpsHealth({ isSignalLost: detector.isGpsSignalLost() });
@@ -172,32 +219,58 @@ export default function NavigationDebugHarness() {
 
     source.start();
 
+    // Screen Wake Lock (ontwerp sectie 16, MVP-beslissing 29-8-2026): aanvragen zodra
+    // navigatie start. Faalt stil op browsers/situaties zonder ondersteuning (progressive
+    // enhancement) -- geen blokkade van de sessie zelf.
+    const wakeLockController = new ScreenWakeLockController({
+      onError: (err) => appendLog(`Wake Lock-fout: ${err instanceof Error ? err.message : String(err)}`),
+    });
+    wakeLockController.request().then((ok) => {
+      setWakeLockActive(ok);
+      appendLog(ok ? "Wake Lock actief." : "Wake Lock niet beschikbaar/geweigerd (scherm kan alsnog uitgaan).");
+    });
+    wakeLockRef.current = wakeLockController;
+
     // Onafhankelijke GPS_LOST-check (ontwerp sectie 12/23-stap 9) -- ook zonder nieuwe sample.
-    const healthInterval = setInterval(() => controller.checkGpsHealth(), 2000);
+    // Tegelijk een goed, low-frequency moment om de Wake Lock-status in het paneel te verversen
+    // (bijv. na een systeem-vrijgave die via visibilitychange weer hersteld is).
+    const healthInterval = setInterval(() => {
+      controller.checkGpsHealth();
+      setWakeLockActive(wakeLockController.isActive());
+    }, 2000);
 
     sourceRef.current = source;
     unsubscribeRef.current = unsubscribe;
     healthIntervalRef.current = healthInterval;
     setRunning(true);
+    appendLog("Wacht op eerste GPS-fix of toestemmingsdialoog...");
+    setState(stateMachine.getState()); // NOT_STARTED, totdat de eerste fix of een weigering binnenkomt
   }
 
   function stop() {
     sourceRef.current?.stop();
     unsubscribeRef.current?.();
     if (healthIntervalRef.current) clearInterval(healthIntervalRef.current);
+    wakeLockRef.current?.release();
+    wakeLockRef.current?.destroy();
     sourceRef.current = null;
     unsubscribeRef.current = null;
     healthIntervalRef.current = null;
+    wakeLockRef.current = null;
     setRunning(false);
-    appendLog("Sessie gestopt.");
+    setWakeLockActive(false);
+    appendLog("Sessie gestopt, Wake Lock vrijgegeven.");
   }
 
   useEffect(() => {
     return () => {
-      // Opruimen bij het verlaten van de pagina -- geen watch die blijft doorlopen.
+      // Opruimen bij het verlaten van de pagina -- geen watch die blijft doorlopen,
+      // geen Wake Lock die onnodig actief blijft (ontwerp sectie 16).
       sourceRef.current?.stop();
       unsubscribeRef.current?.();
       if (healthIntervalRef.current) clearInterval(healthIntervalRef.current);
+      wakeLockRef.current?.release();
+      wakeLockRef.current?.destroy();
     };
   }, []);
 
@@ -243,16 +316,25 @@ export default function NavigationDebugHarness() {
 
       {error && <p style={{ color: "#b00020", fontSize: 13 }}>{error}</p>}
 
+      {state === "PERMISSION_DENIED" && (
+        <div style={{ background: "#fff3cd", padding: 12, borderRadius: 8, marginTop: 8 }}>
+          <p style={{ fontSize: 13, margin: 0 }}>
+            Locatietoestemming geweigerd. Sta locatietoegang toe voor deze site in de Safari-instellingen en probeer opnieuw.
+          </p>
+        </div>
+      )}
+
       <button
         onClick={running ? stop : start}
         style={{ width: "100%", padding: 14, fontSize: 16, marginTop: 12, background: running ? "#b00020" : "#1a7a3c", color: "white", border: "none", borderRadius: 8 }}
       >
-        {running ? "Stop" : "Start"}
+        {running ? "Stop" : state === "PERMISSION_DENIED" ? "Opnieuw proberen" : "Start"}
       </button>
 
       <div style={panelStyle}>
         <div><strong>state:</strong> {state}</div>
         <div><strong>gps lost:</strong> {gpsHealth ? String(gpsHealth.isSignalLost) : "-"}</div>
+        <div><strong>wake lock actief:</strong> {String(wakeLockActive)}</div>
         <hr />
         <div><strong>raw sample</strong></div>
         <div>lat/lon: {rawSample ? `${rawSample.lat.toFixed(6)}, ${rawSample.lon.toFixed(6)}` : "-"}</div>
