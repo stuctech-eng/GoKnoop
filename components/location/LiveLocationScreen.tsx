@@ -24,6 +24,7 @@ import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-g
 import { selectHeadingDeg, smoothHeadingDeg } from "@/lib/navigation/direction/relative-direction";
 import { compassAbbreviation } from "@/lib/navigation/direction/relative-direction";
 import { logMapError } from "@/lib/map/log-client-error";
+import { loadPatchedLibertyStyle } from "@/lib/map/patched-style";
 
 let workerUrlConfigured = false;
 function ensureWorkerUrlConfigured() {
@@ -79,68 +80,79 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     ensureWorkerUrlConfigured();
+    let cancelled = false;
 
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: LIBERTY_STYLE_URL,
-      center: [5.1214, 52.0907], // uitgangspunt, wordt direct overschreven zodra de eerste GPS-fix binnenkomt
-      zoom: 15,
-      bearing: 0,
-      pitch: 0,
-      dragRotate: false,
-      pitchWithRotate: false,
-      touchPitch: false,
-      attributionControl: { compact: true },
-    });
-    map.touchZoomRotate.disableRotation();
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
+    (async () => {
+      // to-string()-patch op de labeltekst-expressies (6-9-2026) -- zie
+      // lib/map/patched-style.ts voor de volledige toelichting/kanttekening.
+      // Valt bij een netwerkfout veilig terug op de kale URL.
+      const style = await loadPatchedLibertyStyle(LIBERTY_STYLE_URL);
+      if (cancelled || !containerRef.current || mapRef.current) return;
 
-    map.on("load", () => {
-      // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026) -- zelfde
-      // aanpak als NavigationScreen.tsx, zie de uitgebreide toelichting daar.
-      const attribContainer = map.getContainer().querySelector<HTMLElement>(".maplibregl-ctrl-bottom-right");
-      if (attribContainer) {
-        attribContainer.style.left = "50%";
-        attribContainer.style.right = "auto";
-        attribContainer.style.transform = "translateX(-50%)";
-      }
-
-      map.addSource("goknoop-live-position", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
+      const map = new maplibregl.Map({
+        container: containerRef.current,
+        style,
+        center: [5.1214, 52.0907], // uitgangspunt, wordt direct overschreven zodra de eerste GPS-fix binnenkomt
+        zoom: 15,
+        bearing: 0,
+        pitch: 0,
+        dragRotate: false,
+        pitchWithRotate: false,
+        touchPitch: false,
+        attributionControl: { compact: true },
       });
-      // Buitenste, subtiele "nauwkeurigheids"-gloed + de blauwe stip zelf -- zelfde taal als de mockup.
-      map.addLayer({
-        id: "goknoop-live-position-halo",
-        type: "circle",
-        source: "goknoop-live-position",
-        paint: { "circle-radius": 22, "circle-color": POSITION_COLOR, "circle-opacity": 0.15 },
+      map.touchZoomRotate.disableRotation();
+      map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
+
+      map.on("load", () => {
+        // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026) -- zelfde
+        // aanpak als NavigationScreen.tsx, zie de uitgebreide toelichting daar.
+        const attribContainer = map.getContainer().querySelector<HTMLElement>(".maplibregl-ctrl-bottom-right");
+        if (attribContainer) {
+          attribContainer.style.left = "50%";
+          attribContainer.style.right = "auto";
+          attribContainer.style.transform = "translateX(-50%)";
+        }
+
+        map.addSource("goknoop-live-position", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        // Buitenste, subtiele "nauwkeurigheids"-gloed + de blauwe stip zelf -- zelfde taal als de mockup.
+        map.addLayer({
+          id: "goknoop-live-position-halo",
+          type: "circle",
+          source: "goknoop-live-position",
+          paint: { "circle-radius": 22, "circle-color": POSITION_COLOR, "circle-opacity": 0.15 },
+        });
+        map.addLayer({
+          id: "goknoop-live-position-dot",
+          type: "circle",
+          source: "goknoop-live-position",
+          paint: { "circle-radius": 8, "circle-color": POSITION_COLOR, "circle-stroke-color": "#FFFFFF", "circle-stroke-width": 3 },
+        });
+
+        setMapStatus("loaded");
       });
-      map.addLayer({
-        id: "goknoop-live-position-dot",
-        type: "circle",
-        source: "goknoop-live-position",
-        paint: { "circle-radius": 8, "circle-color": POSITION_COLOR, "circle-stroke-color": "#FFFFFF", "circle-stroke-width": 3 },
+
+      map.on("error", (e) => {
+        const message = e?.error?.message ?? "Onbekende kaartfout.";
+        logMapError(map, e, "LiveLocationScreen", LIBERTY_STYLE_URL);
+        // Teruggezet naar de simpele, bewezen basis (6-9-2026): altijd de fout
+        // tonen. De eerdere onderdrukking + resize-gok voor de bekende
+        // codePointAt-fout is verwijderd -- ongetest, mogelijk zelfs schadelijk
+        // (blanco kaart zonder enige melding). Eerst stabiliseren, dan pas
+        // gericht verder onderzoeken.
+        setMapStatus("error");
+        setError(message);
       });
 
-      setMapStatus("loaded");
-    });
+      mapRef.current = map;
+    })();
 
-    map.on("error", (e) => {
-      const message = e?.error?.message ?? "Onbekende kaartfout.";
-      logMapError(map, e, "LiveLocationScreen", LIBERTY_STYLE_URL);
-      // Teruggezet naar de simpele, bewezen basis (6-9-2026): altijd de fout
-      // tonen. De eerdere onderdrukking + resize-gok voor de bekende
-      // codePointAt-fout is verwijderd -- ongetest, mogelijk zelfs schadelijk
-      // (blanco kaart zonder enige melding). Eerst stabiliseren, dan pas
-      // gericht verder onderzoeken.
-      setMapStatus("error");
-      setError(message);
-    });
-
-    mapRef.current = map;
     return () => {
-      map.remove();
+      cancelled = true;
+      mapRef.current?.remove();
       mapRef.current = null;
     };
   }, []);

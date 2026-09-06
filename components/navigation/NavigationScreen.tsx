@@ -56,6 +56,7 @@ import { recordRiddenRoute } from "@/lib/history/ridden-routes-store";
 import type { GraphEdge } from "@/lib/route-engine/types";
 import type { NavigationState } from "@/lib/navigation/types";
 import { logMapError } from "@/lib/map/log-client-error";
+import { loadPatchedLibertyStyle } from "@/lib/map/patched-style";
 
 let workerUrlConfigured = false;
 function ensureWorkerUrlConfigured() {
@@ -208,6 +209,7 @@ export default function NavigationScreen({
 }: NavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const hasRecordedArrivalRef = useRef(false);
@@ -306,104 +308,118 @@ export default function NavigationScreen({
       return;
     }
 
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: LIBERTY_STYLE_URL,
-      bearing: 0,
-      pitch: 0,
-      dragRotate: false,
-      pitchWithRotate: false,
-      touchPitch: false,
-      // Compacte attributie i.p.v. een permanente balk -- de attributie zelf blijft staan
-      // (waarschijnlijk vereist door OpenStreetMap/OpenFreeMap se licentie, geen decoratie),
-      // maar wordt nu een klein, onopvallend "i"-icoontje i.p.v. een balk die ruimte inneemt.
-      attributionControl: { compact: true },
-    });
-    map.touchZoomRotate.disableRotation();
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
+    let cancelled = false;
 
-    // Attributie onderaan GECENTREERD i.p.v. rechtsonder in de hoek (op verzoek, 30-8-2026).
-    // MapLibre kent geen ingebouwde "bottom-center"-positie voor besturingselementen (alleen
-    // de vier hoeken) -- dit herpositioneert het element zelf via CSS, met behoud van
-    // exact dezelfde, vereiste attributie-inhoud (alleen WAAR die getoond wordt verandert).
-    map.once("load", () => {
-      const attribContainer = map.getContainer().querySelector<HTMLElement>(".maplibregl-ctrl-bottom-right");
-      if (attribContainer) {
-        attribContainer.style.left = "50%";
-        attribContainer.style.right = "auto";
-        attribContainer.style.transform = "translateX(-50%)";
-      }
-    });
+    (async () => {
+      // to-string()-patch op de labeltekst-expressies (6-9-2026) -- zie
+      // lib/map/patched-style.ts voor de volledige toelichting/kanttekening.
+      const style = await loadPatchedLibertyStyle(LIBERTY_STYLE_URL);
+      if (cancelled || !containerRef.current || mapRef.current) return;
 
-    map.on("load", () => {
-      map.addSource("goknoop-route-line", { type: "geojson", data: geoJson.line as GeoJSON.Feature });
-      map.addLayer({
-        id: "goknoop-route-line",
-        type: "line",
-        source: "goknoop-route-line",
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: { "line-color": ROUTE_COLOR, "line-width": 5 },
+      const map = new maplibregl.Map({
+        container: containerRef.current,
+        style,
+        bearing: 0,
+        pitch: 0,
+        dragRotate: false,
+        pitchWithRotate: false,
+        touchPitch: false,
+        // Compacte attributie i.p.v. een permanente balk -- de attributie zelf blijft staan
+        // (waarschijnlijk vereist door OpenStreetMap/OpenFreeMap se licentie, geen decoratie),
+        // maar wordt nu een klein, onopvallend "i"-icoontje i.p.v. een balk die ruimte inneemt.
+        attributionControl: { compact: true },
+      });
+      map.touchZoomRotate.disableRotation();
+      map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
+
+      // Attributie onderaan GECENTREERD i.p.v. rechtsonder in de hoek (op verzoek, 30-8-2026).
+      // MapLibre kent geen ingebouwde "bottom-center"-positie voor besturingselementen (alleen
+      // de vier hoeken) -- dit herpositioneert het element zelf via CSS, met behoud van
+      // exact dezelfde, vereiste attributie-inhoud (alleen WAAR die getoond wordt verandert).
+      map.once("load", () => {
+        const attribContainer = map.getContainer().querySelector<HTMLElement>(".maplibregl-ctrl-bottom-right");
+        if (attribContainer) {
+          attribContainer.style.left = "50%";
+          attribContainer.style.right = "auto";
+          attribContainer.style.transform = "translateX(-50%)";
+        }
       });
 
-      map.addSource("goknoop-route-nodes", { type: "geojson", data: geoJson.nodes as GeoJSON.FeatureCollection });
-      map.addLayer({
-        id: "goknoop-route-nodes-circle",
-        type: "circle",
-        source: "goknoop-route-nodes",
-        paint: { "circle-radius": 10, "circle-color": "#FFFFFF", "circle-stroke-color": ROUTE_COLOR, "circle-stroke-width": 3 },
+      map.on("load", () => {
+        map.addSource("goknoop-route-line", { type: "geojson", data: geoJson.line as GeoJSON.Feature });
+        map.addLayer({
+          id: "goknoop-route-line",
+          type: "line",
+          source: "goknoop-route-line",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: { "line-color": ROUTE_COLOR, "line-width": 5 },
+        });
+
+        map.addSource("goknoop-route-nodes", { type: "geojson", data: geoJson.nodes as GeoJSON.FeatureCollection });
+        map.addLayer({
+          id: "goknoop-route-nodes-circle",
+          type: "circle",
+          source: "goknoop-route-nodes",
+          paint: { "circle-radius": 10, "circle-color": "#FFFFFF", "circle-stroke-color": ROUTE_COLOR, "circle-stroke-width": 3 },
+        });
+        map.addLayer({
+          id: "goknoop-route-nodes-label",
+          type: "symbol",
+          source: "goknoop-route-nodes",
+          layout: { "text-field": ["get", "nodeId"], "text-size": 12, "text-font": ["Noto Sans Bold"] },
+          paint: { "text-color": ROUTE_COLOR },
+        });
+
+        // Live-positiemarker (stap 12.4, gepolijst 29-8-2026): subtiel blauw stipje --
+        // bewust anders dan de teal route/knooppunten, zodat "waar ben ik" nooit met de
+        // route zelf verward wordt. De ROUTE blijft teal (geen Google-blauwe navigatielijn),
+        // alleen de positie-indicator gebruikt het gangbare "hier ben je"-blauw.
+        map.addSource("goknoop-position", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: "goknoop-position-circle",
+          type: "circle",
+          source: "goknoop-position",
+          paint: {
+            "circle-radius": 7,
+            "circle-color": "#3B82F6",
+            "circle-stroke-color": "#FFFFFF",
+            "circle-stroke-width": 3,
+          },
+        });
+
+        // Asymmetrische marge: bovenin is de richtingkaart veel hoger dan 60px, onderin staan de
+        // voortgangsbalk + het logpaneel -- een uniforme marge liet de route daaronder wegvallen.
+        map.fitBounds(geoJson.bounds, { padding: { top: 180, bottom: 140, left: 40, right: 40 }, animate: false });
+        setMapStatus("loaded");
       });
-      map.addLayer({
-        id: "goknoop-route-nodes-label",
-        type: "symbol",
-        source: "goknoop-route-nodes",
-        layout: { "text-field": ["get", "nodeId"], "text-size": 12, "text-font": ["Noto Sans Bold"] },
-        paint: { "text-color": ROUTE_COLOR },
+
+      map.on("error", (e) => {
+        const message = e?.error?.message ?? "Onbekende MapLibre-fout.";
+        logMapError(map, e, "NavigationScreen", LIBERTY_STYLE_URL);
+        // Teruggezet naar de simpele, bewezen basis (6-9-2026) -- zie
+        // LiveLocationScreen.tsx voor de toelichting.
+        setMapStatus("error");
+        setError(message);
       });
 
-      // Live-positiemarker (stap 12.4, gepolijst 29-8-2026): subtiel blauw stipje --
-      // bewust anders dan de teal route/knooppunten, zodat "waar ben ik" nooit met de
-      // route zelf verward wordt. De ROUTE blijft teal (geen Google-blauwe navigatielijn),
-      // alleen de positie-indicator gebruikt het gangbare "hier ben je"-blauw.
-      map.addSource("goknoop-position", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-      });
-      map.addLayer({
-        id: "goknoop-position-circle",
-        type: "circle",
-        source: "goknoop-position",
-        paint: {
-          "circle-radius": 7,
-          "circle-color": "#3B82F6",
-          "circle-stroke-color": "#FFFFFF",
-          "circle-stroke-width": 3,
-        },
-      });
+      const handleResize = () => map.resize();
+      window.addEventListener("resize", handleResize);
+      window.addEventListener("orientationchange", handleResize);
+      resizeCleanupRef.current = () => {
+        window.removeEventListener("resize", handleResize);
+        window.removeEventListener("orientationchange", handleResize);
+      };
 
-      // Asymmetrische marge: bovenin is de richtingkaart veel hoger dan 60px, onderin staan de
-      // voortgangsbalk + het logpaneel -- een uniforme marge liet de route daaronder wegvallen.
-      map.fitBounds(geoJson.bounds, { padding: { top: 180, bottom: 140, left: 40, right: 40 }, animate: false });
-      setMapStatus("loaded");
-    });
+      mapRef.current = map;
+    })();
 
-    map.on("error", (e) => {
-      const message = e?.error?.message ?? "Onbekende MapLibre-fout.";
-      logMapError(map, e, "NavigationScreen", LIBERTY_STYLE_URL);
-      // Teruggezet naar de simpele, bewezen basis (6-9-2026) -- zie
-      // LiveLocationScreen.tsx voor de toelichting.
-      setMapStatus("error");
-      setError(message);
-    });
-
-    const handleResize = () => map.resize();
-    window.addEventListener("resize", handleResize);
-    window.addEventListener("orientationchange", handleResize);
-
-    mapRef.current = map;
     return () => {
-      window.removeEventListener("resize", handleResize);
-      window.removeEventListener("orientationchange", handleResize);
-      map.remove();
+      cancelled = true;
+      resizeCleanupRef.current?.();
+      mapRef.current?.remove();
       mapRef.current = null;
     };
   }, []);
