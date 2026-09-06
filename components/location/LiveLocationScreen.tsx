@@ -23,7 +23,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-geolocation-source";
 import { selectHeadingDeg, smoothHeadingDeg } from "@/lib/navigation/direction/relative-direction";
 import { compassAbbreviation } from "@/lib/navigation/direction/relative-direction";
-import { logMapError } from "@/lib/map/log-client-error";
+import { logMapError, isKnownRecoverableMapError } from "@/lib/map/log-client-error";
 
 let workerUrlConfigured = false;
 function ensureWorkerUrlConfigured() {
@@ -127,9 +127,15 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
     });
 
     map.on("error", (e) => {
-      setMapStatus("error");
-      setError(e?.error?.message ?? "Onbekende kaartfout.");
+      const message = e?.error?.message ?? "Onbekende kaartfout.";
       logMapError(map, e, "LiveLocationScreen", LIBERTY_STYLE_URL);
+      // Bekende, goedaardige labelrenderfout (6-9-2026, Lochem-incident): treedt
+      // herhaaldelijk op bij live GPS-volgen op specifieke locaties, maar
+      // blokkeert de kaart zelf niet -- bewust NIET als fataal behandelen.
+      // Alle andere/onbekende fouten blijven wel de bestaande foutstatus tonen.
+      if (isKnownRecoverableMapError(message)) return;
+      setMapStatus("error");
+      setError(message);
     });
 
     mapRef.current = map;
