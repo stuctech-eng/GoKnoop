@@ -605,6 +605,7 @@ export async function GET(req: NextRequest) {
       const results: StoredAttempt[] = [];
       let consecutiveProviderErrors = 0;
       let stoppedEarly: string | null = null;
+      let orsLikelyUnavailable = false; // 6-9-2026: onderscheidt "batch gestopt" van "structurele ORS-storing, niet blind doorschuiven"
 
       for (const c of slice) {
         if (Date.now() - batchStartTime > FUNCTION_TIME_BUDGET_MS) {
@@ -635,6 +636,26 @@ export async function GET(req: NextRequest) {
         const outcome = await routeWithRetry(router, from, to);
 
         if (!outcome.ok) {
+          if (outcome.validationStatus === "rejected_provider_error") {
+            // BELANGRIJK (6-9-2026, n.a.v. quota-uitputtingsincident): dit item wordt
+            // NIET geschreven en telt NIET als verwerkt. Een providerfout na retries
+            // kan een LANGDURIGE storing zijn (bv. uitgeput dagquotum, ~23u herstel) --
+            // in dat geval zou blind doorschuiven de HELE resterende kandidatenlijst
+            // als "rejected_provider_error" wegschrijven zonder ooit echt gevalideerd
+            // te zijn (exact wat er vannacht gebeurde: 3762/4002 zo verloren). Dit item
+            // blijft simpelweg in de wachtrij staan voor een latere, geslaagde poging.
+            consecutiveProviderErrors++;
+            if (consecutiveProviderErrors >= 2) {
+              orsLikelyUnavailable = true;
+              stoppedEarly =
+                "2 opeenvolgende provider-fouten (na retries) -- ORS lijkt structureel niet bereikbaar (bv. quotum uitgeput). " +
+                "Batch afgebroken ZONDER deze items als verwerkt te tellen -- ze blijven in de wachtrij. " +
+                "Wacht voordat je opnieuw probeert (dagquota herstelt na ~24u).";
+              break;
+            }
+            continue;
+          }
+          // rejected_no_route -- een ECHTE, definitieve afwijzing. Telt wel als verwerkt.
           results.push({
             ...c,
             datasetVersionId,
@@ -647,11 +668,7 @@ export async function GET(req: NextRequest) {
             geometry: null,
             validatedAt: nowIso,
           });
-          consecutiveProviderErrors = outcome.validationStatus === "rejected_provider_error" ? consecutiveProviderErrors + 1 : 0;
-          if (consecutiveProviderErrors >= 2) {
-            stoppedEarly = "2 opeenvolgende provider-fouten (na retries) -- batch veilig afgebroken, ORS lijkt structureel niet bereikbaar. Probeer later opnieuw.";
-            break;
-          }
+          consecutiveProviderErrors = 0;
           continue;
         }
 
@@ -690,6 +707,7 @@ export async function GET(req: NextRequest) {
         batchOffset,
         batchProcessed: results.length,
         stoppedEarly,
+        orsLikelyUnavailable,
         batchValidCount: results.filter((r) => r.validationStatus === "valid").length,
         batchRejectedBreakdown: {
           rejected_no_route: results.filter((r) => r.validationStatus === "rejected_no_route").length,
@@ -700,8 +718,9 @@ export async function GET(req: NextRequest) {
         processedCount: newProcessedCount,
         totalDirectionalItems: meta.totalDirectionalItems,
         status: newStatus,
-        nextStep:
-          newStatus === "complete"
+        nextStep: orsLikelyUnavailable
+          ? `ORS lijkt structureel onbereikbaar (bv. quotum uitgeput). WACHT (bv. tot het dagquotum herstelt, ~24u) voordat je opnieuw phase=compute-batch&scope=${scope}&batchOffset=${newProcessedCount} probeert -- deze items zijn NIET als verwerkt geteld en blijven in de wachtrij.`
+          : newStatus === "complete"
             ? "Alle kandidaten verwerkt. Roep phase=write aan om de resultaten naar networkBridges te schrijven."
             : `Roep opnieuw phase=compute-batch&scope=${scope}&batchOffset=${newProcessedCount} aan.`,
       });

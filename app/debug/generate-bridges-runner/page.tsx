@@ -15,6 +15,7 @@ type BatchResult = {
   batchOffset: number;
   batchProcessed: number;
   stoppedEarly: string | null;
+  orsLikelyUnavailable: boolean;
   batchValidCount: number;
   batchRejectedBreakdown: {
     rejected_no_route: number;
@@ -107,6 +108,17 @@ export default function GenerateBridgesRunnerPage() {
           const batch: BatchResult = await call({ phase: "compute-batch", scope, batchOffset: String(processedCount) });
           setLog((prev) => [...prev, batch]);
           processedCount = batch.processedCount;
+          if (batch.orsLikelyUnavailable) {
+            // NIET blind doorgaan: dit is vermoedelijk een langdurige storing (bv.
+            // uitgeput dagquotum, ~24u herstel), geen transiënte hik. Automatisch
+            // blijven proberen zou alleen tijd verspillen -- de gebruiker moet zelf
+            // later terugkomen en opnieuw op Start tikken.
+            setStatus("error");
+            setError(
+              "ORS lijkt structureel onbereikbaar (bv. quotum uitgeput). Gestopt om te voorkomen dat kandidaten ten onrechte als 'verwerkt' worden geteld. Wacht en tik later opnieuw op Start."
+            );
+            return;
+          }
           if (batch.status === "complete") {
             setStatus("complete");
             break;
