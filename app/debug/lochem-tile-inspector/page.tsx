@@ -1,19 +1,22 @@
 "use client";
 
 /**
- * Tile-inspector (6-9-2026, herbouwd na GPT-review van de eerste ronde).
+ * Tile-inspector (6-9-2026, uitgebreid met tegelaanbieder-vergelijking).
  *
  * Geïsoleerd van de live app -- eigen, onafhankelijke kaartinstantie.
- * Reparaties t.o.v. de eerste versie:
- * - queryRenderedFeatures() gaf altijd 0 features terug. Vermoedelijke
- *   oorzaak: de EERSTE "idle" kan te vroeg vuren (vóór de tegels voor de
- *   exacte zoom/center daadwerkelijk geladen zijn), en de oude code stopte
- *   na die ene meting. Nu: blijft op ELKE idle opnieuw meten, plus een
- *   handmatige "Herhaal meting"-knop.
- * - Locatie is nu instelbaar (Lochem EN Diepenheim testen, niet hardcoded).
- * - Directe to-string()-A/B-test ingebouwd: patcht de live stijl met
- *   to-string() rond alle text-field-expressies, zodat je meteen kunt zien
- *   of dat de crash oplost -- zonder eerst iets naar productie te bouwen.
+ *
+ * NIEUW (6-9-2026, n.a.v. het weerlegde to-string()-resultaat): een los
+ * project bleek exact dezelfde OpenFreeMap+MapLibre-faalmodus te hebben en
+ * loste het op door van tegelaanbieder te wisselen (niet van bibliotheek).
+ * CARTO biedt een MapLibre-compatibele VECTOR-stijl (dus rotatie/volledige
+ * stijlcontrole blijven behouden, in tegenstelling tot Leaflet+raster).
+ * Deze pagina laat nu kiezen tussen OpenFreeMap en CARTO, met exact dezelfde
+ * A/B/simulatie-test, om te zien of de crash tegelaanbieder-specifiek is.
+ *
+ * Wisselen van stijl gebeurt via een volledige remount (React `key`-prop) --
+ * bewust GEEN map.setStyle() hier, want dat gaf eerder een race condition
+ * (simulatie kon starten vóórdat de nieuwe stijl echt geladen was). Een
+ * remount garandeert een schone, nieuwe kaartinstantie per stijl.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -28,7 +31,12 @@ function ensureWorkerUrlConfigured() {
   workerUrlConfigured = true;
 }
 
-const LIBERTY_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const STYLE_SOURCES = {
+  openfreemap: { label: "OpenFreeMap (Liberty)", url: "https://tiles.openfreemap.org/styles/liberty" },
+  carto: { label: "CARTO (Voyager)", url: "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json" },
+} as const;
+type StyleSourceKey = keyof typeof STYLE_SOURCES;
+
 const PRESETS = {
   lochem: { lat: 52.157814726340035, lon: 6.422090574730873, label: "Lochem" },
   diepenheim: { lat: 52.209, lon: 6.575, label: "Diepenheim (bij benadering)" },
@@ -58,7 +66,7 @@ function patchStyleWithToString(style: StyleSpecification): StyleSpecification {
   return patched;
 }
 
-export default function TileInspectorPage() {
+function MapInspector({ styleUrl, initialLat, initialLon }: { styleUrl: string; initialLat: number; initialLon: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const originalStyleRef = useRef<StyleSpecification | null>(null);
@@ -72,8 +80,8 @@ export default function TileInspectorPage() {
   const [errorCountA, setErrorCountA] = useState(0);
   const [errorCountB, setErrorCountB] = useState(0);
   const [lastErrorMessage, setLastErrorMessage] = useState<string | null>(null);
-  const [lat, setLat] = useState(String(PRESETS.lochem.lat));
-  const [lon, setLon] = useState(String(PRESETS.lochem.lon));
+  const [lat, setLat] = useState(String(initialLat));
+  const [lon, setLon] = useState(String(initialLon));
   const labelsEnabledRef = useRef(true);
 
   useEffect(() => {
@@ -86,8 +94,8 @@ export default function TileInspectorPage() {
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: LIBERTY_STYLE_URL,
-      center: [Number(lat) ? Number(lon) : 6.4221, Number(lat) || 52.1578],
+      style: styleUrl,
+      center: [initialLon, initialLat],
       zoom: 16,
     });
 
@@ -104,9 +112,6 @@ export default function TileInspectorPage() {
       }
     });
 
-    // Gerepareerd: blijft op ELKE idle opnieuw meten (niet alleen de eerste --
-    // die kan te vroeg vuren vóór tegels echt geladen zijn), zodat de weergave
-    // vanzelf naar de juiste waarde convergeert.
     map.on("idle", () => {
       inspectRenderedFeatures(map);
       setIdleCount((c) => c + 1);
@@ -132,14 +137,7 @@ export default function TileInspectorPage() {
         if (key in props) {
           const value = props[key];
           if (typeof value !== "string" && value !== null && value !== undefined) {
-            found.push({
-              key,
-              value,
-              valueType: typeof value,
-              layer: feature.layer?.id,
-              sourceLayer: feature.sourceLayer,
-              allProperties: props,
-            });
+            found.push({ key, value, valueType: typeof value, layer: feature.layer?.id, sourceLayer: feature.sourceLayer, allProperties: props });
           }
         }
       }
@@ -165,9 +163,7 @@ export default function TileInspectorPage() {
     const style = map.getStyle();
     if (!style?.layers) return;
     for (const layer of style.layers) {
-      if (layer.type === "symbol") {
-        map.setLayoutProperty(layer.id, "visibility", newEnabled ? "visible" : "none");
-      }
+      if (layer.type === "symbol") map.setLayoutProperty(layer.id, "visibility", newEnabled ? "visible" : "none");
     }
   }
 
@@ -176,11 +172,7 @@ export default function TileInspectorPage() {
     if (!map || !originalStyleRef.current) return;
     const newActive = !toStringPatchActive;
     setToStringPatchActive(newActive);
-    if (newActive) {
-      map.setStyle(patchStyleWithToString(originalStyleRef.current));
-    } else {
-      map.setStyle(originalStyleRef.current);
-    }
+    map.setStyle(newActive ? patchStyleWithToString(originalStyleRef.current) : originalStyleRef.current);
   }
 
   async function runMovementSimulation() {
@@ -198,10 +190,7 @@ export default function TileInspectorPage() {
   }
 
   return (
-    <div style={{ padding: 16, fontFamily: "sans-serif", maxWidth: 700, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 20, marginBottom: 8 }}>Tile-inspector</h1>
-      <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>Geïsoleerd van de live app -- eigen kaartinstantie.</p>
-
+    <>
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
         <button onClick={() => goToLocation(PRESETS.lochem.lat, PRESETS.lochem.lon)} style={{ flex: 1, padding: 8, fontSize: 13, background: "#085041", color: "white", border: "none", borderRadius: 8 }}>
           Lochem
@@ -276,6 +265,42 @@ export default function TileInspectorPage() {
       )}
 
       {mapStatus === "fout" && <p style={{ color: "red" }}>Kaart kon niet laden.</p>}
+    </>
+  );
+}
+
+export default function TileInspectorPage() {
+  const [styleSource, setStyleSource] = useState<StyleSourceKey>("openfreemap");
+
+  return (
+    <div style={{ padding: 16, fontFamily: "sans-serif", maxWidth: 700, margin: "0 auto" }}>
+      <h1 style={{ fontSize: 20, marginBottom: 8 }}>Tile-inspector</h1>
+      <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 12 }}>Geïsoleerd van de live app -- eigen kaartinstantie.</p>
+
+      <div style={{ marginBottom: 16, padding: 12, background: "#eef", borderRadius: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Tegelaanbieder (volledige remount bij wisselen)</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {(Object.keys(STYLE_SOURCES) as StyleSourceKey[]).map((key) => (
+            <button
+              key={key}
+              onClick={() => setStyleSource(key)}
+              style={{
+                flex: 1,
+                padding: 10,
+                fontSize: 13,
+                background: styleSource === key ? "#1a73e8" : "#ccc",
+                color: styleSource === key ? "white" : "#333",
+                border: "none",
+                borderRadius: 8,
+              }}
+            >
+              {STYLE_SOURCES[key].label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <MapInspector key={styleSource} styleUrl={STYLE_SOURCES[styleSource].url} initialLat={PRESETS.lochem.lat} initialLon={PRESETS.lochem.lon} />
     </div>
   );
 }
