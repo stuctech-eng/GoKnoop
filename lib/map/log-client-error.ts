@@ -13,7 +13,13 @@ let lastLoggedAt = 0;
  * wordt maximaal 1x per 3s gelogd, om te voorkomen dat een herhalende fout
  * (zoals hierboven) tientallen documenten per seconde wegschrijft.
  */
-export function logMapError(map: maplibregl.Map, errorEvent: unknown, screenName: string, styleUrl: string) {
+export function logMapError(
+  map: maplibregl.Map,
+  errorEvent: unknown,
+  screenName: string,
+  styleUrl: string,
+  patchStatus?: { patched: boolean; patchedLayerCount: number; fallbackReason: string | null }
+) {
   try {
     const message =
       errorEvent && typeof errorEvent === "object" && "error" in errorEvent
@@ -37,6 +43,13 @@ export function logMapError(map: maplibregl.Map, errorEvent: unknown, screenName
       bearing: map.getBearing(),
       pitch: map.getPitch(),
       timestamp: new Date().toISOString(),
+      // Toegevoegd 6-9-2026 n.a.v. productielogs die de crash NA het live gaan
+      // van de to-string()-patch nog steeds toonden -- dit maakt zichtbaar of
+      // de patch daadwerkelijk actief was op het moment van deze fout, i.p.v.
+      // stil te zijn teruggevallen op de ongepatchte stijl.
+      toStringPatchActive: patchStatus?.patched ?? null,
+      toStringPatchedLayerCount: patchStatus?.patchedLayerCount ?? null,
+      toStringPatchFallbackReason: patchStatus?.fallbackReason ?? null,
     };
     const stack =
       errorEvent && typeof errorEvent === "object" && "error" in errorEvent

@@ -313,12 +313,12 @@ export default function NavigationScreen({
     (async () => {
       // to-string()-patch op de labeltekst-expressies (6-9-2026) -- zie
       // lib/map/patched-style.ts voor de volledige toelichting/kanttekening.
-      const style = await loadPatchedLibertyStyle(LIBERTY_STYLE_URL);
+      const patchResult = await loadPatchedLibertyStyle(LIBERTY_STYLE_URL);
       if (cancelled || !containerRef.current || mapRef.current) return;
 
       const map = new maplibregl.Map({
         container: containerRef.current,
-        style,
+        style: patchResult.style,
         bearing: 0,
         pitch: 0,
         dragRotate: false,
@@ -398,7 +398,7 @@ export default function NavigationScreen({
 
       map.on("error", (e) => {
         const message = e?.error?.message ?? "Onbekende MapLibre-fout.";
-        logMapError(map, e, "NavigationScreen", LIBERTY_STYLE_URL);
+        logMapError(map, e, "NavigationScreen", LIBERTY_STYLE_URL, patchResult);
         // Teruggezet naar de simpele, bewezen basis (6-9-2026) -- zie
         // LiveLocationScreen.tsx voor de toelichting.
         setMapStatus("error");

@@ -86,12 +86,12 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
       // to-string()-patch op de labeltekst-expressies (6-9-2026) -- zie
       // lib/map/patched-style.ts voor de volledige toelichting/kanttekening.
       // Valt bij een netwerkfout veilig terug op de kale URL.
-      const style = await loadPatchedLibertyStyle(LIBERTY_STYLE_URL);
+      const patchResult = await loadPatchedLibertyStyle(LIBERTY_STYLE_URL);
       if (cancelled || !containerRef.current || mapRef.current) return;
 
       const map = new maplibregl.Map({
         container: containerRef.current,
-        style,
+        style: patchResult.style,
         center: [5.1214, 52.0907], // uitgangspunt, wordt direct overschreven zodra de eerste GPS-fix binnenkomt
         zoom: 15,
         bearing: 0,
@@ -137,7 +137,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
       map.on("error", (e) => {
         const message = e?.error?.message ?? "Onbekende kaartfout.";
-        logMapError(map, e, "LiveLocationScreen", LIBERTY_STYLE_URL);
+        logMapError(map, e, "LiveLocationScreen", LIBERTY_STYLE_URL, patchResult);
         // Teruggezet naar de simpele, bewezen basis (6-9-2026): altijd de fout
         // tonen. De eerdere onderdrukking + resize-gok voor de bekende
         // codePointAt-fout is verwijderd -- ongetest, mogelijk zelfs schadelijk
