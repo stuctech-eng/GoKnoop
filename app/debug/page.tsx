@@ -48,6 +48,7 @@ const CATEGORIES: DebugCategory[] = [
     title: "Kaart",
     links: [
       { href: "/debug/client-error-log", label: "Kaartfout-log", description: "Live-app-fouten met context (centrum/zoom/stijl) die de app zelf heeft vastgelegd." },
+      { href: "/debug/lochem-tile-inspector", label: "Lochem tile-inspector", description: "Inspecteert gerenderde features + A/B-test labels aan/uit op de exacte crash-locatie." },
       { href: "/debug/map", label: "Kaart (basis)", description: "Losse MapLibre-kaart, geen app-logica." },
       { href: "/debug/map-live", label: "Kaart (live positie)", description: "Losse test van live-locatieweergave." },
       { href: "/debug/map-route", label: "Kaart (route)", description: "Losse test van routeweergave op de kaart." },
