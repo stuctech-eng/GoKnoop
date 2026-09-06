@@ -55,7 +55,7 @@ import { buildPositionMarkerGeoJson } from "@/lib/map/position-marker-adapter";
 import { recordRiddenRoute } from "@/lib/history/ridden-routes-store";
 import type { GraphEdge } from "@/lib/route-engine/types";
 import type { NavigationState } from "@/lib/navigation/types";
-import { logMapError, isKnownRecoverableMapError } from "@/lib/map/log-client-error";
+import { logMapError } from "@/lib/map/log-client-error";
 
 let workerUrlConfigured = false;
 function ensureWorkerUrlConfigured() {
@@ -389,10 +389,8 @@ export default function NavigationScreen({
     map.on("error", (e) => {
       const message = e?.error?.message ?? "Onbekende MapLibre-fout.";
       logMapError(map, e, "NavigationScreen", LIBERTY_STYLE_URL);
-      // Zie LiveLocationScreen.tsx -- zelfde bekende, goedaardige labelrenderfout,
-      // bewust niet fataal tijdens actieve navigatie (waar dit zeker niet de
-      // navigatie zelf mag onderbreken).
-      if (isKnownRecoverableMapError(message)) return;
+      // Teruggezet naar de simpele, bewezen basis (6-9-2026) -- zie
+      // LiveLocationScreen.tsx voor de toelichting.
       setMapStatus("error");
       setError(message);
     });

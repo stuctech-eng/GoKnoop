@@ -1,23 +1,5 @@
 import type * as maplibregl from "maplibre-gl";
 
-/**
- * Bekende, goedaardige MapLibre-labelrenderfout (6-9-2026, Lochem-incident):
- * treedt herhaaldelijk op bij elke kleine kaart-update (bv. live GPS-volgen)
- * op een specifieke locatie, zonder stack trace. Vermoedelijk een tekstlabel
- * met onverwachte Unicode-tekens uit de OpenStreetMap-brondata (via
- * OpenFreeMap) die MapLibre's interne tekstweergave niet aankan -- dit is een
- * MapLibre/tegel-probleem, geen GoKnoop-databug, en blokkeert de kaart verder
- * niet (bevestigd: 24 herhalingen binnen 1s, kaart bleef ondertussen
- * functioneel voor de gebruiker op andere schermen).
- *
- * Bewust een SMALLE, specifieke uitzondering -- alle andere/onbekende
- * kaartfouten blijven de UI wel blokkeren zoals voorheen. Geen algemene
- * verzwakking van de foutafhandeling.
- */
-export function isKnownRecoverableMapError(message: string): boolean {
-  return message.includes("codePointAt is not a function");
-}
-
 const RECENT_LOG_THROTTLE_MS = 3000;
 let lastLoggedMessage: string | null = null;
 let lastLoggedAt = 0;

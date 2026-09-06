@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { KnoopBadge } from "@/components/KnoopBadge";
 import { RoutePreview } from "@/components/RoutePreview";
 import NavigationScreen from "@/components/navigation/NavigationScreen";
@@ -1231,7 +1232,22 @@ export default function Home() {
             {activeTab === "profiel" && (
               <section style={{ padding: "1.5rem 1.25rem 4.5rem", textAlign: "center" }}>
                 <h2 style={{ fontSize: 24, marginBottom: "0.75rem" }}>Profiel</h2>
-                <p style={{ fontSize: 15, opacity: 0.6 }}>Binnenkort beschikbaar.</p>
+                <p style={{ fontSize: 15, opacity: 0.6, marginBottom: "1.5rem" }}>Binnenkort beschikbaar.</p>
+                <Link
+                  href="/debug"
+                  style={{
+                    display: "inline-block",
+                    padding: "10px 20px",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: "#085041",
+                    border: "1px solid #085041",
+                    borderRadius: 999,
+                    textDecoration: "none",
+                  }}
+                >
+                  Debug-tools
+                </Link>
               </section>
             )}
           </div>
