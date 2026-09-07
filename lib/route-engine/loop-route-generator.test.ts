@@ -43,6 +43,34 @@ describe("Loop Route Generator — generateLoopRoutes (ring-fixture)", () => {
     expect(result.loops[0].deviationPercent).toBeLessThan(60);
   });
 
+  it("wijst een kandidaat af als de daadwerkelijke afwijking te groot is (i.p.v. 'm stilzwijgend te accepteren)", () => {
+    // TOEGEVOEGD 7-9-2026, n.a.v. het Lochem-incident. Expliciet ruime
+    // radiusTolerance zodat kandidaat-tussenpunten sowieso gevonden worden
+    // (los van de nieuwe controle die we hier testen) -- de kleine
+    // ring-fixture heeft maar één mogelijke straal (200m), dus zonder deze
+    // verruiming zou een extreem target al bij het zoeken naar kandidaten
+    // niets opleveren, en zou deze test niets over de afwijkingscontrole
+    // zelf zeggen. De daadwerkelijk haalbare lusgroottes (~553-1400m) liggen
+    // zo ver van dit target (5000m) dat ELKE kandidaat boven de standaard
+    // 60%-grens moet uitkomen.
+    const result = generateLoopRoutes(provider, "test", "S", 5000, { count: 4, radiusTolerance: 10 });
+    expect(result.diagnostics.candidatesFound).toBeGreaterThan(0); // kandidaten wérden gevonden...
+    expect(result.foundCount).toBe(0); // ...maar geen enkele voldeed aan de afwijkingsgrens
+    expect(result.diagnostics.deviationRejected).toBeGreaterThan(0);
+  });
+
+  it("respecteert een expliciet ruimere maxDeviationPercent (parameter werkt daadwerkelijk, geen toeval)", () => {
+    // Zelfde scenario als hierboven, maar nu ook expliciet een zeer ruime
+    // afwijkingsgrens -- als dit ALSNOG 0 oplevert, ligt het aan iets anders
+    // dan de nieuwe afwijkingscontrole, en zou de vorige test een
+    // vals-positief zijn geweest.
+    const result = generateLoopRoutes(provider, "test", "S", 5000, {
+      count: 4,
+      radiusTolerance: 10,
+      maxDeviationPercent: 100000,
+    });
+    expect(result.foundCount).toBeGreaterThan(0);
+  });
   it("sorteert kandidaten op afwijking van de doelafstand (beste eerst)", () => {
     const result = generateLoopRoutes(provider, "test", "S", 700, { count: 4 });
     for (let i = 1; i < result.loops.length; i++) {

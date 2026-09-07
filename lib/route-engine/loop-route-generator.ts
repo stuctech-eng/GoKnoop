@@ -67,6 +67,8 @@ export type LoopGenerationResult = {
     candidatesFound: number;
     outboundFailed: number;
     inboundFailed: number;
+    /** TOEGEVOEGD 7-9-2026: kandidaten met een daadwerkelijke afwijking boven maxDeviationPercent (Lochem-incident). */
+    deviationRejected: number;
     duplicateRejected: number;
     /** Aantal kandidaten overgeslagen wegens te veel overlap met eerder gereden routes (Fase 2, 29-8-2026). */
     historyRejected: number;
@@ -79,6 +81,19 @@ const DEFAULT_ANGLE_BUCKETS = 8;
 const DEFAULT_RADIUS_TOLERANCE = 0.4; // kandidaten binnen 60%-140% van de geschatte straal
 const DEFAULT_OVERLAP_THRESHOLD = 0.6;
 const CANDIDATES_PER_BUCKET = 3; // meerdere kandidaten per richting, niet alleen de dichtstbijzijnde radius-match
+/**
+ * TOEGEVOEGD 7-9-2026, n.a.v. een reëel incident (Lochem, target 20km, enige
+ * gevonden route 85,4km = 327% afwijking -- geaccepteerd als "gevonden" omdat
+ * er tot nu toe GEEN bovengrens bestond op de daadwerkelijke, berekende
+ * afwijking van een geaccepteerde route. De bestaande radiusTolerance filtert
+ * alleen kandidaat-TUSSENPUNTEN vooraf (rechte-lijnafstand), niet de
+ * uiteindelijke, echte padafstand na Dijkstra -- bij een lokaal netwerkgat
+ * (te weinig knooppuntdichtheid) kan een op-papier-goede kandidaat alsnog een
+ * absurde omweg opleveren. Grenswaarde bewust gelijk aan wat de bestaande
+ * tests (loop-route-generator.test.ts, -history.test.ts) al impliciet als
+ * "goede match" hanteerden (<60%) -- geen nieuw, verzonnen getal.
+ */
+const DEFAULT_MAX_DEVIATION_PERCENT = 60;
 
 /**
  * HERIJKING 28-8-2026: eerste test tegen de echte 11.003-node-dataset
@@ -197,6 +212,12 @@ export function generateLoopRoutes(
     overlapThreshold?: number;
     candidatesPerBucket?: number;
     /**
+     * Harde bovengrens (in procentpunten) voor de daadwerkelijk berekende
+     * afwijking van een geaccepteerde route. Zie DEFAULT_MAX_DEVIATION_PERCENT
+     * hierboven voor de volledige toelichting (7-9-2026, Lochem-incident).
+     */
+    maxDeviationPercent?: number;
+    /**
      * Edge-ID-sets van eerder GEREDEN routes (Fase 2, gereden-routes-
      * tracking, 29-8-2026) -- een nieuwe kandidaat die te veel overlapt met
      * een van deze sets wordt overgeslagen, net als bij de bestaande
@@ -214,6 +235,7 @@ export function generateLoopRoutes(
   const radiusTolerance = options.radiusTolerance ?? DEFAULT_RADIUS_TOLERANCE;
   const overlapThreshold = options.overlapThreshold ?? DEFAULT_OVERLAP_THRESHOLD;
   const candidatesPerBucket = options.candidatesPerBucket ?? CANDIDATES_PER_BUCKET;
+  const maxDeviationPercent = options.maxDeviationPercent ?? DEFAULT_MAX_DEVIATION_PERCENT;
   const avoidRouteEdgeSets = options.avoidRouteEdgeSets ?? [];
 
   const estimatedRadiusM = targetDistanceM / 2 / circuityFactor;
@@ -229,6 +251,7 @@ export function generateLoopRoutes(
   const candidates: LoopCandidateDraft[] = [];
   let outboundFailed = 0;
   let inboundFailed = 0;
+  let deviationRejected = 0;
 
   for (const waypointId of waypointCandidates) {
     const outboundResult = computeRoute(provider, datasetVersionId, startNodeId, waypointId);
@@ -249,13 +272,24 @@ export function generateLoopRoutes(
 
     const loop = combineIntoLoop(datasetVersionId, outboundResult, inboundResult);
     const deviationM = Math.abs(loop.distanceM - targetDistanceM);
+    const deviationPercent = (deviationM / targetDistanceM) * 100;
+
+    // TOEGEVOEGD 7-9-2026 (Lochem-incident): een kandidaat kan qua geschatte
+    // straal prima lijken, maar door een lokaal netwerkgat alsnog een absurde
+    // daadwerkelijke omweg opleveren -- zonder deze controle werd zoiets
+    // stilzwijgend als "gevonden" geaccepteerd. Liever eerlijk "geen goede
+    // route hier" dan een misleidend resultaat serveren.
+    if (deviationPercent > maxDeviationPercent) {
+      deviationRejected++;
+      continue;
+    }
 
     candidates.push({
       route: loop,
       targetDistanceM,
       actualDistanceM: loop.distanceM,
       deviationM,
-      deviationPercent: (deviationM / targetDistanceM) * 100,
+      deviationPercent,
     });
   }
 
@@ -321,6 +355,7 @@ export function generateLoopRoutes(
       candidatesFound: waypointCandidates.length,
       outboundFailed,
       inboundFailed,
+      deviationRejected,
       duplicateRejected,
       historyRejected,
       succeeded: candidates.length,
