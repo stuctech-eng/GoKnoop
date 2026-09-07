@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/rijrichting-impact", label: "Rijrichting — impactanalyse", description: "8-vragen-analyse: wat verandert er (analytisch, niets gewijzigd) als rijrichting=2 wordt uitgesloten?" },
       { href: "/debug/region-audit", label: "Regio-audit", description: "Match% en edge-verdeling per gebied vergelijken." },
       { href: "/debug/nearest-nodes", label: "Dichtstbijzijnde knopen", description: "Toont knopen rond een punt mét edge-count." },
       { href: "/debug/node-geometry-inspector", label: "Node-geometrie-inspector", description: "Legt brongeometrie naast een knooppunt: tolerantie- of structureel gat?" },
