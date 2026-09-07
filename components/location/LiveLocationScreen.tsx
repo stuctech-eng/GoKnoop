@@ -140,6 +140,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
   const positionDotRef = useRef<L.CircleMarker | null>(null);
   const networkNodesDataRef = useRef<[number, number, string, number][]>([]);
   const networkLabelsLayerRef = useRef<L.LayerGroup | null>(null);
+  const networkDetailedEdgesLayerRef = useRef<L.LayerGroup | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const hasCenteredRef = useRef(false);
   const smoothedHeadingRef = useRef<number | null>(null);
@@ -240,15 +241,20 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
       // bij ~11.000 knooppunten + ~28.000 verbindingen is de standaard SVG-
       // renderer (één DOM-element per vorm) merkbaar trager op een telefoon.
       const canvasRenderer = L.canvas({ padding: 0.5 });
-      const LABEL_MIN_ZOOM = 14; // pas nummer-labels tonen als er zinnig weinig knooppunten tegelijk zichtbaar zijn
+      // Drempel op AANTAL zichtbare knooppunten i.p.v. een vast zoomgetal (7-9-2026,
+      // gecorrigeerd nadat bleek dat verschillende tegelaanbieders een andere
+      // zoom-schaal hanteren voor "hetzelfde" detailniveau -- een vast zoomgetal
+      // klopte daardoor niet universeel). Dit werkt altijd correct, ongeacht welke
+      // tegelaanbieder eronder zit.
+      const VISIBLE_NODE_DETAIL_THRESHOLD = 60;
       networkLabelsLayerRef.current = L.layerGroup().addTo(map);
+      networkDetailedEdgesLayerRef.current = L.layerGroup().addTo(map);
+      let detailFetchDebounce: ReturnType<typeof setTimeout> | null = null;
 
-      function refreshVisibleLabels() {
-        const currentMap = mapRef.current;
+      function refreshVisibleLabels(visibleNodes: [number, number, string, number][]) {
         const labelsLayer = networkLabelsLayerRef.current;
-        if (!currentMap || !labelsLayer) return;
+        if (!labelsLayer) return;
         labelsLayer.clearLayers();
-        if (currentMap.getZoom() < LABEL_MIN_ZOOM) return;
 
         // Zelfde visuele stijl als KnoopBadge.tsx (components/KnoopBadge.tsx) --
         // hergebruikt i.p.v. opnieuw verzonnen, zodat een knooppunt op de kaart
@@ -256,9 +262,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
         // divIcon kan geen React-component direct hergebruiken, dus dezelfde
         // CSS-variabelen (--color-knoop-green e.d., globals.css) hier herhaald.
         const BADGE_SIZE = 26;
-        const bounds = currentMap.getBounds();
-        for (const [lat, lon, displayNumber] of networkNodesDataRef.current) {
-          if (!bounds.contains([lat, lon])) continue;
+        for (const [lat, lon, displayNumber] of visibleNodes) {
           L.marker([lat, lon], {
             icon: L.divIcon({
               className: "goknoop-network-node-badge",
@@ -278,7 +282,48 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
         }
       }
 
-      map.on("moveend zoomend", refreshVisibleLabels);
+      function refreshDetailedEdges() {
+        const currentMap = mapRef.current;
+        const detailedLayer = networkDetailedEdgesLayerRef.current;
+        if (!currentMap || !detailedLayer) return;
+        const b = currentMap.getBounds();
+        const bboxParam = `${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+        fetch(`/api/network/detailed-edges?bbox=${bboxParam}`)
+          .then((res) => res.json())
+          .then((data: { edges?: [number, number][][] }) => {
+            if (cancelled || mapRef.current !== currentMap) return;
+            detailedLayer.clearLayers();
+            for (const points of data.edges ?? []) {
+              L.polyline(points, { renderer: canvasRenderer, color: "#085041", weight: 3, opacity: 0.85 }).addTo(detailedLayer);
+            }
+          })
+          .catch(() => {
+            // Bewust genegeerd -- bij een falende detail-fetch blijven de
+            // rechte-lijn-verbindingen eronder gewoon zichtbaar, geen kernfunctie kapot.
+          });
+      }
+
+      function refreshDetailView() {
+        const currentMap = mapRef.current;
+        const labelsLayer = networkLabelsLayerRef.current;
+        const detailedLayer = networkDetailedEdgesLayerRef.current;
+        if (!currentMap || !labelsLayer || !detailedLayer) return;
+
+        const bounds = currentMap.getBounds();
+        const visibleNodes = networkNodesDataRef.current.filter(([lat, lon]) => bounds.contains([lat, lon]));
+
+        if (visibleNodes.length > VISIBLE_NODE_DETAIL_THRESHOLD) {
+          labelsLayer.clearLayers();
+          detailedLayer.clearLayers();
+          return;
+        }
+
+        refreshVisibleLabels(visibleNodes);
+        if (detailFetchDebounce) clearTimeout(detailFetchDebounce);
+        detailFetchDebounce = setTimeout(refreshDetailedEdges, 300);
+      }
+
+      map.on("moveend zoomend", refreshDetailView);
 
       fetch("/api/network/overview")
         .then((res) => {
@@ -306,7 +351,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
               mapRef.current
             );
           }
-          refreshVisibleLabels();
+          refreshDetailView();
         })
         .catch((err) => {
           // Netwerk-overzicht is een aanvulling, geen kernfunctie -- een mislukte
