@@ -17,7 +17,7 @@
  *   GPS → GpsFixEvaluator → candidate matcher → MatchedPosition
  *       → NavigationStateMachine (reportOnRoute/reportDeviation)
  *       → DeviationOutcome (alleen bij geaccepteerde transitie)
- *       → buildPositionMarkerGeoJson (lib/map/) → MapLibre-marker
+ *       → buildPositionMarkerGeoJson (lib/map/) → Leaflet-marker
  *
  * Drieledige voorfasering (sectie 5.4, stap 12.7): 🚲 Naar startpunt →
  * 🧭 Start Guidance → ➤ Navigatie, via `determinePreNavigationPhase`
@@ -35,8 +35,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import * as maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import type * as L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { SystemNavigationClock } from "@/lib/navigation/clock/navigation-clock";
 import { NavigationStateMachine } from "@/lib/navigation/session/navigation-state-machine";
 import { DeviationDetector } from "@/lib/navigation/deviation/deviation-detector";
@@ -55,17 +55,49 @@ import { buildPositionMarkerGeoJson } from "@/lib/map/position-marker-adapter";
 import { recordRiddenRoute } from "@/lib/history/ridden-routes-store";
 import type { GraphEdge } from "@/lib/route-engine/types";
 import type { NavigationState } from "@/lib/navigation/types";
-import { logMapError } from "@/lib/map/log-client-error";
-import { loadPatchedLibertyStyle } from "@/lib/map/patched-style";
 
-let workerUrlConfigured = false;
-function ensureWorkerUrlConfigured() {
-  if (workerUrlConfigured) return;
-  maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
-  workerUrlConfigured = true;
+// BELANGRIJK (6-9-2026, zie LiveLocationScreen.tsx voor de volledige toelichting):
+// Leaflet raakt browser-globals aan op het MOMENT VAN IMPORTEREN, niet pas bij
+// gebruik -- vandaar hierboven alleen een TYPE-only import; de daadwerkelijke
+// module wordt hieronder dynamisch geladen binnen useEffect.
+type LeafletModule = typeof L;
+
+let leafletIconsConfigured = false;
+function ensureLeafletIconsConfigured(L: LeafletModule) {
+  if (leafletIconsConfigured) return;
+  delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  });
+  leafletIconsConfigured = true;
 }
 
-const LIBERTY_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+/** Eenvoudige Leaflet-tegelfout-logging naar dezelfde bestaande debug-endpoint (ongewijzigd, zie LiveLocationScreen.tsx). */
+function logTileError(context: Record<string, unknown>) {
+  try {
+    fetch("/api/debug/log-client-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Leaflet tileerror", stack: null, context }),
+    }).catch(() => {});
+  } catch {
+    // Bewust genegeerd -- logging mag de app nooit breken.
+  }
+}
+
+// CARTO vereist sinds eind augustus 2026 een (gratis) API-key (zie
+// LiveLocationScreen.tsx voor de volledige toelichting). Zelfde env var, zelfde
+// nette terugval zonder key (toont dan CARTO's watermerk, geen crash).
+const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY;
+const CARTO_RASTER_URL = CARTO_API_KEY
+  ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${CARTO_API_KEY}`
+  : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
+const CARTO_ATTRIBUTION = "&copy; CARTO, &copy; OpenStreetMap contributors";
+const CARTO_SUBDOMAINS = ["a", "b", "c", "d"];
+const CARTO_MAX_ZOOM = 20;
+
 const ROUTE_COLOR = "#085041";
 
 const CONFIRM_MS = 5000;
@@ -208,7 +240,9 @@ export default function NavigationScreen({
   initialElapsedRideTimeS,
 }: NavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const routeToStartLayerRef = useRef<L.Polyline | null>(null);
+  const positionMarkerRef = useRef<L.CircleMarker | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -292,10 +326,9 @@ export default function NavigationScreen({
     setLog((prev) => [`${new Date().toISOString().slice(11, 23)} — ${text}`, ...prev].slice(0, 20));
   }
 
-  // Kaart + route eenmalig opzetten (stap 12.3, ongewijzigd hergebruikt).
+  // Kaart + route eenmalig opzetten (stap 12.3, nu op Leaflet i.p.v. MapLibre, 7-9-2026).
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
-    ensureWorkerUrlConfigured();
 
     let geoJson: ReturnType<typeof buildRouteGeoJson>;
     try {
@@ -311,101 +344,106 @@ export default function NavigationScreen({
     let cancelled = false;
 
     (async () => {
-      // to-string()-patch op de labeltekst-expressies (6-9-2026) -- zie
-      // lib/map/patched-style.ts voor de volledige toelichting/kanttekening.
-      const patchResult = await loadPatchedLibertyStyle(LIBERTY_STYLE_URL);
+      // Dynamische import (zie toelichting bovenaan) -- garandeert dat Leaflet's
+      // module-code nooit tijdens server-side prerendering wordt geëvalueerd.
+      const L = await import("leaflet");
       if (cancelled || !containerRef.current || mapRef.current) return;
+      ensureLeafletIconsConfigured(L);
 
-      const map = new maplibregl.Map({
-        container: containerRef.current,
-        style: patchResult.style,
-        bearing: 0,
-        pitch: 0,
-        dragRotate: false,
-        pitchWithRotate: false,
-        touchPitch: false,
-        // Compacte attributie i.p.v. een permanente balk -- de attributie zelf blijft staan
-        // (waarschijnlijk vereist door OpenStreetMap/OpenFreeMap se licentie, geen decoratie),
-        // maar wordt nu een klein, onopvallend "i"-icoontje i.p.v. een balk die ruimte inneemt.
-        attributionControl: { compact: true },
-      });
-      map.touchZoomRotate.disableRotation();
-      map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), "top-right");
-
-      // Attributie onderaan GECENTREERD i.p.v. rechtsonder in de hoek (op verzoek, 30-8-2026).
-      // MapLibre kent geen ingebouwde "bottom-center"-positie voor besturingselementen (alleen
-      // de vier hoeken) -- dit herpositioneert het element zelf via CSS, met behoud van
-      // exact dezelfde, vereiste attributie-inhoud (alleen WAAR die getoond wordt verandert).
-      map.once("load", () => {
-        const attribContainer = map.getContainer().querySelector<HTMLElement>(".maplibregl-ctrl-bottom-right");
-        if (attribContainer) {
-          attribContainer.style.left = "50%";
-          attribContainer.style.right = "auto";
-          attribContainer.style.transform = "translateX(-50%)";
-        }
+      const map = L.map(containerRef.current, {
+        zoomControl: false, // hieronder handmatig top-right toegevoegd, zelfde plek als voorheen
+        attributionControl: true,
       });
 
-      map.on("load", () => {
-        map.addSource("goknoop-route-line", { type: "geojson", data: geoJson.line as GeoJSON.Feature });
-        map.addLayer({
-          id: "goknoop-route-line",
-          type: "line",
-          source: "goknoop-route-line",
-          layout: { "line-join": "round", "line-cap": "round" },
-          paint: { "line-color": ROUTE_COLOR, "line-width": 5 },
-        });
+      L.control.zoom({ position: "topright" }).addTo(map);
 
-        map.addSource("goknoop-route-nodes", { type: "geojson", data: geoJson.nodes as GeoJSON.FeatureCollection });
-        map.addLayer({
-          id: "goknoop-route-nodes-circle",
-          type: "circle",
-          source: "goknoop-route-nodes",
-          paint: { "circle-radius": 10, "circle-color": "#FFFFFF", "circle-stroke-color": ROUTE_COLOR, "circle-stroke-width": 3 },
-        });
-        map.addLayer({
-          id: "goknoop-route-nodes-label",
-          type: "symbol",
-          source: "goknoop-route-nodes",
-          layout: { "text-field": ["get", "nodeId"], "text-size": 12, "text-font": ["Noto Sans Bold"] },
-          paint: { "text-color": ROUTE_COLOR },
-        });
-
-        // Live-positiemarker (stap 12.4, gepolijst 29-8-2026): subtiel blauw stipje --
-        // bewust anders dan de teal route/knooppunten, zodat "waar ben ik" nooit met de
-        // route zelf verward wordt. De ROUTE blijft teal (geen Google-blauwe navigatielijn),
-        // alleen de positie-indicator gebruikt het gangbare "hier ben je"-blauw.
-        map.addSource("goknoop-position", {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: [] },
-        });
-        map.addLayer({
-          id: "goknoop-position-circle",
-          type: "circle",
-          source: "goknoop-position",
-          paint: {
-            "circle-radius": 7,
-            "circle-color": "#3B82F6",
-            "circle-stroke-color": "#FFFFFF",
-            "circle-stroke-width": 3,
-          },
-        });
-
-        // Asymmetrische marge: bovenin is de richtingkaart veel hoger dan 60px, onderin staan de
-        // voortgangsbalk + het logpaneel -- een uniforme marge liet de route daaronder wegvallen.
-        map.fitBounds(geoJson.bounds, { padding: { top: 180, bottom: 140, left: 40, right: 40 }, animate: false });
-        setMapStatus("loaded");
+      const tileLayer = L.tileLayer(CARTO_RASTER_URL, {
+        attribution: CARTO_ATTRIBUTION,
+        subdomains: CARTO_SUBDOMAINS,
+        maxZoom: CARTO_MAX_ZOOM,
       });
-
-      map.on("error", (e) => {
-        const message = e?.error?.message ?? "Onbekende MapLibre-fout.";
-        logMapError(map, e, "NavigationScreen", LIBERTY_STYLE_URL, patchResult);
-        // Teruggezet naar de simpele, bewezen basis (6-9-2026) -- zie
-        // LiveLocationScreen.tsx voor de toelichting.
+      tileLayer.on("tileerror", (e) => {
+        const message = "Leaflet tileerror (CARTO)";
+        logTileError({
+          screen: "NavigationScreen",
+          tileUrl: CARTO_RASTER_URL,
+          errorTile: (e as unknown as { coords?: { x: number; y: number; z: number } }).coords ?? null,
+          centerLat: map.getCenter().lat,
+          centerLon: map.getCenter().lng,
+          zoom: map.getZoom(),
+          timestamp: new Date().toISOString(),
+        });
         setMapStatus("error");
         setError(message);
       });
+      tileLayer.addTo(map);
 
-      const handleResize = () => map.resize();
+      // Contrastfilter (zelfde instelling als LiveLocationScreen.tsx, 7-9-2026): Voyager
+      // op zichzelf voelde "vaag" aan -- dit verzadigt/verscherpt de tegels zelf.
+      const tilePane = map.getPane("tilePane");
+      if (tilePane) tilePane.style.filter = "saturate(1.6) contrast(1.2) brightness(1.03)";
+
+      // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026, zelfde
+      // aanpak als voorheen bij MapLibre -- alleen de CSS-klasse hoort nu bij Leaflet).
+      const attribContainer = map.getContainer().querySelector<HTMLElement>(".leaflet-control-attribution");
+      if (attribContainer) {
+        attribContainer.style.position = "absolute";
+        attribContainer.style.left = "50%";
+        attribContainer.style.right = "auto";
+        attribContainer.style.transform = "translateX(-50%)";
+      }
+
+      // Route-lijn (GeoJSON coordinates zijn [lon,lat], Leaflet wil [lat,lon]).
+      const lineLatLngs: L.LatLngTuple[] = (geoJson.line.geometry.coordinates as [number, number][]).map(([lon, lat]) => [lat, lon]);
+      L.polyline(lineLatLngs, { color: ROUTE_COLOR, weight: 5, lineJoin: "round", lineCap: "round" }).addTo(map);
+
+      // Knooppuntcirkels + eigen HTML-labels (i.p.v. MapLibre's symbol-laag) -- eigen data,
+      // eigen weergave, zelfde principe als GPT's "vervang alleen de renderer"-uitgangspunt.
+      for (const feature of geoJson.nodes.features) {
+        const [lon, lat] = feature.geometry.coordinates;
+        const nodeId = feature.properties.nodeId;
+        L.circleMarker([lat, lon], {
+          radius: 10,
+          color: ROUTE_COLOR,
+          weight: 3,
+          fillColor: "#FFFFFF",
+          fillOpacity: 1,
+        }).addTo(map);
+        L.marker([lat, lon], {
+          icon: L.divIcon({
+            className: "goknoop-node-label",
+            html: `<div style="font-size:12px;font-weight:700;font-family:sans-serif;color:${ROUTE_COLOR};white-space:nowrap;transform:translate(14px,-8px);">${nodeId}</div>`,
+            iconSize: [0, 0],
+          }),
+          interactive: false,
+        }).addTo(map);
+      }
+
+      // Live-positiemarker (stap 12.4): subtiel blauw stipje -- bewust anders dan de teal
+      // route/knooppunten, zodat "waar ben ik" nooit met de route zelf verward wordt.
+      positionMarkerRef.current = L.circleMarker([lineLatLngs[0][0], lineLatLngs[0][1]], {
+        radius: 7,
+        color: "#FFFFFF",
+        weight: 3,
+        fillColor: "#3B82F6",
+        fillOpacity: 1,
+      }).addTo(map);
+      positionMarkerRef.current.setStyle({ opacity: 0, fillOpacity: 0 }); // pas zichtbaar bij eerste GPS-sample
+
+      // Asymmetrische marge: bovenin is de richtingkaart veel hoger dan 60px, onderin staan de
+      // voortgangsbalk + het logpaneel -- een uniforme marge liet de route daaronder wegvallen.
+      const [[minLon, minLat], [maxLon, maxLat]] = geoJson.bounds;
+      map.fitBounds(
+        [
+          [minLat, minLon],
+          [maxLat, maxLon],
+        ],
+        { paddingTopLeft: [40, 180], paddingBottomRight: [40, 140], animate: false }
+      );
+
+      setMapStatus("loaded");
+
+      const handleResize = () => map.invalidateSize();
       window.addEventListener("resize", handleResize);
       window.addEventListener("orientationchange", handleResize);
       resizeCleanupRef.current = () => {
@@ -421,8 +459,11 @@ export default function NavigationScreen({
       resizeCleanupRef.current?.();
       mapRef.current?.remove();
       mapRef.current = null;
+      positionMarkerRef.current = null;
+      routeToStartLayerRef.current = null;
     };
   }, []);
+
 
   function start() {
     setError(null);
@@ -481,33 +522,27 @@ export default function NavigationScreen({
         // specifiek voor het edge-gebaseerde knooppuntenmodel (lib/route-engine/), en dit is
         // gewoon een rechte, ongestructureerde straten-polylijn (Layer B levert geen
         // edges/nodes, alleen een puntenreeks + totaalafstand).
-        const lineGeoJson: GeoJSON.Feature = {
-          type: "Feature",
-          geometry: {
-            type: "LineString",
-            coordinates: toStartData.geometry.map((p: { lat: number; lon: number }) => [p.lon, p.lat]),
-          },
-          properties: {},
-        };
+        const toStartLatLngs: L.LatLngTuple[] = toStartData.geometry.map((p: { lat: number; lon: number }) => [p.lat, p.lon]);
 
         const map = mapRef.current;
         if (map) {
-          if (!map.getSource("goknoop-route-to-start")) {
-            map.addSource("goknoop-route-to-start", { type: "geojson", data: lineGeoJson });
-            // Onder de hoofdroute-laag getekend (dun, gestippeld, ander blauw) -- duidelijk
-            // onderscheiden van de daadwerkelijke gekozen fietsroute (dikke, effen teal lijn).
-            map.addLayer(
-              {
-                id: "goknoop-route-to-start-line",
-                type: "line",
-                source: "goknoop-route-to-start",
-                layout: { "line-join": "round", "line-cap": "round" },
-                paint: { "line-color": "#3B82F6", "line-width": 4, "line-dasharray": [2, 2] },
-              },
-              "goknoop-route-line"
-            );
+          if (!routeToStartLayerRef.current) {
+            const L = await import("leaflet");
+            // Dun, gestippeld, ander blauw -- duidelijk onderscheiden van de daadwerkelijke
+            // gekozen fietsroute (dikke, effen teal lijn). bringToBack() zorgt dat deze lijn,
+            // ook al wordt hij LATER toegevoegd, toch ONDER de hoofdroute getekend wordt --
+            // Leaflet tekent standaard later-toegevoegde lagen bovenop, net andersom dan wat we
+            // hier willen (voorheen via MapLibre's addLayer(..., "goknoop-route-line") opgelost).
+            routeToStartLayerRef.current = L.polyline(toStartLatLngs, {
+              color: "#3B82F6",
+              weight: 4,
+              dashArray: "2 6",
+              lineJoin: "round",
+              lineCap: "round",
+            }).addTo(map);
+            routeToStartLayerRef.current.bringToBack();
           } else {
-            (map.getSource("goknoop-route-to-start") as maplibregl.GeoJSONSource).setData(lineGeoJson);
+            routeToStartLayerRef.current.setLatLngs(toStartLatLngs);
           }
 
           // Fase A (sectie 9.15): EENMALIG inzoomen op uitsluitend deze parkeerplaats→
@@ -518,15 +553,15 @@ export default function NavigationScreen({
           if (!hasFitBoundsToStartRef.current) {
             const lons = toStartData.geometry.map((p: { lon: number }) => p.lon);
             const lats = toStartData.geometry.map((p: { lat: number }) => p.lat);
+            // Asymmetrische marge, zelfde les als sectie 6H: de richtingkaart bovenin is
+            // veel hoger dan een uniforme marge -- zonder dat duwt de kaart een stuk van
+            // de net getekende route uit beeld, achter de kaart.
             map.fitBounds(
               [
-                [Math.min(...lons), Math.min(...lats)],
-                [Math.max(...lons), Math.max(...lats)],
+                [Math.min(...lats), Math.min(...lons)],
+                [Math.max(...lats), Math.max(...lons)],
               ],
-              // Asymmetrische marge, zelfde les als sectie 6H: de richtingkaart bovenin is
-              // veel hoger dan een uniforme marge -- zonder dat duwt de kaart een stuk van
-              // de net getekende route uit beeld, achter de kaart.
-              { padding: { top: 200, bottom: 80, left: 60, right: 60 }, animate: true }
+              { paddingTopLeft: [60, 200], paddingBottomRight: [60, 80], animate: true }
             );
             hasFitBoundsToStartRef.current = true;
           }
@@ -593,18 +628,12 @@ export default function NavigationScreen({
         // navigeren aanvoelt i.p.v. een statische afstandsteller op een overzichtskaart.
         const map = mapRef.current;
         if (map) {
-          const src = map.getSource("goknoop-position") as maplibregl.GeoJSONSource | undefined;
-          src?.setData({
-            type: "FeatureCollection",
-            features: [{ type: "Feature", geometry: { type: "Point", coordinates: [sample.lon, sample.lat] }, properties: {} }],
-          });
+          positionMarkerRef.current?.setLatLng([sample.lat, sample.lon]).setStyle({ opacity: 1, fillOpacity: 1 });
 
-          // BIJGESTELD (30-8-2026, op verzoek): fase A draait en volgt nu ook mee, exact
-          // hetzelfde patroon als de Kaart-hometab (LiveLocationScreen.tsx) en fase C
-          // hieronder -- eerder stond hier expliciet "fase A/B blijven noordgericht" als
-          // bewuste keuze, nu herzien. Bewust GEEN zoom-wijziging (zoom blijft zoals de
-          // eenmalige fitBounds op de LocalBikeRouter-route 'm zette, sectie 9.15) -- alleen
-          // meedraaien/meebewegen, niet automatisch inzoomen.
+          // Heading-berekening blijft ongewijzigd draaien (zelfde functies als voorheen) --
+          // wordt verderop gebruikt voor de richtingpijl (relatief t.o.v. eigen rijrichting),
+          // niet meer voor kaartrotatie (Leaflet roteert niet, kaart blijft noord-boven, zie
+          // leaflet-migration-plan.md). Bewust GEEN zoom-wijziging hier (ongewijzigd).
           const selectedHeading = selectHeadingDeg(
             { gpsHeadingDeg: sample.headingDeg, speedMps: sample.speedMps, previousStableHeadingDeg: smoothedHeadingRef.current },
             { speedThresholdMps: MOVEMENT_SPEED_THRESHOLD_MPS }
@@ -612,11 +641,7 @@ export default function NavigationScreen({
           if (selectedHeading !== null) {
             smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
           }
-          if (smoothedHeadingRef.current !== null) {
-            map.easeTo({ center: [sample.lon, sample.lat], bearing: smoothedHeadingRef.current, duration: EASE_DURATION_MS });
-          } else {
-            map.easeTo({ center: [sample.lon, sample.lat], duration: EASE_DURATION_MS });
-          }
+          map.panTo([sample.lat, sample.lon], { animate: true, duration: EASE_DURATION_MS / 1000 });
         }
 
         appendLog(`onderweg naar startpunt, nog ${Math.round(distanceToStartM)}m`);
@@ -663,18 +688,19 @@ export default function NavigationScreen({
       // rechtstreeks vanuit `sample`.
       if (outcome.action === "reported_on_route" || outcome.action === "reported_deviation") {
         const markerFeature = buildPositionMarkerGeoJson(outcome.matchedPosition);
-        const src = mapRef.current?.getSource("goknoop-position") as maplibregl.GeoJSONSource | undefined;
-        src?.setData({ type: "FeatureCollection", features: [markerFeature] });
+        const [markerLon, markerLat] = markerFeature.geometry.coordinates;
+        positionMarkerRef.current?.setLatLng([markerLat, markerLon]).setStyle({ opacity: 1, fillOpacity: 1 });
 
         // Niveau 1 (richting, stap 12.5): dezelfde matchedPosition hergebruikt, geen
         // nieuwe matching/positiebepaling -- alleen afgeleide weergave-informatie.
         const progress = calculateProgress(model, outcome.matchedPosition);
         const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, nodeDisplayNumbers);
 
-        // Heading-up navigatie (sectie 6C/6G): UITSLUITEND tijdens NAVIGATING draait de kaart
-        // mee met de rijrichting en zoomt dichterbij -- fase A/B blijven noordgericht.
-        // Hergebruikt de al bestaande, apart geteste pure functies (stap 1 van 6C), hier voor
-        // het eerst daadwerkelijk aan de kaart gekoppeld.
+        // Zoom-inzoomen (sectie 6C/6G): UITSLUITEND tijdens NAVIGATING zoomt de kaart
+        // dichterbij. Kaartrotatie zelf is losgelaten (Leaflet, blijft noord-boven, zie
+        // leaflet-migration-plan.md) -- de heading-berekening blijft wel ongewijzigd
+        // doorlopen, puur voor de richtingpijl hieronder (die was en blijft relatief
+        // t.o.v. de eigen rijrichting, onafhankelijk van of de kaart zelf meedraait).
         if (currentPhase === "NAVIGATING") {
           const selectedHeading = selectHeadingDeg(
             { gpsHeadingDeg: sample.headingDeg, speedMps: sample.speedMps, previousStableHeadingDeg: smoothedHeadingRef.current },
@@ -684,27 +710,18 @@ export default function NavigationScreen({
             smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
           }
           const map = mapRef.current;
-          if (map && smoothedHeadingRef.current !== null) {
-            map.easeTo({
-              center: [sample.lon, sample.lat],
-              bearing: smoothedHeadingRef.current,
-              zoom: NAVIGATION_ZOOM,
-              duration: EASE_DURATION_MS,
-            });
+          if (map) {
+            map.flyTo([markerLat, markerLon], NAVIGATION_ZOOM, { animate: true, duration: EASE_DURATION_MS / 1000 });
           }
-          // Richtingpijl RELATIEF t.o.v. de rijrichting (0° = rechtdoor/boven) -- de kaart zelf
-          // is nu al heading-up gedraaid, dus een absolute bearing zou dubbel roteren.
+          // Richtingpijl RELATIEF t.o.v. de eigen rijrichting (0° = rechtdoor/boven) --
+          // deze berekening was en blijft onafhankelijk van kaartrotatie (zie hierboven).
           const arrowDeg =
             smoothedHeadingRef.current !== null ? relativeAngleDeg(info.bearingToNextNodeDeg, smoothedHeadingRef.current) : 0;
           setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: arrowDeg });
         } else {
-          // Fase B (Start Guidance): kaart blijft noordgericht, absolute bearing blijft correct.
-          // Val terug naar noordgericht als de kaart nog gedraaid stond (bijv. gestopt met bewegen
-          // ná eerder daadwerkelijk genavigeerd te hebben) -- geen "vastzittende" rotatie.
-          if (smoothedHeadingRef.current !== null) {
-            mapRef.current?.easeTo({ bearing: 0, duration: 500 });
-            smoothedHeadingRef.current = null;
-          }
+          // Fase B (Start Guidance): absolute bearing blijft correct (kaart was en blijft
+          // altijd noord-boven, geen rotatie meer om "terug te zetten").
+          smoothedHeadingRef.current = null;
           setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: info.bearingToNextNodeDeg });
         }
 
@@ -759,7 +776,8 @@ export default function NavigationScreen({
     setProgressPanelEnlarged(false);
     setRouteToStartDistanceM(null);
     smoothedHeadingRef.current = null;
-    mapRef.current?.easeTo({ bearing: 0, duration: 500 });
+    // Rotatie-reset (was hier bij MapLibre nodig) is niet meer van toepassing -- Leaflet
+    // roteert de kaart nooit, blijft altijd noord-boven (zie leaflet-migration-plan.md).
     setRunning(false);
     setPhase("TO_START");
     setStartInfo(null);
@@ -779,7 +797,7 @@ export default function NavigationScreen({
     <div style={{ position: "fixed", inset: 0, width: "100%", height: "100dvh", zIndex: 50, background: "#000" }}>
       {/* MapLibre's eigen zoomcontrol (top-right) weet niets van onze eigen topbalk (X/Start-Stop,
           ook top-right) en overlapte die. Duw 'm expliciet naar beneden, onder de topbalk. */}
-      <style>{`.maplibregl-ctrl-top-right { top: 68px !important; }`}</style>
+      <style>{`.leaflet-top.leaflet-right { top: 68px !important; }`}</style>
 
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
