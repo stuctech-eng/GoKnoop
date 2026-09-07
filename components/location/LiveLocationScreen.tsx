@@ -81,8 +81,8 @@ function ensureLeafletIconsConfigured(L: LeafletModule) {
 // "API KEY REQUIRED"-watermerk van CARTO, geen crash -- degradeert netjes).
 const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY;
 const CARTO_RASTER_URL = CARTO_API_KEY
-  ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${CARTO_API_KEY}`
-  : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
+  ? `https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=${CARTO_API_KEY}`
+  : "https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png";
 const CARTO_ATTRIBUTION = "&copy; CARTO, &copy; OpenStreetMap contributors";
 const CARTO_SUBDOMAINS = ["a", "b", "c", "d"];
 const CARTO_MAX_ZOOM = 20;
