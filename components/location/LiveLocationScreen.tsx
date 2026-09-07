@@ -71,7 +71,18 @@ function ensureLeafletIconsConfigured(L: LeafletModule) {
   leafletIconsConfigured = true;
 }
 
-const CARTO_RASTER_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
+// CARTO vereist sinds eind augustus 2026 een (gratis) API-key voor hun
+// rastertegels (voorheen niet nodig, zie leaflet-migration-plan.md-kanttekening
+// die dit al benoemde als mogelijk toekomstig risico). Key wordt via een
+// publieke env var aangeleverd (NEXT_PUBLIC_-prefix, want deze URL wordt
+// client-side gebruikt) -- geen gevoelige secret, CARTO's eigen documentatie
+// toont deze key ook gewoon rechtstreeks in client-side voorbeeldcode.
+// Zonder ingestelde key valt dit terug op de kale URL (toont dan het
+// "API KEY REQUIRED"-watermerk van CARTO, geen crash -- degradeert netjes).
+const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY;
+const CARTO_RASTER_URL = CARTO_API_KEY
+  ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${CARTO_API_KEY}`
+  : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
 const CARTO_ATTRIBUTION = "&copy; CARTO, &copy; OpenStreetMap contributors";
 const CARTO_SUBDOMAINS = ["a", "b", "c", "d"];
 const CARTO_MAX_ZOOM = 20;
