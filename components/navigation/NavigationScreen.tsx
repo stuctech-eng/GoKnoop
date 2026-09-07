@@ -799,7 +799,9 @@ export default function NavigationScreen({
           ook top-right) en overlapte die. Duw 'm expliciet naar beneden, onder de topbalk. */}
       <style>{`.leaflet-top.leaflet-right { top: 68px !important; }`}</style>
 
-      <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
+      {/* Zie LiveLocationScreen.tsx voor de volledige toelichting: isoleert Leaflet's
+          interne stapel-volgorde zodat die niet meer over de eigen UI heen schildert. */}
+      <div ref={containerRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
 
       {/* Top bar: exit-knop links, Start/Stop rechts -- vaste hoogte, geen overlap met wat eronder komt. */}
       <div

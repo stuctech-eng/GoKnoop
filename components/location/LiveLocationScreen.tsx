@@ -317,7 +317,11 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
         background: "#000",
       }}
     >
-      <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
+      {/* zIndex hier is GEEN willekeurig getal -- het isoleert Leaflet's interne
+          stapel-volgorde (tegels/markers/zoomknop lopen intern op tot 1000) in een
+          eigen stapelcontext, zodat die nooit meer kan concurreren met de eigen
+          knoppen/kaartjes hieronder (die zonder dit zichtbaar overschilderd werden). */}
+      <div ref={containerRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
 
       {onCancel && (
         <button
