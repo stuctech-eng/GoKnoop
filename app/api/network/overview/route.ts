@@ -16,18 +16,18 @@ export const dynamic = "force-dynamic";
  * "Knooppunten-op-Home bewust NIET gebouwd -- vereist een geheel nieuwe
  * databehoefte, expliciet als apart, later traject afgesproken."
  *
- * BEWUSTE VEREENVOUDIGING: verbindingen worden als RECHTE LIJN tussen de twee
- * knooppunt-eindpunten geleverd, NIET de volledige, gedetailleerde
- * brongeometrie (die kan honderden punten per edge bevatten -- op landelijk
- * zoomniveau visueel niet te onderscheiden van een rechte lijn, wel een
- * veelvoud aan databytes). Dit is uitsluitend voor dit landelijke overzicht;
- * een GEKOZEN route (NavigationScreen.tsx) blijft de volledige,
- * gedetailleerde geometrie gebruiken, dat verandert hier niet.
+ * Levert UITSLUITEND knooppunten, GEEN verbindingen (7-9-2026, op verzoek:
+ * "de rechte lijnen moeten weg, alleen de echte paden" -- de eerdere
+ * rechte-lijn-vereenvoudiging bleek op straatniveau te grof/misleidend). De
+ * daadwerkelijke, gedetailleerde padgeometrie komt nu uitsluitend van
+ * /api/network/detailed-edges, per zichtbaar kaartgebied, zodra ver genoeg is
+ * ingezoomd. Een GEKOZEN route (NavigationScreen.tsx) blijft ongewijzigd de
+ * volledige geometrie gebruiken.
  *
  * Response is bewust compact (arrays i.p.v. objects met herhaalde keys) --
- * scheelt merkbaar bij ~11.000 knooppunten + ~28.000 verbindingen, ook na
- * gzip. `Cache-Control` staat aan: dit netwerk verandert alleen bij een
- * nieuwe dataset-import, niet per gebruikersactie.
+ * scheelt merkbaar bij ~11.000 knooppunten, ook na gzip. `Cache-Control`
+ * staat aan: dit netwerk verandert alleen bij een nieuwe dataset-import,
+ * niet per gebruikersactie.
  */
 export async function GET() {
   try {
@@ -54,25 +54,8 @@ export async function GET() {
       nodes.push([lat, lon, n.displayNumber ?? "?", provider.getEdgesFrom(id).length]);
     }
 
-    // Verbindingen: [fromLat, fromLon, toLat, toLon] -- gededupliceerd op edge-ID
-    // (elke edge komt 2x voor, eenmaal per eindpunt-index in de provider).
-    const seenEdgeIds = new Set<string>();
-    const edges: [number, number, number, number][] = [];
-    for (const id of allNodeIds) {
-      for (const edge of provider.getEdgesFrom(id)) {
-        if (seenEdgeIds.has(edge.id)) continue;
-        seenEdgeIds.add(edge.id);
-        const from = provider.getNode(edge.fromLogicalNodeId);
-        const to = provider.getNode(edge.toLogicalNodeId);
-        if (!from || !to) continue;
-        const fromWgs = rdToWgs84(from.x, from.y);
-        const toWgs = rdToWgs84(to.x, to.y);
-        edges.push([fromWgs.lat, fromWgs.lon, toWgs.lat, toWgs.lon]);
-      }
-    }
-
     return NextResponse.json(
-      { nodes, edges, datasetVersionId },
+      { nodes, datasetVersionId },
       { headers: { "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400" } }
     );
   } catch (err) {

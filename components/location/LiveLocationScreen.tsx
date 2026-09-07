@@ -330,22 +330,18 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.json();
         })
-        .then((data: { nodes?: [number, number, string, number][]; edges?: [number, number, number, number][]; error?: string }) => {
+        .then((data: { nodes?: [number, number, string, number][]; error?: string }) => {
           if (cancelled || !mapRef.current) return;
           if (data.error) throw new Error(data.error);
           const nodes = data.nodes ?? [];
-          const edges = data.edges ?? [];
           networkNodesDataRef.current = nodes;
 
-          for (const [fromLat, fromLon, toLat, toLon] of edges) {
-            L.polyline(
-              [
-                [fromLat, fromLon],
-                [toLat, toLon],
-              ],
-              { renderer: canvasRenderer, color: "#085041", weight: 1.5, opacity: 0.5 }
-            ).addTo(mapRef.current);
-          }
+          // Rechte-lijn-vereenvoudiging VERWIJDERD (7-9-2026, op verzoek: "alleen
+          // de echte paden") -- er worden nu geen verbindingen meer getekend
+          // totdat er ver genoeg is ingezoomd om de daadwerkelijke, gedetailleerde
+          // padgeometrie op te halen (refreshDetailView() hieronder). Op landelijk
+          // niveau zie je dus knooppunten zonder lijnen ertussen, i.p.v. een
+          // misleidende rechte lijn.
           for (const [lat, lon] of nodes) {
             L.circleMarker([lat, lon], { renderer: canvasRenderer, radius: 3, color: "#085041", weight: 1, fillColor: "#FFFFFF", fillOpacity: 1 }).addTo(
               mapRef.current
