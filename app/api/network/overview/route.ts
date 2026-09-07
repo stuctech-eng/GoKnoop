@@ -43,13 +43,15 @@ export async function GET() {
 
     const allNodeIds = provider.getAllNodeIds();
 
-    // Knooppunten: [lat, lon, displayNumber].
-    const nodes: [number, number, string][] = [];
+    // Knooppunten: [lat, lon, displayNumber, edgeCount]. edgeCount toegevoegd
+    // (7-9-2026, op verzoek: geïsoleerde knopen visueel onderscheiden op de
+    // kaart, i.p.v. alleen via een aparte debug-tool zichtbaar).
+    const nodes: [number, number, string, number][] = [];
     for (const id of allNodeIds) {
       const n = provider.getNode(id);
       if (!n) continue;
       const { lat, lon } = rdToWgs84(n.x, n.y);
-      nodes.push([lat, lon, n.displayNumber ?? "?"]);
+      nodes.push([lat, lon, n.displayNumber ?? "?", provider.getEdgesFrom(id).length]);
     }
 
     // Verbindingen: [fromLat, fromLon, toLat, toLon] -- gededupliceerd op edge-ID

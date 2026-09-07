@@ -138,7 +138,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
   const mapRef = useRef<L.Map | null>(null);
   const positionHaloRef = useRef<L.CircleMarker | null>(null);
   const positionDotRef = useRef<L.CircleMarker | null>(null);
-  const networkNodesDataRef = useRef<[number, number, string][]>([]);
+  const networkNodesDataRef = useRef<[number, number, string, number][]>([]);
   const networkLabelsLayerRef = useRef<L.LayerGroup | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const hasCenteredRef = useRef(false);
@@ -268,7 +268,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
       fetch("/api/network/overview")
         .then((res) => res.json())
-        .then((data: { nodes?: [number, number, string][]; edges?: [number, number, number, number][] }) => {
+        .then((data: { nodes?: [number, number, string, number][]; edges?: [number, number, number, number][] }) => {
           if (cancelled || !mapRef.current) return;
           const nodes = data.nodes ?? [];
           const edges = data.edges ?? [];
@@ -283,10 +283,19 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
               { renderer: canvasRenderer, color: "#085041", weight: 1.5, opacity: 0.5 }
             ).addTo(mapRef.current);
           }
-          for (const [lat, lon] of nodes) {
-            L.circleMarker([lat, lon], { renderer: canvasRenderer, radius: 3, color: "#085041", weight: 1, fillColor: "#FFFFFF", fillOpacity: 1 }).addTo(
-              mapRef.current
-            );
+          // Geïsoleerde knopen (0 edges, "EILAND" in de debug-tools) rood i.p.v. het
+          // gebruikelijke groen/wit -- op verzoek, 7-9-2026, zodat netwerkgaten
+          // meteen op de kaart zelf opvallen i.p.v. alleen via een aparte debug-tool.
+          for (const [lat, lon, , edgeCount] of nodes) {
+            const isIsland = edgeCount === 0;
+            L.circleMarker([lat, lon], {
+              renderer: canvasRenderer,
+              radius: isIsland ? 4 : 3,
+              color: isIsland ? "#c0392b" : "#085041",
+              weight: isIsland ? 2 : 1,
+              fillColor: isIsland ? "#e74c3c" : "#FFFFFF",
+              fillOpacity: 1,
+            }).addTo(mapRef.current);
           }
           refreshVisibleLabels();
         })
