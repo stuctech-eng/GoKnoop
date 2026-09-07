@@ -895,7 +895,7 @@ export default function Home() {
             )}
 
             {activeTab === "zoeken" && (
-              <section style={{ padding: "1.5rem 1.25rem 4.5rem" }}>
+              <section style={{ padding: "1.5rem 1.25rem calc(4.5rem + env(safe-area-inset-bottom))" }}>
                 <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Zoek een plaats</h2>
                 <input
                   value={placeName}
@@ -1055,7 +1055,7 @@ export default function Home() {
             )}
 
             {activeTab === "mijnroutes" && (
-              <section style={{ padding: "1.5rem 1.25rem 4.5rem" }}>
+              <section style={{ padding: "1.5rem 1.25rem calc(4.5rem + env(safe-area-inset-bottom))" }}>
                 <h2 style={{ fontSize: 24, marginBottom: "1.25rem" }}>Mijn routes</h2>
                 {getSavedRoutes().length === 0 ? (
                   <p style={{ fontSize: 15, opacity: 0.6, textAlign: "center" }}>Je hebt nog geen routes opgeslagen.</p>
@@ -1230,7 +1230,7 @@ export default function Home() {
             )}
 
             {activeTab === "profiel" && (
-              <section style={{ padding: "1.5rem 1.25rem 4.5rem", textAlign: "center" }}>
+              <section style={{ padding: "1.5rem 1.25rem calc(4.5rem + env(safe-area-inset-bottom))", textAlign: "center" }}>
                 <h2 style={{ fontSize: 24, marginBottom: "0.75rem" }}>Profiel</h2>
                 <p style={{ fontSize: 15, opacity: 0.6, marginBottom: "1.5rem" }}>Binnenkort beschikbaar.</p>
                 <Link

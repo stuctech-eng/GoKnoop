@@ -307,7 +307,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
         top: 0,
         left: 0,
         right: 0,
-        bottom: embedded ? 64 : 0, // ruimte voor de (nu grotere) tabbalk (env(safe-area) zit al in de tabbalk zelf)
+        bottom: embedded ? "calc(64px + env(safe-area-inset-bottom))" : 0, // tabbalk-hoogte (64px) + de safe-area-marge die de tabbalk zelf ook gebruikt -- zonder die laatste term liep de kaart er deels onder door
         width: "100%",
         // GEEN expliciete height hier: top+bottom bepalen de hoogte volledig. Een expliciete
         // height ernaast (zoals voorheen "100%") overschrijft `bottom` stilzwijgend (CSS
