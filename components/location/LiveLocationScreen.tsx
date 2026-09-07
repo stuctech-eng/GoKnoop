@@ -81,8 +81,8 @@ function ensureLeafletIconsConfigured(L: LeafletModule) {
 // "API KEY REQUIRED"-watermerk van CARTO, geen crash -- degradeert netjes).
 const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY;
 const CARTO_RASTER_URL = CARTO_API_KEY
-  ? `https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png?key=${CARTO_API_KEY}`
-  : "https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png";
+  ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${CARTO_API_KEY}`
+  : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
 const CARTO_ATTRIBUTION = "&copy; CARTO, &copy; OpenStreetMap contributors";
 const CARTO_SUBDOMAINS = ["a", "b", "c", "d"];
 const CARTO_MAX_ZOOM = 20;
@@ -189,6 +189,15 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
       });
 
       tileLayer.addTo(map);
+
+      // Contrastfilter (op verzoek, 7-9-2026): Voyager op zichzelf voelde "vaag"/moeilijk
+      // te zien aan, Dark Matter bleek juist te donker/te weinig contrast (straatnamen
+      // nauwelijks leesbaar). Dit verzadigt/verscherpt de bestaande Voyager-tegels zelf --
+      // geen andere tegelaanbieder/-stijl nodig, puur een CSS-filter op de tegel-laag.
+      const tilePane = map.getPane("tilePane");
+      if (tilePane) {
+        tilePane.style.filter = "saturate(1.6) contrast(1.2) brightness(1.03)";
+      }
 
       // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026, zelfde
       // aanpak als voorheen bij MapLibre -- alleen de CSS-klasse hoort nu bij Leaflet).
