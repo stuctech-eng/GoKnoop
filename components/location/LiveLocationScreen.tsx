@@ -138,6 +138,8 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
   const mapRef = useRef<L.Map | null>(null);
   const positionHaloRef = useRef<L.CircleMarker | null>(null);
   const positionDotRef = useRef<L.CircleMarker | null>(null);
+  const networkNodesDataRef = useRef<[number, number, string][]>([]);
+  const networkLabelsLayerRef = useRef<L.LayerGroup | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
   const hasCenteredRef = useRef(false);
   const smoothedHeadingRef = useRef<number | null>(null);
@@ -232,6 +234,66 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
       setMapStatus("loaded");
       mapRef.current = map;
+
+      // Eigen knooppuntennetwerk tonen (op verzoek, 7-9-2026) -- GoKnoop's eigen
+      // data, niet afhankelijk van de kaartprovider daarvoor. Canvas-renderer:
+      // bij ~11.000 knooppunten + ~28.000 verbindingen is de standaard SVG-
+      // renderer (één DOM-element per vorm) merkbaar trager op een telefoon.
+      const canvasRenderer = L.canvas({ padding: 0.5 });
+      const LABEL_MIN_ZOOM = 14; // pas nummer-labels tonen als er zinnig weinig knooppunten tegelijk zichtbaar zijn
+      networkLabelsLayerRef.current = L.layerGroup().addTo(map);
+
+      function refreshVisibleLabels() {
+        const currentMap = mapRef.current;
+        const labelsLayer = networkLabelsLayerRef.current;
+        if (!currentMap || !labelsLayer) return;
+        labelsLayer.clearLayers();
+        if (currentMap.getZoom() < LABEL_MIN_ZOOM) return;
+
+        const bounds = currentMap.getBounds();
+        for (const [lat, lon, displayNumber] of networkNodesDataRef.current) {
+          if (!bounds.contains([lat, lon])) continue;
+          L.marker([lat, lon], {
+            icon: L.divIcon({
+              className: "goknoop-network-node-label",
+              html: `<div style="font-size:11px;font-weight:700;font-family:sans-serif;color:#085041;white-space:nowrap;transform:translate(10px,-6px);">${displayNumber}</div>`,
+              iconSize: [0, 0],
+            }),
+            interactive: false,
+          }).addTo(labelsLayer);
+        }
+      }
+
+      map.on("moveend zoomend", refreshVisibleLabels);
+
+      fetch("/api/network/overview")
+        .then((res) => res.json())
+        .then((data: { nodes?: [number, number, string][]; edges?: [number, number, number, number][] }) => {
+          if (cancelled || !mapRef.current) return;
+          const nodes = data.nodes ?? [];
+          const edges = data.edges ?? [];
+          networkNodesDataRef.current = nodes;
+
+          for (const [fromLat, fromLon, toLat, toLon] of edges) {
+            L.polyline(
+              [
+                [fromLat, fromLon],
+                [toLat, toLon],
+              ],
+              { renderer: canvasRenderer, color: "#085041", weight: 1.5, opacity: 0.5 }
+            ).addTo(mapRef.current);
+          }
+          for (const [lat, lon] of nodes) {
+            L.circleMarker([lat, lon], { renderer: canvasRenderer, radius: 3, color: "#085041", weight: 1, fillColor: "#FFFFFF", fillOpacity: 1 }).addTo(
+              mapRef.current
+            );
+          }
+          refreshVisibleLabels();
+        })
+        .catch(() => {
+          // Bewust genegeerd -- het netwerk-overzicht is een aanvulling, geen kernfunctie;
+          // een falende fetch mag de rest van het scherm (GPS, bevestigen) niet blokkeren.
+        });
     })();
 
     return () => {
