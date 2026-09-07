@@ -146,6 +146,7 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
+  const [networkStatus, setNetworkStatus] = useState<string | null>(null);
   const [position, setPosition] = useState<{ lat: number; lon: number; accuracyM: number; headingDeg: number | null } | null>(null);
 
   // Kaart eenmalig opzetten.
@@ -266,10 +267,15 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
       map.on("moveend zoomend", refreshVisibleLabels);
 
+      setNetworkStatus("Netwerk laden...");
       fetch("/api/network/overview")
-        .then((res) => res.json())
-        .then((data: { nodes?: [number, number, string, number][]; edges?: [number, number, number, number][] }) => {
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data: { nodes?: [number, number, string, number][]; edges?: [number, number, number, number][]; error?: string }) => {
           if (cancelled || !mapRef.current) return;
+          if (data.error) throw new Error(data.error);
           const nodes = data.nodes ?? [];
           const edges = data.edges ?? [];
           networkNodesDataRef.current = nodes;
@@ -283,25 +289,29 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
               { renderer: canvasRenderer, color: "#085041", weight: 1.5, opacity: 0.5 }
             ).addTo(mapRef.current);
           }
-          // Geïsoleerde knopen (0 edges, "EILAND" in de debug-tools) rood i.p.v. het
-          // gebruikelijke groen/wit -- op verzoek, 7-9-2026, zodat netwerkgaten
-          // meteen op de kaart zelf opvallen i.p.v. alleen via een aparte debug-tool.
-          for (const [lat, lon, , edgeCount] of nodes) {
-            const isIsland = edgeCount === 0;
-            L.circleMarker([lat, lon], {
-              renderer: canvasRenderer,
-              radius: isIsland ? 4 : 3,
-              color: isIsland ? "#c0392b" : "#085041",
-              weight: isIsland ? 2 : 1,
-              fillColor: isIsland ? "#e74c3c" : "#FFFFFF",
-              fillOpacity: 1,
-            }).addTo(mapRef.current);
+          for (const [lat, lon] of nodes) {
+            L.circleMarker([lat, lon], { renderer: canvasRenderer, radius: 3, color: "#085041", weight: 1, fillColor: "#FFFFFF", fillOpacity: 1 }).addTo(
+              mapRef.current
+            );
           }
           refreshVisibleLabels();
+          setNetworkStatus(`Netwerk geladen: ${nodes.length} knopen, ${edges.length} verbindingen`);
         })
-        .catch(() => {
-          // Bewust genegeerd -- het netwerk-overzicht is een aanvulling, geen kernfunctie;
-          // een falende fetch mag de rest van het scherm (GPS, bevestigen) niet blokkeren.
+        .catch((err) => {
+          // NIET meer stil genegeerd (was de fout van de vorige versie -- een
+          // mislukte fetch was volledig onzichtbaar). Nu zowel zichtbaar op het
+          // scherm zelf als gelogd naar de bestaande Kaartfout-log.
+          const message = err instanceof Error ? err.message : String(err);
+          setNetworkStatus(`Netwerk laden mislukt: ${message}`);
+          fetch("/api/debug/log-client-error", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: `netwerk-overzicht laden mislukt: ${message}`,
+              stack: null,
+              context: { screen: "LiveLocationScreen", timestamp: new Date().toISOString() },
+            }),
+          }).catch(() => {});
         });
     })();
 
@@ -456,6 +466,25 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
           }}
         >
           {error}
+        </div>
+      )}
+
+      {networkStatus && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 210,
+            left: 12,
+            right: 12,
+            background: "rgba(0,0,0,0.7)",
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 11,
+            color: "white",
+            zIndex: 10,
+          }}
+        >
+          {networkStatus}
         </div>
       )}
 
