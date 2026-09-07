@@ -36,6 +36,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Route & graph",
     links: [
+      { href: "/debug/loop-diagnose", label: "Loop-route-diagnose", description: "Doorloopt locatie → kandidaten → rondje-generatie, met volledige interne diagnostiek." },
       { href: "/debug/direct-route", label: "Directe route", description: "Route tussen twee specifieke knopen berekenen." },
       { href: "/debug/batch-diagnose", label: "Batch-diagnose", description: "Meerdere routes tegelijk testen." },
       { href: "/debug/component-size", label: "Component-grootte", description: "Hoeveel knopen zijn vanaf hier bereikbaar." },
