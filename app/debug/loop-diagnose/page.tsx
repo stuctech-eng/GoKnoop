@@ -234,7 +234,7 @@ function LoopDiagnoseContent() {
                 <div key={i} style={{ fontSize: 12, fontFamily: "monospace" }}>
                   {String(c.logicalNodeId)} — afstand {typeof c.distanceM === "number" ? Math.round(c.distanceM) : "?"}m — {String(c.foundCount)} routes — beste afwijking{" "}
                   {c.bestDeviationPercent !== null ? `${(c.bestDeviationPercent as number).toFixed(1)}%` : "n.v.t."} — score{" "}
-                  {c.score === Infinity ? "∞ (onbruikbaar)" : (c.score as number).toFixed(0)}
+                  {c.score === Infinity || c.score === null || typeof c.score !== "number" ? "∞ (onbruikbaar)" : c.score.toFixed(0)}
                 </div>
               ))}
             </div>
