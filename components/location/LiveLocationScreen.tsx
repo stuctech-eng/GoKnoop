@@ -34,11 +34,21 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import * as L from "leaflet";
+import type * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-geolocation-source";
 import { selectHeadingDeg, smoothHeadingDeg } from "@/lib/navigation/direction/relative-direction";
 import { compassAbbreviation } from "@/lib/navigation/direction/relative-direction";
+
+// BELANGRIJK (6-9-2026, n.a.v. Vercel-buildfout "window is not defined"): Leaflet
+// raakt browser-globals aan op het MOMENT VAN IMPORTEREN, niet pas bij gebruik --
+// een gewone `import * as L from "leaflet"` bovenaan het bestand crasht daarom
+// tijdens Next.js' server-side prerendering (waar geen `window` bestaat), ondanks
+// "use client" (dat voorkomt geen server-side evaluatie, alleen client-hydratatie).
+// Oplossing: hierboven alleen een TYPE-only import (verdwijnt volledig bij compilatie,
+// dus geen runtime-risico), de daadwerkelijke module wordt hieronder pas dynamisch
+// geladen binnen useEffect (dus gegarandeerd alleen in de browser).
+type LeafletModule = typeof L;
 
 // Leaflet's standaard marker-icoon-assets verwachten een relatief pad dat in een
 // Next.js-webpack-bundel niet automatisch klopt. Dit scherm gebruikt zelf geen
@@ -50,7 +60,7 @@ import { compassAbbreviation } from "@/lib/navigation/direction/relative-directi
 // geen extra pakket, geen gok: dit is het door Leaflet zelf gedocumenteerde
 // patroon voor bundlers die de standaard relatieve icoon-paths niet oplossen.
 let leafletIconsConfigured = false;
-function ensureLeafletIconsConfigured() {
+function ensureLeafletIconsConfigured(L: LeafletModule) {
   if (leafletIconsConfigured) return;
   delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
   L.Icon.Default.mergeOptions({
@@ -128,76 +138,85 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
   // Kaart eenmalig opzetten.
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
-    ensureLeafletIconsConfigured();
+    let cancelled = false;
 
-    const map = L.map(containerRef.current, {
-      center: [52.0907, 5.1214], // uitgangspunt, wordt direct overschreven zodra de eerste GPS-fix binnenkomt
-      zoom: 15,
-      zoomControl: false, // hieronder handmatig top-right toegevoegd, zelfde plek als voorheen
-      attributionControl: true,
-    });
+    (async () => {
+      // Dynamische import (zie toelichting bovenaan bij LeafletModule) -- garandeert dat
+      // Leaflet's module-code nooit tijdens server-side prerendering wordt geëvalueerd.
+      const L = await import("leaflet");
+      if (cancelled || !containerRef.current || mapRef.current) return;
+      ensureLeafletIconsConfigured(L);
 
-    L.control.zoom({ position: "topright" }).addTo(map);
-
-    const tileLayer = L.tileLayer(CARTO_RASTER_URL, {
-      attribution: CARTO_ATTRIBUTION,
-      subdomains: CARTO_SUBDOMAINS,
-      maxZoom: CARTO_MAX_ZOOM,
-    });
-
-    tileLayer.on("tileerror", (e) => {
-      const message = "Leaflet tileerror (CARTO)";
-      logTileError({
-        screen: "LiveLocationScreen",
-        tileUrl: CARTO_RASTER_URL,
-        errorTile: (e as unknown as { coords?: { x: number; y: number; z: number } }).coords ?? null,
-        centerLat: map.getCenter().lat,
-        centerLon: map.getCenter().lng,
-        zoom: map.getZoom(),
-        timestamp: new Date().toISOString(),
+      const map = L.map(containerRef.current, {
+        center: [52.0907, 5.1214], // uitgangspunt, wordt direct overschreven zodra de eerste GPS-fix binnenkomt
+        zoom: 15,
+        zoomControl: false, // hieronder handmatig top-right toegevoegd, zelfde plek als voorheen
+        attributionControl: true,
       });
-      setMapStatus("error");
-      setError(message);
-    });
 
-    tileLayer.addTo(map);
+      L.control.zoom({ position: "topright" }).addTo(map);
 
-    // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026, zelfde
-    // aanpak als voorheen bij MapLibre -- alleen de CSS-klasse hoort nu bij Leaflet).
-    const attribContainer = map.getContainer().querySelector<HTMLElement>(".leaflet-control-attribution");
-    if (attribContainer) {
-      attribContainer.style.position = "absolute";
-      attribContainer.style.left = "50%";
-      attribContainer.style.right = "auto";
-      attribContainer.style.transform = "translateX(-50%)";
-    }
+      const tileLayer = L.tileLayer(CARTO_RASTER_URL, {
+        attribution: CARTO_ATTRIBUTION,
+        subdomains: CARTO_SUBDOMAINS,
+        maxZoom: CARTO_MAX_ZOOM,
+      });
 
-    // Buitenste, subtiele "nauwkeurigheids"-gloed + de blauwe stip zelf -- zelfde taal als
-    // voorheen (MapLibre circle-lagen), nu als twee Leaflet circleMarkers die bij elke
-    // GPS-sample van positie verplaatst worden i.p.v. opnieuw aangemaakt.
-    positionHaloRef.current = L.circleMarker([52.0907, 5.1214], {
-      radius: 22,
-      color: POSITION_COLOR,
-      weight: 0,
-      fillColor: POSITION_COLOR,
-      fillOpacity: 0.15,
-    }).addTo(map);
-    positionDotRef.current = L.circleMarker([52.0907, 5.1214], {
-      radius: 8,
-      color: "#FFFFFF",
-      weight: 3,
-      fillColor: POSITION_COLOR,
-      fillOpacity: 1,
-    }).addTo(map);
-    // Nog geen echte positie bekend -- pas zichtbaar zodra de eerste GPS-sample binnenkomt.
-    positionHaloRef.current.setStyle({ opacity: 0, fillOpacity: 0 });
-    positionDotRef.current.setStyle({ opacity: 0, fillOpacity: 0 });
+      tileLayer.on("tileerror", (e) => {
+        const message = "Leaflet tileerror (CARTO)";
+        logTileError({
+          screen: "LiveLocationScreen",
+          tileUrl: CARTO_RASTER_URL,
+          errorTile: (e as unknown as { coords?: { x: number; y: number; z: number } }).coords ?? null,
+          centerLat: map.getCenter().lat,
+          centerLon: map.getCenter().lng,
+          zoom: map.getZoom(),
+          timestamp: new Date().toISOString(),
+        });
+        setMapStatus("error");
+        setError(message);
+      });
 
-    setMapStatus("loaded");
-    mapRef.current = map;
+      tileLayer.addTo(map);
+
+      // Attributie onderaan gecentreerd i.p.v. rechtsonder (op verzoek, 30-8-2026, zelfde
+      // aanpak als voorheen bij MapLibre -- alleen de CSS-klasse hoort nu bij Leaflet).
+      const attribContainer = map.getContainer().querySelector<HTMLElement>(".leaflet-control-attribution");
+      if (attribContainer) {
+        attribContainer.style.position = "absolute";
+        attribContainer.style.left = "50%";
+        attribContainer.style.right = "auto";
+        attribContainer.style.transform = "translateX(-50%)";
+      }
+
+      // Buitenste, subtiele "nauwkeurigheids"-gloed + de blauwe stip zelf -- zelfde taal als
+      // voorheen (MapLibre circle-lagen), nu als twee Leaflet circleMarkers die bij elke
+      // GPS-sample van positie verplaatst worden i.p.v. opnieuw aangemaakt.
+      positionHaloRef.current = L.circleMarker([52.0907, 5.1214], {
+        radius: 22,
+        color: POSITION_COLOR,
+        weight: 0,
+        fillColor: POSITION_COLOR,
+        fillOpacity: 0.15,
+      }).addTo(map);
+      positionDotRef.current = L.circleMarker([52.0907, 5.1214], {
+        radius: 8,
+        color: "#FFFFFF",
+        weight: 3,
+        fillColor: POSITION_COLOR,
+        fillOpacity: 1,
+      }).addTo(map);
+      // Nog geen echte positie bekend -- pas zichtbaar zodra de eerste GPS-sample binnenkomt.
+      positionHaloRef.current.setStyle({ opacity: 0, fillOpacity: 0 });
+      positionDotRef.current.setStyle({ opacity: 0, fillOpacity: 0 });
+
+      setMapStatus("loaded");
+      mapRef.current = map;
+    })();
 
     return () => {
-      map.remove();
+      cancelled = true;
+      mapRef.current?.remove();
       mapRef.current = null;
       positionHaloRef.current = null;
       positionDotRef.current = null;
