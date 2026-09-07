@@ -146,7 +146,6 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
   const [mapStatus, setMapStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
-  const [networkStatus, setNetworkStatus] = useState<string | null>(null);
   const [position, setPosition] = useState<{ lat: number; lon: number; accuracyM: number; headingDeg: number | null } | null>(null);
 
   // Kaart eenmalig opzetten.
@@ -251,14 +250,28 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
         labelsLayer.clearLayers();
         if (currentMap.getZoom() < LABEL_MIN_ZOOM) return;
 
+        // Zelfde visuele stijl als KnoopBadge.tsx (components/KnoopBadge.tsx) --
+        // hergebruikt i.p.v. opnieuw verzonnen, zodat een knooppunt op de kaart
+        // er identiek uitziet als een knooppunt-badge elders in de app. Leaflet
+        // divIcon kan geen React-component direct hergebruiken, dus dezelfde
+        // CSS-variabelen (--color-knoop-green e.d., globals.css) hier herhaald.
+        const BADGE_SIZE = 26;
         const bounds = currentMap.getBounds();
         for (const [lat, lon, displayNumber] of networkNodesDataRef.current) {
           if (!bounds.contains([lat, lon])) continue;
           L.marker([lat, lon], {
             icon: L.divIcon({
-              className: "goknoop-network-node-label",
-              html: `<div style="font-size:11px;font-weight:700;font-family:sans-serif;color:#085041;white-space:nowrap;transform:translate(10px,-6px);">${displayNumber}</div>`,
-              iconSize: [0, 0],
+              className: "goknoop-network-node-badge",
+              html: `<div style="
+                width:${BADGE_SIZE}px;height:${BADGE_SIZE}px;border-radius:var(--radius-badge, 999px);
+                display:flex;align-items:center;justify-content:center;
+                background:var(--color-knoop-green, #1f6b44);border:2px solid var(--color-white, #fff);
+                box-shadow:0 1px 3px rgba(0,0,0,0.3);
+                color:var(--color-white, #fff);font-family:var(--font-display), -apple-system, sans-serif;
+                font-weight:700;font-size:11px;line-height:1;
+              ">${displayNumber}</div>`,
+              iconSize: [BADGE_SIZE, BADGE_SIZE],
+              iconAnchor: [BADGE_SIZE / 2, BADGE_SIZE / 2],
             }),
             interactive: false,
           }).addTo(labelsLayer);
@@ -267,7 +280,6 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
 
       map.on("moveend zoomend", refreshVisibleLabels);
 
-      setNetworkStatus("Netwerk laden...");
       fetch("/api/network/overview")
         .then((res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -295,14 +307,14 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
             );
           }
           refreshVisibleLabels();
-          setNetworkStatus(`Netwerk geladen: ${nodes.length} knopen, ${edges.length} verbindingen`);
         })
         .catch((err) => {
-          // NIET meer stil genegeerd (was de fout van de vorige versie -- een
-          // mislukte fetch was volledig onzichtbaar). Nu zowel zichtbaar op het
-          // scherm zelf als gelogd naar de bestaande Kaartfout-log.
+          // Netwerk-overzicht is een aanvulling, geen kernfunctie -- een mislukte
+          // fetch mag de rest van het scherm (GPS, bevestigen) niet blokkeren.
+          // Wel gelogd (stil, geen zichtbare balk meer -- die was een tijdelijk
+          // hulpmiddel, inmiddels bevestigd werkend) voor eventuele toekomstige
+          // problemen.
           const message = err instanceof Error ? err.message : String(err);
-          setNetworkStatus(`Netwerk laden mislukt: ${message}`);
           fetch("/api/debug/log-client-error", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -466,25 +478,6 @@ export default function LiveLocationScreen({ onConfirm, onCancel, embedded = fal
           }}
         >
           {error}
-        </div>
-      )}
-
-      {networkStatus && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: 210,
-            left: 12,
-            right: 12,
-            background: "rgba(0,0,0,0.7)",
-            borderRadius: 8,
-            padding: "6px 10px",
-            fontSize: 11,
-            color: "white",
-            zIndex: 10,
-          }}
-        >
-          {networkStatus}
         </div>
       )}
 
