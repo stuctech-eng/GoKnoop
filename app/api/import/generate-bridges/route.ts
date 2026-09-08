@@ -675,12 +675,40 @@ export async function GET(req: NextRequest) {
 
         if (!outcome.ok) {
           if (outcome.validationStatus === "deadline_exceeded") {
-            // TOEGEVOEGD 7-9-2026: dit is GEEN aanwijzing dat ORS zelf onbereikbaar is --
-            // alleen dat DEZE functie-aanroep door de tijd heen is. Batch nu gewoon
-            // netjes stoppen (net als de tijdsbudget-check bovenaan de lus), dit item
-            // blijft in de wachtrij voor de volgende batch-aanroep. GEEN
-            // consecutiveProviderErrors ophogen, GEEN orsLikelyUnavailable zetten --
-            // dat zou de gebruiker ten onrechte laten denken dat het dagquotum op is.
+            if (results.length === 0) {
+              // TOEGEVOEGD 7-9-2026, n.a.v. een daadwerkelijke livelock: als DIT het
+              // allereerste item van een verse batch-aanroep is en het alleen al de
+              // hele deadline opsoupeert, is dat geen "toevallig geen tijd meer over"
+              // (dat zou pas na eerdere, wél geslaagde items in deze batch gelden) --
+              // het is een sterke aanwijzing dat DIT SPECIFIEKE item (bv. een node-paar
+              // waar ORS structureel niet op reageert) het probleem is. Zonder deze
+              // uitzondering blijft het item bij elke volgende aanroep opnieuw als
+              // eerste aan de beurt, oneindig, zonder ooit verder te komen -- exact
+              // wat er gebeurde (processedCount bleef vastzitten op 437, batch-na-batch).
+              // Wordt daarom nu WEL als verwerkt geteld (afgewezen), zodat de batch
+              // verder kan naar het volgende item.
+              results.push({
+                ...c,
+                datasetVersionId,
+                scope,
+                validationStatus: "rejected_provider_error",
+                rejectionReason: `Structurele deadline-overschrijding als allereerste item van een verse aanroep (livelock-preventie): ${outcome.rejectionReason}`,
+                distanceM: null,
+                durationS: null,
+                circuityRatio: null,
+                geometry: null,
+                validatedAt: nowIso,
+              });
+              consecutiveProviderErrors = 0;
+              continue;
+            }
+            // dit is GEEN aanwijzing dat ORS zelf onbereikbaar is -- alleen dat DEZE
+            // functie-aanroep door de tijd heen is, ná één of meer eerdere, wél
+            // geslaagde items. Batch nu gewoon netjes stoppen (net als de
+            // tijdsbudget-check bovenaan de lus), dit item blijft in de wachtrij
+            // voor de volgende batch-aanroep. GEEN consecutiveProviderErrors
+            // ophogen, GEEN orsLikelyUnavailable zetten -- dat zou de gebruiker
+            // ten onrechte laten denken dat het dagquotum op is.
             stoppedEarly = `Harde deadline bereikt tijdens verwerking van dit item -- veilig gestopt. (${outcome.rejectionReason})`;
             break;
           }
