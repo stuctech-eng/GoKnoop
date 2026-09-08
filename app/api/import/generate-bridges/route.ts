@@ -638,7 +638,15 @@ export async function GET(req: NextRequest) {
       // 10s-harde-grens. Zie routeWithRetry() + de fetch-timeout hieronder voor
       // de volledige toelichting waarom dit nodig is naast de bestaande
       // FUNCTION_TIME_BUDGET_MS-check (die alleen TUSSEN items checkt).
-      const HARD_DEADLINE_MS = batchStartTime + 5000;
+      // Harde deadline (7-9-2026, HERZIEN 8-9-2026): met een 6s-ORS-timeout
+      // (open-route-service-adapter.ts) past er realistisch maar één poging
+      // per functie-aanroep -- 2x6s zou de 10s-grens ver overschrijden. Deze
+      // deadline (2500ms) bepaalt daarom vooral of er nog een NIEUWE poging
+      // mag STARTEN, niet hoe lang die mag duren (dat regelt de aparte
+      // fetch-timeout zelf). Een functie-aanroep verwerkt hierdoor meestal
+      // precies 1 item, niet meerdere -- dat is prima: de runner roept
+      // compute-batch toch herhaaldelijk, automatisch, achter elkaar aan.
+      const HARD_DEADLINE_MS = batchStartTime + 2500;
       const nowIso = new Date().toISOString();
       const results: StoredAttempt[] = [];
       let consecutiveProviderErrors = 0;

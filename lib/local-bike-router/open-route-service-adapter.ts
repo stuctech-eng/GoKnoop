@@ -70,7 +70,16 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
     // ruim onder de resterende tijd die de aanroepende code toestaat, zodat
     // een hangende verbinding een nette, opvangbare `provider_error` wordt
     // i.p.v. een ongecontroleerde platform-timeout.
-    const REQUEST_TIMEOUT_MS = 2500;
+    // TOEGEVOEGD 7-9-2026, HERZIEN (8-9-2026): eerst op 2500ms gezet om binnen
+    // de Vercel-10s-limiet te passen, maar dat bleek te krap -- 44/44 opeen-
+    // volgende "afwijzingen" bleken bij nader onderzoek GEEN echte ORS-fouten,
+    // maar mijn eigen te-strenge afkap van legitieme, alleen wat tragere
+    // ORS-antwoorden (bevestigd via de daadwerkelijk opgeslagen
+    // rejectionReason-tekst, niet aangenomen). 6s geeft ORS echte ruimte; de
+    // batch-tijdslogica hieronder (generate-bridges/route.ts) is hierop
+    // aangepast: één functie-aanroep verwerkt nu realistisch één item, niet
+    // meerdere.
+    const REQUEST_TIMEOUT_MS = 6000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
