@@ -25,9 +25,15 @@ export const dynamic = "force-dynamic";
  */
 
 const REGIONS: Record<string, { label: string; latMin: number; latMax: number; lonMin: number; lonMax: number }> = {
-  hilversum: { label: "Amsterdam Centraal -> Hilversum-corridor", latMin: 52.28, latMax: 52.4, lonMin: 4.9, lonMax: 5.2 },
-  lochem: { label: "Lochem / Achterhoek", latMin: 52.1, latMax: 52.2, lonMin: 6.35, lonMax: 6.5 },
-  volendam: { label: "Volendam / Edam / Purmerend", latMin: 52.44, latMax: 52.53, lonMin: 4.92, lonMax: 5.1 },
+  // TOEGEVOEGD 8-9-2026: gebieden verkleind t.o.v. de eerste versie -- die
+  // waren te groot (>3000 wegvakken, dus afgekapt bij 3 paginas), wat de
+  // component-analyse onbetrouwbaar onderschat (een segment lijkt "geïsoleerd"
+  // als zijn buursegment toevallig niet is opgehaald, niet omdat het écht
+  // geïsoleerd is). Nu gericht op de daadwerkelijke corridor/kern, klein
+  // genoeg om volledig (niet-afgekapt) op te halen.
+  hilversum: { label: "Amsterdam-Zuidoost -> Hilversum (smalle corridor)", latMin: 52.3, latMax: 52.36, lonMin: 5.0, lonMax: 5.18 },
+  lochem: { label: "Lochem-kern + directe omgeving", latMin: 52.13, latMax: 52.18, lonMin: 6.38, lonMax: 6.46 },
+  volendam: { label: "Volendam / Edam (kern)", latMin: 52.47, latMax: 52.51, lonMin: 4.98, lonMax: 5.06 },
 };
 
 const SNAP_TOLERANCES_M = [5, 10, 20];
@@ -67,7 +73,7 @@ export async function GET(req: NextRequest) {
       maxY: Math.max(...corners.map((c) => c.y)),
     };
 
-    const { segments: allSegments, pagesRetrieved, truncated, debugFirstFeatureKeys } = await fetchAllNwbSegmentsInBbox(bbox, 3);
+    const { segments: allSegments, pagesRetrieved, truncated, debugFirstFeatureKeys } = await fetchAllNwbSegmentsInBbox(bbox, 4);
 
     // Sanity-check: verdeling van ruwe bstCode-waarden -- als dit gevarieerd
     // is (niet gedomineerd door 1 vaste waarde), bevestigt dat de data nu
