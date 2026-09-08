@@ -131,10 +131,12 @@ export default function GenerateBridgesRunnerPage() {
             // uitgeput dagquotum, ~24u herstel), geen transiënte hik. Automatisch
             // blijven proberen zou alleen tijd verspillen -- de gebruiker moet zelf
             // later terugkomen en opnieuw op Start tikken.
+            // TOEGEVOEGD 7-9-2026: batch.stoppedEarly bevat nu de daadwerkelijke
+            // ORS-foutmelding (server-kant uitgebreid) -- die tonen i.p.v. de
+            // eigen, generieke aanname "quotum uitgeput", want dat bleek bij
+            // weinig dagelijks verbruik vaak niet de echte reden.
             setStatus("error");
-            setError(
-              "ORS lijkt structureel onbereikbaar (bv. quotum uitgeput). Gestopt om te voorkomen dat kandidaten ten onrechte als 'verwerkt' worden geteld. Wacht en tik later opnieuw op Start."
-            );
+            setError(batch.stoppedEarly ?? "ORS lijkt structureel onbereikbaar. Wacht en tik later opnieuw op Start.");
             return;
           }
           if (batch.status === "complete") {

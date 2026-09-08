@@ -723,10 +723,14 @@ export async function GET(req: NextRequest) {
             consecutiveProviderErrors++;
             if (consecutiveProviderErrors >= 2) {
               orsLikelyUnavailable = true;
+              // TOEGEVOEGD 7-9-2026: de daadwerkelijke ORS-foutmelding meegeven i.p.v.
+              // alleen de aanname "quotum uitgeput" -- bij zo weinig aanvragen per dag
+              // is quotum-uitputting vaak niet de echte reden, en zonder de echte tekst
+              // blijven we gissen.
               stoppedEarly =
-                "2 opeenvolgende provider-fouten (na retries) -- ORS lijkt structureel niet bereikbaar (bv. quotum uitgeput). " +
+                `2 opeenvolgende provider-fouten (na retries) -- ORS lijkt structureel niet bereikbaar. Laatste onderliggende foutmelding: "${outcome.rejectionReason}". ` +
                 "Batch afgebroken ZONDER deze items als verwerkt te tellen -- ze blijven in de wachtrij. " +
-                "Wacht voordat je opnieuw probeert (dagquota herstelt na ~24u).";
+                "Als dit geen quotum-melding is, wijst dit op een andere, mogelijk permanente ORS-fout (bv. authenticatie/configuratie) -- niet zomaar 24u wachten zonder de tekst hierboven te controleren.";
               break;
             }
             continue;
