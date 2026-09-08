@@ -1,0 +1,230 @@
+/**
+ * Gecombineerde-graafopbouw + Dijkstra -- TIJDELIJK, uitsluitend voor de
+ * beslissende validatietest (8-9-2026). Volledig los van de productie
+ * route-engine (lib/route-engine/) -- andere node-ID-ruimte (NWB-clusters
+ * krijgen synthetische ID's), geen enkele overlap met productiecode.
+ */
+
+import type { GraphProvider } from "../route-engine/types";
+import type { NwbSegment } from "./nwb-client";
+import { classifySegment } from "./classify";
+
+export type CombinedEdgeSource = "goknoop" | "nwb" | "connector";
+
+export type CombinedEdge = {
+  to: string;
+  distanceM: number;
+  source: CombinedEdgeSource;
+  /** Voor sanity-checks: NWB bstCode/straatnaam indien van toepassing. */
+  nwbInfo?: { bstCode: string | null; straatnaam: string | null; wegnummer: string | null };
+};
+
+export type CombinedGraph = {
+  adjacency: Map<string, CombinedEdge[]>;
+  nodePosition: Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>;
+};
+
+class UnionFind {
+  private parent = new Map<string, string>();
+  add(id: string) {
+    if (!this.parent.has(id)) this.parent.set(id, id);
+  }
+  find(id: string): string {
+    const p = this.parent.get(id);
+    if (p === undefined) return id;
+    if (p === id) return id;
+    const root = this.find(p);
+    this.parent.set(id, root);
+    return root;
+  }
+  union(a: string, b: string) {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra !== rb) this.parent.set(ra, rb);
+  }
+}
+
+function segmentLengthM(coords: { x: number; y: number }[]): number {
+  let total = 0;
+  for (let i = 1; i < coords.length; i++) total += Math.hypot(coords[i].x - coords[i - 1].x, coords[i].y - coords[i - 1].y);
+  return total;
+}
+
+/**
+ * Bouwt de gecombineerde graaf. `nwbSegments` moet al Set B-geclassificeerd
+ * zijn (of ruwer -- deze functie classificeert zelf nogmaals ter
+ * zekerheid). `connectorSearchBbox` beperkt de dure GoKnoop<->NWB-
+ * nabijheidscontrole tot een relevant gebied (i.p.v. alle 11.003 landelijke
+ * knopen te vergelijken) -- puur een efficiëntiemaatregel, geen inhoudelijke
+ * beperking (de volledige GoKnoop-graaf blijft wel altijd meedoen voor
+ * Dijkstra zelf).
+ */
+export function buildCombinedGraph(
+  provider: GraphProvider,
+  nwbSegments: NwbSegment[],
+  toleranceM: number,
+  connectorSearchBbox: { minX: number; minY: number; maxX: number; maxY: number }
+): CombinedGraph {
+  const adjacency = new Map<string, CombinedEdge[]>();
+  const nodePosition = new Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>();
+
+  function addEdge(from: string, to: string, edge: CombinedEdge) {
+    if (!adjacency.has(from)) adjacency.set(from, []);
+    adjacency.get(from)!.push(edge);
+  }
+
+  // 1. Volledige GoKnoop-graaf toevoegen (ongewijzigd, alle 11.003 knopen).
+  const allNodeIds = provider.getAllNodeIds();
+  for (const id of allNodeIds) {
+    const n = provider.getNode(id);
+    if (!n) continue;
+    nodePosition.set(id, { x: n.x, y: n.y, source: "goknoop" });
+    for (const e of provider.getEdgesFrom(id)) {
+      addEdge(id, e.toLogicalNodeId, { to: e.toLogicalNodeId, distanceM: e.distanceM, source: "goknoop" });
+    }
+  }
+
+  // 2. NWB-segmenten classificeren (Set B) en eindpunten snappen (Union-Find).
+  const setBSegments = nwbSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded" && s.coordinates.length >= 2);
+  const uf = new UnionFind();
+  const pointKey = (segId: string, end: "from" | "to") => `${segId}:${end}`;
+  const rawPoints: { key: string; x: number; y: number }[] = [];
+  for (const seg of setBSegments) {
+    const from = seg.coordinates[0];
+    const to = seg.coordinates[seg.coordinates.length - 1];
+    uf.add(pointKey(seg.id, "from"));
+    uf.add(pointKey(seg.id, "to"));
+    rawPoints.push({ key: pointKey(seg.id, "from"), x: from.x, y: from.y });
+    rawPoints.push({ key: pointKey(seg.id, "to"), x: to.x, y: to.y });
+  }
+  // Grid-bucketing voor efficiënte snap-vergelijking (zelfde patroon als graph-analysis.ts).
+  const grid = new Map<string, typeof rawPoints>();
+  const cellOf = (x: number, y: number) => `${Math.floor(x / toleranceM)}:${Math.floor(y / toleranceM)}`;
+  for (const p of rawPoints) {
+    const cell = cellOf(p.x, p.y);
+    if (!grid.has(cell)) grid.set(cell, []);
+    grid.get(cell)!.push(p);
+  }
+  for (const p of rawPoints) {
+    const [cx, cy] = cellOf(p.x, p.y).split(":").map(Number);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const candidates = grid.get(`${cx + dx}:${cy + dy}`);
+        if (!candidates) continue;
+        for (const q of candidates) {
+          if (p === q) continue;
+          if (Math.hypot(p.x - q.x, p.y - q.y) <= toleranceM) uf.union(p.key, q.key);
+        }
+      }
+    }
+  }
+
+  // NWB-clusterknopen registreren (representatief punt = eerste punt van de cluster).
+  const clusterRepresentative = new Map<string, { x: number; y: number }>();
+  for (const p of rawPoints) {
+    const root = uf.find(p.key);
+    if (!clusterRepresentative.has(root)) {
+      clusterRepresentative.set(root, { x: p.x, y: p.y });
+      nodePosition.set(`nwb:${root}`, { x: p.x, y: p.y, source: "nwb" });
+    }
+  }
+
+  // 3. NWB-edges toevoegen (elk segment = edge tussen zijn twee cluster-ID's).
+  for (const seg of setBSegments) {
+    const fromRoot = `nwb:${uf.find(pointKey(seg.id, "from"))}`;
+    const toRoot = `nwb:${uf.find(pointKey(seg.id, "to"))}`;
+    if (fromRoot === toRoot) continue; // lus op zichzelf, niet nuttig voor routering
+    const len = segmentLengthM(seg.coordinates);
+    const info = { bstCode: seg.bstCode, straatnaam: seg.straatnaam, wegnummer: seg.wegnummer };
+    addEdge(fromRoot, toRoot, { to: toRoot, distanceM: len, source: "nwb", nwbInfo: info });
+    addEdge(toRoot, fromRoot, { to: fromRoot, distanceM: len, source: "nwb", nwbInfo: info });
+  }
+
+  // 4. Connectors: GoKnoop-knopen binnen het zoekgebied koppelen aan nabije NWB-clusters.
+  const nwbClusterList = Array.from(clusterRepresentative.entries()).map(([root, pos]) => ({ id: `nwb:${root}`, ...pos }));
+  let connectorCount = 0;
+  for (const id of allNodeIds) {
+    const n = provider.getNode(id);
+    if (!n) continue;
+    if (n.x < connectorSearchBbox.minX || n.x > connectorSearchBbox.maxX || n.y < connectorSearchBbox.minY || n.y > connectorSearchBbox.maxY) continue;
+    for (const cluster of nwbClusterList) {
+      const d = Math.hypot(n.x - cluster.x, n.y - cluster.y);
+      if (d <= toleranceM) {
+        addEdge(id, cluster.id, { to: cluster.id, distanceM: d, source: "connector" });
+        addEdge(cluster.id, id, { to: id, distanceM: d, source: "connector" });
+        connectorCount++;
+      }
+    }
+  }
+
+  return { adjacency, nodePosition };
+}
+
+export type DijkstraStep = { nodeId: string; edgeSource: CombinedEdgeSource | "start"; distanceM: number; nwbInfo?: CombinedEdge["nwbInfo"] };
+
+export type DijkstraResult =
+  | {
+      found: true;
+      distanceM: number;
+      steps: DijkstraStep[];
+      goknoopEdgeCount: number;
+      nwbEdgeCount: number;
+      connectorCount: number;
+    }
+  | { found: false };
+
+/** Simpele binary-heap-gebaseerde Dijkstra op de gecombineerde graaf. */
+export function dijkstraOnCombinedGraph(graph: CombinedGraph, startId: string, endId: string): DijkstraResult {
+  const dist = new Map<string, number>();
+  const prevNode = new Map<string, string>();
+  const prevEdge = new Map<string, CombinedEdge>();
+  const visited = new Set<string>();
+
+  // Simpele array-gebaseerde priority queue -- bij deze schaal (~11k+ knopen)
+  // ruim snel genoeg binnen de 10s-tijdslimiet; geen aparte heap-implementatie
+  // nodig voor een eenmalige, tijdelijke test.
+  const queue: { id: string; d: number }[] = [{ id: startId, d: 0 }];
+  dist.set(startId, 0);
+
+  while (queue.length > 0) {
+    queue.sort((a, b) => a.d - b.d);
+    const current = queue.shift()!;
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+    if (current.id === endId) break;
+
+    const edges = graph.adjacency.get(current.id) ?? [];
+    for (const edge of edges) {
+      if (visited.has(edge.to)) continue;
+      const newDist = current.d + edge.distanceM;
+      if (newDist < (dist.get(edge.to) ?? Infinity)) {
+        dist.set(edge.to, newDist);
+        prevNode.set(edge.to, current.id);
+        prevEdge.set(edge.to, edge);
+        queue.push({ id: edge.to, d: newDist });
+      }
+    }
+  }
+
+  if (!dist.has(endId)) return { found: false };
+
+  // Pad terugvolgen.
+  const steps: DijkstraStep[] = [];
+  let cur: string | undefined = endId;
+  while (cur !== undefined) {
+    const edge = prevEdge.get(cur);
+    steps.unshift({ nodeId: cur, edgeSource: edge?.source ?? "start", distanceM: dist.get(cur)!, nwbInfo: edge?.nwbInfo });
+    cur = prevNode.get(cur);
+  }
+
+  let goknoopEdgeCount = 0;
+  let nwbEdgeCount = 0;
+  let connectorCount = 0;
+  for (const s of steps) {
+    if (s.edgeSource === "goknoop") goknoopEdgeCount++;
+    else if (s.edgeSource === "nwb") nwbEdgeCount++;
+    else if (s.edgeSource === "connector") connectorCount++;
+  }
+
+  return { found: true, distanceM: dist.get(endId)!, steps, goknoopEdgeCount, nwbEdgeCount, connectorCount };
+}

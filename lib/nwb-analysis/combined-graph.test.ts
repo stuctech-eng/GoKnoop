@@ -1,0 +1,120 @@
+import { describe, it, expect } from "vitest";
+import { buildCombinedGraph, dijkstraOnCombinedGraph } from "./combined-graph";
+import type { GraphProvider, GraphNode, GraphEdge } from "../route-engine/types";
+import type { NwbSegment } from "./nwb-client";
+
+/** Minimale fake GraphProvider, zelfde patroon als bridge-augmented-graph-provider.test.ts. */
+class FakeGraphProvider implements GraphProvider {
+  constructor(
+    private readonly nodes: Map<string, GraphNode>,
+    private readonly edgesByNode: Map<string, GraphEdge[]>
+  ) {}
+  async load(): Promise<void> {}
+  getNode(nodeId: string): GraphNode | undefined {
+    return this.nodes.get(nodeId);
+  }
+  getAllNodeIds(): string[] {
+    return [...this.nodes.keys()];
+  }
+  getEdgesFrom(nodeId: string): GraphEdge[] {
+    return this.edgesByNode.get(nodeId) || [];
+  }
+}
+
+function makeNode(id: string, x: number, y: number): GraphNode {
+  return { id, x, y, displayNumber: id } as GraphNode;
+}
+
+describe("combined-graph", () => {
+  it("vindt GEEN route tussen twee volledig gescheiden GoKnoop-clusters zonder NWB (controlegeval)", () => {
+    // Cluster A: knoop 1-2 verbonden. Cluster B: knoop 3-4 verbonden. Geen enkele
+    // GoKnoop-verbinding tussen de twee clusters -- exact zoals het huidige,
+    // echte Amsterdam/Hilversum-probleem.
+    const nodes = new Map<string, GraphNode>([
+      ["1", makeNode("1", 0, 0)],
+      ["2", makeNode("2", 100, 0)],
+      ["3", makeNode("3", 100000, 0)], // ver weg, apart cluster
+      ["4", makeNode("4", 100100, 0)],
+    ]);
+    const edges = new Map<string, GraphEdge[]>([
+      ["1", [{ id: "e1", fromLogicalNodeId: "1", toLogicalNodeId: "2", distanceM: 100, directionality: "unknown", geometry: [] }]],
+      ["2", [{ id: "e1", fromLogicalNodeId: "2", toLogicalNodeId: "1", distanceM: 100, directionality: "unknown", geometry: [] }]],
+      ["3", [{ id: "e2", fromLogicalNodeId: "3", toLogicalNodeId: "4", distanceM: 100, directionality: "unknown", geometry: [] }]],
+      ["4", [{ id: "e2", fromLogicalNodeId: "4", toLogicalNodeId: "3", distanceM: 100, directionality: "unknown", geometry: [] }]],
+    ]);
+    const provider = new FakeGraphProvider(nodes, edges);
+
+    const graph = buildCombinedGraph(provider, [], 5, { minX: -1000, minY: -1000, maxX: 200000, maxY: 1000 });
+    const result = dijkstraOnCombinedGraph(graph, "1", "4");
+    expect(result.found).toBe(false);
+  });
+
+  it("vindt WEL een route wanneer een NWB-segment de twee clusters verbindt", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["1", makeNode("1", 0, 0)],
+      ["2", makeNode("2", 100, 0)],
+      ["3", makeNode("3", 100000, 0)],
+      ["4", makeNode("4", 100100, 0)],
+    ]);
+    const edges = new Map<string, GraphEdge[]>([
+      ["1", [{ id: "e1", fromLogicalNodeId: "1", toLogicalNodeId: "2", distanceM: 100, directionality: "unknown", geometry: [] }]],
+      ["2", [{ id: "e1", fromLogicalNodeId: "2", toLogicalNodeId: "1", distanceM: 100, directionality: "unknown", geometry: [] }]],
+      ["3", [{ id: "e2", fromLogicalNodeId: "3", toLogicalNodeId: "4", distanceM: 100, directionality: "unknown", geometry: [] }]],
+      ["4", [{ id: "e2", fromLogicalNodeId: "4", toLogicalNodeId: "3", distanceM: 100, directionality: "unknown", geometry: [] }]],
+    ]);
+    const provider = new FakeGraphProvider(nodes, edges);
+
+    // NWB-segment van vlak bij knoop 2 (binnen 5m) naar vlak bij knoop 3 (binnen 5m).
+    const nwbSegments: NwbSegment[] = [
+      {
+        id: "nwb1",
+        bstCode: "FP",
+        wegnummer: null,
+        straatnaam: "Testpad",
+        wegbeheerder: null,
+        coordinates: [
+          { x: 103, y: 0 }, // 3m van knoop 2
+          { x: 50000, y: 0 },
+          { x: 99997, y: 0 }, // 3m van knoop 3
+        ],
+      },
+    ];
+
+    const graph = buildCombinedGraph(provider, nwbSegments, 5, { minX: -1000, minY: -1000, maxX: 200000, maxY: 1000 });
+    const result = dijkstraOnCombinedGraph(graph, "1", "4");
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.nwbEdgeCount).toBeGreaterThan(0);
+      expect(result.connectorCount).toBeGreaterThan(0);
+      expect(result.goknoopEdgeCount).toBeGreaterThan(0);
+      // Totale afstand moet ongeveer kloppen: 100 (GoKnoop 1->2) + ~99897 (NWB) + 100 (GoKnoop 3->4) + connectors
+      expect(result.distanceM).toBeGreaterThan(90000);
+      expect(result.distanceM).toBeLessThan(110000);
+    }
+  });
+
+  it("maakt GEEN connector als de afstand groter is dan de tolerantie", () => {
+    const nodes = new Map<string, GraphNode>([["1", makeNode("1", 0, 0)]]);
+    const edges = new Map<string, GraphEdge[]>([["1", []]]);
+    const provider = new FakeGraphProvider(nodes, edges);
+
+    const nwbSegments: NwbSegment[] = [
+      {
+        id: "nwb1",
+        bstCode: "FP",
+        wegnummer: null,
+        straatnaam: null,
+        wegbeheerder: null,
+        coordinates: [
+          { x: 50, y: 0 }, // 50m van knoop 1 -- ruim buiten een 5m-tolerantie
+          { x: 100, y: 0 },
+        ],
+      },
+    ];
+
+    const graph = buildCombinedGraph(provider, nwbSegments, 5, { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 });
+    const result = dijkstraOnCombinedGraph(graph, "1", "nwb:nwb1:from");
+    // Geen connector binnen 5m -- knoop 1 moet dus geïsoleerd blijven van het NWB-segment.
+    expect(result.found).toBe(false);
+  });
+});
