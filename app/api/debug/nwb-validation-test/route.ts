@@ -118,6 +118,8 @@ export async function GET(req: NextRequest) {
         segmentenOpgehaald: setAResult.segments.length,
         numberMatched: setAResult.numberMatched,
         truncated: setAResult.truncated,
+        debugCqlFilter: setAResult.debugCqlFilter,
+        debugFirstFeatureKeys: setAResult.debugFirstFeatureKeys,
         components: setAComponents,
       },
       setB: {
@@ -125,6 +127,8 @@ export async function GET(req: NextRequest) {
         segmentenOpgehaald: setBResult.segments.length,
         numberMatched: setBResult.numberMatched,
         truncated: setBResult.truncated,
+        debugCqlFilter: setBResult.debugCqlFilter,
+        debugFirstFeatureKeys: setBResult.debugFirstFeatureKeys,
         components: setBComponents,
       },
       goknoop: {

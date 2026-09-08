@@ -33,7 +33,7 @@ export async function fetchNwbSegments(
   bbox: { minX: number; minY: number; maxX: number; maxY: number },
   bstCodes: string[],
   maxFeatures = 5000
-): Promise<{ segments: NwbSegment[]; numberMatched: number; truncated: boolean }> {
+): Promise<{ segments: NwbSegment[]; numberMatched: number; truncated: boolean; debugCqlFilter: string; debugFirstFeatureKeys: string[] }> {
   const bstFilter = bstCodes.map((c) => `'${c}'`).join(",");
   const cqlFilter = `BST_CODE IN (${bstFilter}) AND BBOX(geometrie,${bbox.minX},${bbox.minY},${bbox.maxX},${bbox.maxY})`;
 
@@ -70,7 +70,12 @@ export async function fetchNwbSegments(
     throw new Error(`NWB-WFS gaf status ${res.status}: ${body.slice(0, 300)}`);
   }
 
-  const geojson = (await res.json()) as {
+  const rawText = await res.text();
+  // TOEGEVOEGD 8-9-2026, diagnostisch: als GeoServer een foutmelding teruggeeft
+  // (bv. onbekend veld in CQL_FILTER), is dat vaak GEEN geldige JSON met
+  // `features` -- expliciet checken i.p.v. dit stilzwijgend als "0 features"
+  // te laten doorglippen.
+  let geojson: {
     features: {
       id: string;
       properties: Record<string, unknown>;
@@ -79,6 +84,14 @@ export async function fetchNwbSegments(
     numberMatched?: number;
     numberReturned?: number;
   };
+  try {
+    geojson = JSON.parse(rawText);
+  } catch {
+    throw new Error(`NWB-WFS gaf geen geldige JSON terug -- vermoedelijk een GeoServer-foutmelding op de CQL_FILTER. Eerste 500 tekens: ${rawText.slice(0, 500)}`);
+  }
+  if (!Array.isArray(geojson.features)) {
+    throw new Error(`NWB-WFS-respons had geen 'features'-array -- vermoedelijk een foutmelding. Eerste 500 tekens: ${rawText.slice(0, 500)}`);
+  }
 
   const segments: NwbSegment[] = [];
   for (const f of geojson.features) {
@@ -106,5 +119,7 @@ export async function fetchNwbSegments(
     segments,
     numberMatched: geojson.numberMatched ?? segments.length,
     truncated: (geojson.numberMatched ?? segments.length) > segments.length,
+    debugCqlFilter: cqlFilter,
+    debugFirstFeatureKeys: geojson.features[0] ? Object.keys(geojson.features[0].properties) : [],
   };
 }
