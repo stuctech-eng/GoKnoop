@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
-import { fetchNwbSegments } from "@/lib/nwb-analysis/nwb-client";
-import { SET_A_BST_CODES, SET_B_BST_CODES } from "@/lib/nwb-analysis/classify";
+import { fetchAllNwbSegmentsInBbox } from "@/lib/nwb-analysis/nwb-client";
+import { classifySegment } from "@/lib/nwb-analysis/classify";
 import { analyzeNwbGraph } from "@/lib/nwb-analysis/graph-analysis";
 
 export const maxDuration = 10;
@@ -12,14 +12,16 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/debug/nwb-validation-test?region=hilversum|lochem|volendam&datasetVersionId=...
  *
- * TIJDELIJKE, puur lezende validatietest (8-9-2026, "GoKnoop -- NWB
- * ruimtelijke validatietest"). GEEN productiecode gewijzigd, GEEN Bridge
- * Layer geactiveerd, GEEN wijziging aan isTraversable() of de bestaande
- * graph. Eén regio per aanroep, om ruim binnen de Vercel-10s-limiet te
- * blijven -- Fase 1 van de gevraagde test: NWB-connectiviteit + koppeling
- * aan bestaande GoKnoop-knooppunten. De daadwerkelijke gecombineerde-graaf-
- * routetest (sectie 7-9 van de opdracht) is een logische vervolgstap, hier
- * bewust nog niet gebouwd totdat Fase 1 laat zien of dat de moeite waard is.
+ * TIJDELIJKE, puur lezende validatietest (8-9-2026). GEEN productiecode
+ * gewijzigd, GEEN Bridge Layer geactiveerd, GEEN wijziging aan
+ * isTraversable() of de bestaande graph.
+ *
+ * HERZIEN 8-9-2026: haalt nu ALLE wegvakken in de bbox op (ongefilterd,
+ * standaard bbox-parameter -- zie nwb-client.ts voor waarom CQL_FILTER is
+ * losgelaten) en classificeert client-side naar Set A/B (classify.ts).
+ * Rapporteert ook de ruwe bstCode-verdeling als sanity-check: als die
+ * gevarieerd is (niet 1 dominant getal, en verschillend per regio), weten
+ * we zeker dat de data nu wél regio-specifiek en betrouwbaar is.
  */
 
 const REGIONS: Record<string, { label: string; latMin: number; latMax: number; lonMin: number; lonMax: number }> = {
@@ -65,17 +67,23 @@ export async function GET(req: NextRequest) {
       maxY: Math.max(...corners.map((c) => c.y)),
     };
 
-    // NWB Set A en Set B parallel ophalen.
-    const [setAResult, setBResult] = await Promise.all([
-      fetchNwbSegments(bbox, SET_A_BST_CODES, 5000),
-      fetchNwbSegments(bbox, SET_B_BST_CODES, 5000),
-    ]);
+    const { segments: allSegments, pagesRetrieved, truncated, debugFirstFeatureKeys } = await fetchAllNwbSegmentsInBbox(bbox, 3);
 
-    // Component-analyse bij 3 tolerantieniveaus, voor beide sets.
-    const setAComponents = Object.fromEntries(SNAP_TOLERANCES_M.map((t) => [`${t}m`, analyzeNwbGraph(setAResult.segments, t)]));
-    const setBComponents = Object.fromEntries(SNAP_TOLERANCES_M.map((t) => [`${t}m`, analyzeNwbGraph(setBResult.segments, t)]));
+    // Sanity-check: verdeling van ruwe bstCode-waarden -- als dit gevarieerd
+    // is (niet gedomineerd door 1 vaste waarde), bevestigt dat de data nu
+    // echt uit deze regio komt, niet een generieke standaardset.
+    const bstCodeDistribution: Record<string, number> = {};
+    for (const s of allSegments) {
+      const code = s.bstCode ?? "(leeg)";
+      bstCodeDistribution[code] = (bstCodeDistribution[code] || 0) + 1;
+    }
 
-    // Bestaande GoKnoop logicalNodes binnen dezelfde bbox laden.
+    const setASegments = allSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) === "setA");
+    const setBSegments = allSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded"); // setA + setB samen
+
+    const setAComponents = Object.fromEntries(SNAP_TOLERANCES_M.map((t) => [`${t}m`, analyzeNwbGraph(setASegments, t)]));
+    const setBComponents = Object.fromEntries(SNAP_TOLERANCES_M.map((t) => [`${t}m`, analyzeNwbGraph(setBSegments, t)]));
+
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
     const allNodeIds = provider.getAllNodeIds();
@@ -88,10 +96,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Koppeling: voor elke tolerantie, hoeveel GoKnoop-knopen liggen binnen die
-    // afstand van TEN MINSTE ÉÉN NWB Set B-segment-eindpunt (Set B is de ruimere,
-    // dus een superset van wat Set A zou opleveren).
-    const nwbEndpoints = setBResult.segments.flatMap((s) =>
+    const nwbEndpoints = setBSegments.flatMap((s) =>
       s.coordinates.length >= 2 ? [s.coordinates[0], s.coordinates[s.coordinates.length - 1]] : []
     );
     const proximityResults: Record<string, number> = {};
@@ -113,22 +118,21 @@ export async function GET(req: NextRequest) {
         licentie: "CC0 (rechtstreeks bevestigd via WFS AccessConstraints, 8-9-2026)",
         typeName: "nwbwegen:wegvakken",
       },
+      ruweData: {
+        segmentenOpgehaald: allSegments.length,
+        paginasOpgehaald: pagesRetrieved,
+        truncated,
+        bstCodeVerdeling: bstCodeDistribution,
+        debugFirstFeatureKeys,
+      },
       setA: {
-        bstCodes: SET_A_BST_CODES,
-        segmentenOpgehaald: setAResult.segments.length,
-        numberMatched: setAResult.numberMatched,
-        truncated: setAResult.truncated,
-        debugCqlFilter: setAResult.debugCqlFilter,
-        debugFirstFeatureKeys: setAResult.debugFirstFeatureKeys,
+        omschrijving: "BST_CODE = FP (fietspad, conservatief)",
+        segmentCount: setASegments.length,
         components: setAComponents,
       },
       setB: {
-        bstCodes: SET_B_BST_CODES,
-        segmentenOpgehaald: setBResult.segments.length,
-        numberMatched: setBResult.numberMatched,
-        truncated: setBResult.truncated,
-        debugCqlFilter: setBResult.debugCqlFilter,
-        debugFirstFeatureKeys: setBResult.debugFirstFeatureKeys,
+        omschrijving: "FP + HR + RB, min. autosnelwegen/busbanen (ruim)",
+        segmentCount: setBSegments.length,
         components: setBComponents,
       },
       goknoop: {

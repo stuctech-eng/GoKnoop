@@ -5,14 +5,22 @@
  * import. Haalt NWB-wegvakken op via de publieke, ongeauthenticeerde
  * PDOK-WFS-dienst (CC0, rechtstreeks bevestigd via de dienst zelf, 8-9-2026).
  *
- * Server-side attribuutfilter (CQL_FILTER op BST_CODE) i.p.v. alles ophalen
- * en achteraf filteren -- scheelt aanzienlijk in datavolume, en is preciezer
- * dan een naïeve "alles wat een weg is"-aanname (zie classify.ts voor de
- * volledige onderbouwing van welke BST_CODE-waarden zijn meegenomen).
+ * HERZIEN 8-9-2026: eerdere versie gebruikte CQL_FILTER (BST_CODE + BBOX in
+ * één server-side filter) -- dat bleek stilzwijgend genegeerd te worden
+ * (identieke resultaten voor 3 totaal verschillende regio's, ondanks een
+ * correcte veldnaam-fix). CQL_FILTER is een GeoServer-VENDOR-extensie, geen
+ * officiële WFS-standaard -- deze dienst ondersteunt 'm vermoedelijk niet,
+ * en negeert een onherkende parameter blijkbaar stil i.p.v. een fout te
+ * geven. Nu uitsluitend de standaard, universeel ondersteunde `bbox`-
+ * queryparameter (WFS 2.0-spec) voor ruimtelijke filtering; BST_CODE-
+ * classificatie gebeurt hierna client-side (classify.ts) op de ruwe,
+ * ongefilterde resultaten -- geen afhankelijkheid meer van een onzekere
+ * server-side filtersyntax.
  */
 
 const NWB_WFS_BASE = "https://service.pdok.nl/rws/nwbwegen/wfs/v1_0";
 const NWB_TYPE_NAME = "nwbwegen:wegvakken";
+const PAGE_SIZE = 1000; // bevestigd server-side maximum (CountDefault in Capabilities)
 
 export type NwbSegment = {
   id: string;
@@ -24,26 +32,10 @@ export type NwbSegment = {
   coordinates: { x: number; y: number }[];
 };
 
-/**
- * Haalt NWB-wegvakken op binnen een RD-bounding box, met een BST_CODE-filter
- * (bv. "FP" of "FP,HR,RB"). GeoJSON-output (PDOK ondersteunt dit rechtstreeks)
- * -- veel eenvoudiger te verwerken dan GML.
- */
-export async function fetchNwbSegments(
+async function fetchPage(
   bbox: { minX: number; minY: number; maxX: number; maxY: number },
-  bstCodes: string[],
-  maxFeatures = 5000
-): Promise<{ segments: NwbSegment[]; numberMatched: number; truncated: boolean; debugCqlFilter: string; debugFirstFeatureKeys: string[] }> {
-  const bstFilter = bstCodes.map((c) => `'${c}'`).join(",");
-  // TOEGEVOEGD 8-9-2026: veldnamen gecorrigeerd naar camelCase, bevestigd via
-  // een daadwerkelijk ontvangen feature (debugFirstFeatureKeys) -- de eerdere
-  // hoofdletter-aanname (BST_CODE) bestond niet als veld, waardoor GeoServer
-  // vermoedelijk stilzwijgend terugviel op een ongefilterde standaardset (dat
-  // verklaarde de identieke resultaten over alle regio's heen). BBOX zonder
-  // expliciete geometrie-veldnaam -- GeoServer's standaardvorm (herkent de
-  // primaire geometriekolom automatisch), voorkomt nog een gok over die naam.
-  const cqlFilter = `bstCode IN (${bstFilter}) AND BBOX(${bbox.minX},${bbox.minY},${bbox.maxX},${bbox.maxY})`;
-
+  startIndex: number
+): Promise<{ segments: NwbSegment[]; returned: number; rawFirstFeatureKeys: string[] }> {
   const params = new URLSearchParams({
     service: "WFS",
     version: "2.0.0",
@@ -51,8 +43,9 @@ export async function fetchNwbSegments(
     typeNames: NWB_TYPE_NAME,
     outputFormat: "application/json",
     srsName: "EPSG:28992",
-    count: String(maxFeatures),
-    CQL_FILTER: cqlFilter,
+    bbox: `${bbox.minX},${bbox.minY},${bbox.maxX},${bbox.maxY}`,
+    count: String(PAGE_SIZE),
+    startIndex: String(startIndex),
   });
 
   const controller = new AbortController();
@@ -78,32 +71,24 @@ export async function fetchNwbSegments(
   }
 
   const rawText = await res.text();
-  // TOEGEVOEGD 8-9-2026, diagnostisch: als GeoServer een foutmelding teruggeeft
-  // (bv. onbekend veld in CQL_FILTER), is dat vaak GEEN geldige JSON met
-  // `features` -- expliciet checken i.p.v. dit stilzwijgend als "0 features"
-  // te laten doorglippen.
   let geojson: {
     features: {
       id: string;
       properties: Record<string, unknown>;
       geometry: { type: string; coordinates: number[][] | number[][][] };
     }[];
-    numberMatched?: number;
-    numberReturned?: number;
   };
   try {
     geojson = JSON.parse(rawText);
   } catch {
-    throw new Error(`NWB-WFS gaf geen geldige JSON terug -- vermoedelijk een GeoServer-foutmelding op de CQL_FILTER. Eerste 500 tekens: ${rawText.slice(0, 500)}`);
+    throw new Error(`NWB-WFS gaf geen geldige JSON terug. Eerste 500 tekens: ${rawText.slice(0, 500)}`);
   }
   if (!Array.isArray(geojson.features)) {
-    throw new Error(`NWB-WFS-respons had geen 'features'-array -- vermoedelijk een foutmelding. Eerste 500 tekens: ${rawText.slice(0, 500)}`);
+    throw new Error(`NWB-WFS-respons had geen 'features'-array. Eerste 500 tekens: ${rawText.slice(0, 500)}`);
   }
 
   const segments: NwbSegment[] = [];
   for (const f of geojson.features) {
-    // MultiLineString of LineString -- beide voorkomen in NWB, hier plat naar één puntenlijst
-    // per segment (voor deze analyse is de exacte multi-part-structuur niet relevant).
     let coords: number[][];
     if (f.geometry.type === "LineString") {
       coords = f.geometry.coordinates as number[][];
@@ -122,11 +107,36 @@ export async function fetchNwbSegments(
     });
   }
 
+  return { segments, returned: geojson.features.length, rawFirstFeatureKeys: geojson.features[0] ? Object.keys(geojson.features[0].properties) : [] };
+}
+
+/**
+ * Haalt ALLE NWB-wegvakken op binnen een RD-bounding box (ongefilterd op
+ * BST_CODE -- die classificatie gebeurt door de aanroeper, zie classify.ts),
+ * gepagineerd tot `maxPages` pagina's van 1000. Rapporteert expliciet of er
+ * meer beschikbaar was dan opgehaald (afgekapt door maxPages, niet stil
+ * genegeerd).
+ */
+export async function fetchAllNwbSegmentsInBbox(
+  bbox: { minX: number; minY: number; maxX: number; maxY: number },
+  maxPages = 3
+): Promise<{ segments: NwbSegment[]; pagesRetrieved: number; truncated: boolean; debugFirstFeatureKeys: string[] }> {
+  const allSegments: NwbSegment[] = [];
+  let debugFirstFeatureKeys: string[] = [];
+  let page = 0;
+  for (; page < maxPages; page++) {
+    const { segments, returned, rawFirstFeatureKeys } = await fetchPage(bbox, page * PAGE_SIZE);
+    if (page === 0) debugFirstFeatureKeys = rawFirstFeatureKeys;
+    allSegments.push(...segments);
+    if (returned < PAGE_SIZE) {
+      page++;
+      break;
+    }
+  }
   return {
-    segments,
-    numberMatched: geojson.numberMatched ?? segments.length,
-    truncated: (geojson.numberMatched ?? segments.length) > segments.length,
-    debugCqlFilter: cqlFilter,
-    debugFirstFeatureKeys: geojson.features[0] ? Object.keys(geojson.features[0].properties) : [],
+    segments: allSegments,
+    pagesRetrieved: page,
+    truncated: page === maxPages,
+    debugFirstFeatureKeys,
   };
 }
