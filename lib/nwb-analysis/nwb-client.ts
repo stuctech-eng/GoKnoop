@@ -35,7 +35,14 @@ export async function fetchNwbSegments(
   maxFeatures = 5000
 ): Promise<{ segments: NwbSegment[]; numberMatched: number; truncated: boolean; debugCqlFilter: string; debugFirstFeatureKeys: string[] }> {
   const bstFilter = bstCodes.map((c) => `'${c}'`).join(",");
-  const cqlFilter = `BST_CODE IN (${bstFilter}) AND BBOX(geometrie,${bbox.minX},${bbox.minY},${bbox.maxX},${bbox.maxY})`;
+  // TOEGEVOEGD 8-9-2026: veldnamen gecorrigeerd naar camelCase, bevestigd via
+  // een daadwerkelijk ontvangen feature (debugFirstFeatureKeys) -- de eerdere
+  // hoofdletter-aanname (BST_CODE) bestond niet als veld, waardoor GeoServer
+  // vermoedelijk stilzwijgend terugviel op een ongefilterde standaardset (dat
+  // verklaarde de identieke resultaten over alle regio's heen). BBOX zonder
+  // expliciete geometrie-veldnaam -- GeoServer's standaardvorm (herkent de
+  // primaire geometriekolom automatisch), voorkomt nog een gok over die naam.
+  const cqlFilter = `bstCode IN (${bstFilter}) AND BBOX(${bbox.minX},${bbox.minY},${bbox.maxX},${bbox.maxY})`;
 
   const params = new URLSearchParams({
     service: "WFS",
@@ -107,10 +114,10 @@ export async function fetchNwbSegments(
     }
     segments.push({
       id: f.id,
-      bstCode: (f.properties.BST_CODE as string) ?? null,
-      wegnummer: (f.properties.WEGNUMMER as string) ?? null,
-      straatnaam: (f.properties.STRAATNAAM as string) ?? null,
-      wegbeheerder: (f.properties.WEGBEHEERDER as string) ?? null,
+      bstCode: (f.properties.bstCode as string) ?? null,
+      wegnummer: (f.properties.wegnummer as string) ?? null,
+      straatnaam: (f.properties.sttNaam as string) ?? null,
+      wegbeheerder: (f.properties.wegbehnaam as string) ?? null,
       coordinates: coords.map(([x, y]) => ({ x, y })),
     });
   }
