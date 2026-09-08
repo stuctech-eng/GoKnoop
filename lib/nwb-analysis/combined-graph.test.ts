@@ -136,4 +136,34 @@ describe("combined-graph", () => {
       expect(result.distanceM).toBe((CHAIN_LENGTH - 1) * 10);
     }
   });
+
+  it("navigeert correct vanaf de 'to'-kant van een gedeeld edge-object (regressietest voor de zelf-lus-bug)", () => {
+    // TOEGEVOEGD 8-9-2026: de echte FirestoreGraphProvider indexeert ÉÉN
+    // edge-object onder ZOWEL fromLogicalNodeId als toLogicalNodeId (voor
+    // bidirectionele toegang, zie firestore-graph-provider.ts addEdgeIndex).
+    // Dit scenario -- hetzelfde edge-object teruggegeven vanaf de 'to'-kant --
+    // ontbrak in de eerdere tests (die gebruikten per richting een apart,
+    // al-correct-georiënteerd edge-object) en verborg daardoor een echte bug:
+    // blind e.toLogicalNodeId als bestemming gebruiken werd dan een lus naar
+    // zichzelf i.p.v. een verbinding naar de overkant.
+    const sharedEdge: GraphEdge = { id: "e1", fromLogicalNodeId: "1", toLogicalNodeId: "2", distanceM: 50, directionality: "unknown", geometry: [] };
+    const nodes2 = new Map<string, GraphNode>([
+      ["1", makeNode("1", 0, 0)],
+      ["2", makeNode("2", 50, 0)],
+    ]);
+    const edges2 = new Map<string, GraphEdge[]>([
+      ["1", [sharedEdge]], // zelfde object
+      ["2", [sharedEdge]], // zelfde object, vanaf de 'to'-kant opgevraagd
+    ]);
+    const provider2 = new FakeGraphProvider(nodes2, edges2);
+    const graph2 = buildCombinedGraph(provider2, [], 5, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
+
+    const edgesFrom2 = graph2.adjacency.get("2") ?? [];
+    expect(edgesFrom2.some((e) => e.to === "1")).toBe(true);
+    expect(edgesFrom2.some((e) => e.to === "2")).toBe(false); // geen lus naar zichzelf
+
+    const result2 = dijkstraOnCombinedGraph(graph2, "2", "1");
+    expect(result2.found).toBe(true);
+    if (result2.found) expect(result2.distanceM).toBe(50);
+  });
 });

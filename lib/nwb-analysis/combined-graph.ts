@@ -93,7 +93,17 @@ export function buildCombinedGraph(
     if (!n) continue;
     nodePosition.set(id, { x: n.x, y: n.y, source: "goknoop" });
     for (const e of provider.getEdgesFrom(id)) {
-      addEdge(id, e.toLogicalNodeId, { to: e.toLogicalNodeId, distanceM: e.distanceM, source: "goknoop" });
+      // KRITIEKE FIX (8-9-2026): de bestaande FirestoreGraphProvider indexeert
+      // elke edge onder ZOWEL fromLogicalNodeId als toLogicalNodeId (voor
+      // bidirectionele toegang). Blind e.toLogicalNodeId als bestemming
+      // aannemen is dus fout zodra je de edge van de "to"-kant bekijkt -- dan
+      // IS e.toLogicalNodeId gewoon het huidige knooppunt zelf, en ontstaat
+      // een lus naar zichzelf i.p.v. een echte verbinding naar de overkant.
+      // Dit brak grofweg de helft van alle GoKnoop-verbindingen in deze
+      // tijdelijke graaf (ontdekt na een onverklaarbare "geen route
+      // gevonden"-uitkomst bij alle drie de toleranties).
+      const otherEnd = e.fromLogicalNodeId === id ? e.toLogicalNodeId : e.fromLogicalNodeId;
+      addEdge(id, otherEnd, { to: otherEnd, distanceM: e.distanceM, source: "goknoop" });
     }
   }
 
