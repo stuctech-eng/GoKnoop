@@ -11,6 +11,40 @@ type NwbSegment = {
   coordinates: { x: number; y: number }[];
 };
 
+type SlimNwbSegment = {
+  id: string;
+  bstCode: string | null;
+  wegnummer: string | null;
+  straatnaam: string | null;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  lengthM: number;
+};
+
+/**
+ * TOEGEVOEGD 8-9-2026, ná een daadwerkelijke 413 FUNCTION_PAYLOAD_TOO_LARGE:
+ * de volledige geometrie is te veel data om in één POST te versturen bij
+ * ~16.000 segmenten. Reken de ECHTE lengte hier (met de volledige geometrie,
+ * die we al lokaal hebben) vast uit, en stuur daarna alleen de twee
+ * eindpunten + die lengte door -- scheelt een veelvoud aan databytes zonder
+ * nauwkeurigheid te verliezen.
+ */
+function toSlim(seg: NwbSegment): SlimNwbSegment {
+  let lengthM = 0;
+  for (let i = 1; i < seg.coordinates.length; i++) {
+    lengthM += Math.hypot(seg.coordinates[i].x - seg.coordinates[i - 1].x, seg.coordinates[i].y - seg.coordinates[i - 1].y);
+  }
+  return {
+    id: seg.id,
+    bstCode: seg.bstCode,
+    wegnummer: seg.wegnummer,
+    straatnaam: seg.straatnaam,
+    from: seg.coordinates[0],
+    to: seg.coordinates[seg.coordinates.length - 1],
+    lengthM,
+  };
+}
+
 export default function NwbCombinedRouteTestPage() {
   const [datasetVersionId, setDatasetVersionId] = useState("uINZ3y2QsgBdEyky3duq");
   const [fromNodeId, setFromNodeId] = useState("CJSXBPUMG49vOPmYvhJd");
@@ -66,7 +100,9 @@ export default function NwbCombinedRouteTestPage() {
       setLog((prev) => [...prev, `Alle tegels opgehaald. ${segmentsById.size} unieke NWB-segmenten totaal. ${anyTruncated ? "⚠️ Minstens 1 tegel was afgekapt." : "Alle tegels compleet."}`]);
       setStatus("route");
 
-      const nwbSegments = Array.from(segmentsById.values());
+      const fullSegments = Array.from(segmentsById.values());
+      const nwbSegments = fullSegments.map(toSlim);
+      setLog((prev) => [...prev, `Omgezet naar slank formaat (alleen eindpunten + lengte, geen volledige geometrie) -- voorkomt de eerdere 413-payloadfout.`]);
       const resultatenPerTolerantie: Record<string, unknown> = {};
       for (const tol of [2, 5, 10]) {
         setLog((prev) => [...prev, `Gecombineerde graaf bouwen en Dijkstra draaien (${tol}m)...`]);

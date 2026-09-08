@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
-import { buildCombinedGraph, dijkstraOnCombinedGraph } from "@/lib/nwb-analysis/combined-graph";
-import type { NwbSegment } from "@/lib/nwb-analysis/nwb-client";
+import { buildCombinedGraph, dijkstraOnCombinedGraph, type SlimNwbSegment } from "@/lib/nwb-analysis/combined-graph";
 
 export const maxDuration = 10;
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/debug/nwb-combined-route-test
- * Body: { datasetVersionId, from, to, nwbSegments: NwbSegment[], toleranceM }
+ * Body: { datasetVersionId, from, to, nwbSegments: SlimNwbSegment[], toleranceM }
  *
  * TIJDELIJKE, puur lezende beslissende test (8-9-2026). GEEN productiecode
  * gewijzigd, GEEN database geschreven, GEEN Bridge Layer/rijrichting
@@ -32,7 +31,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  let body: { datasetVersionId?: string; from?: string; to?: string; nwbSegments?: NwbSegment[]; toleranceM?: number };
+  let body: { datasetVersionId?: string; from?: string; to?: string; nwbSegments?: SlimNwbSegment[]; toleranceM?: number };
   try {
     body = await req.json();
   } catch {
@@ -62,7 +61,7 @@ export async function POST(req: NextRequest) {
     // te zoeken (daar is toch geen NWB-data verzameld).
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const s of nwbSegments) {
-      for (const c of s.coordinates) {
+      for (const c of [s.from, s.to]) {
         if (c.x < minX) minX = c.x;
         if (c.x > maxX) maxX = c.x;
         if (c.y < minY) minY = c.y;

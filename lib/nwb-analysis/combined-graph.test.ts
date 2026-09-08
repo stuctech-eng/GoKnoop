@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildCombinedGraph, dijkstraOnCombinedGraph } from "./combined-graph";
 import type { GraphProvider, GraphNode, GraphEdge } from "../route-engine/types";
-import type { NwbSegment } from "./nwb-client";
+import type { SlimNwbSegment } from "./combined-graph";
 
 /** Minimale fake GraphProvider, zelfde patroon als bridge-augmented-graph-provider.test.ts. */
 class FakeGraphProvider implements GraphProvider {
@@ -65,18 +65,15 @@ describe("combined-graph", () => {
     const provider = new FakeGraphProvider(nodes, edges);
 
     // NWB-segment van vlak bij knoop 2 (binnen 5m) naar vlak bij knoop 3 (binnen 5m).
-    const nwbSegments: NwbSegment[] = [
+    const nwbSegments: SlimNwbSegment[] = [
       {
         id: "nwb1",
         bstCode: "FP",
         wegnummer: null,
         straatnaam: "Testpad",
-        wegbeheerder: null,
-        coordinates: [
-          { x: 103, y: 0 }, // 3m van knoop 2
-          { x: 50000, y: 0 },
-          { x: 99997, y: 0 }, // 3m van knoop 3
-        ],
+        from: { x: 103, y: 0 }, // 3m van knoop 2
+        to: { x: 99997, y: 0 }, // 3m van knoop 3
+        lengthM: 99894, // reële padlengte (kan afwijken van de rechte-lijn-afstand, hier gelijk voor eenvoud)
       },
     ];
 
@@ -98,17 +95,15 @@ describe("combined-graph", () => {
     const edges = new Map<string, GraphEdge[]>([["1", []]]);
     const provider = new FakeGraphProvider(nodes, edges);
 
-    const nwbSegments: NwbSegment[] = [
+    const nwbSegments: SlimNwbSegment[] = [
       {
         id: "nwb1",
         bstCode: "FP",
         wegnummer: null,
         straatnaam: null,
-        wegbeheerder: null,
-        coordinates: [
-          { x: 50, y: 0 }, // 50m van knoop 1 -- ruim buiten een 5m-tolerantie
-          { x: 100, y: 0 },
-        ],
+        from: { x: 50, y: 0 }, // 50m van knoop 1 -- ruim buiten een 5m-tolerantie
+        to: { x: 100, y: 0 },
+        lengthM: 50,
       },
     ];
 

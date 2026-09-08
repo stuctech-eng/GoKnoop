@@ -6,8 +6,27 @@
  */
 
 import type { GraphProvider } from "../route-engine/types";
-import type { NwbSegment } from "./nwb-client";
 import { classifySegment } from "./classify";
+
+/**
+ * TOEGEVOEGD 8-9-2026, ná een daadwerkelijke 413 FUNCTION_PAYLOAD_TOO_LARGE:
+ * de volledige, gedetailleerde NWB-geometrie (soms tientallen punten per
+ * segment) was te veel data voor één POST-aanvraag bij ~16.000 segmenten.
+ * Deze graafopbouw heeft die volledige vorm niet nodig -- alleen de twee
+ * eindpunten (voor het aan-elkaar-knopen) en de ECHTE lengte (voor de juiste
+ * afstand in Dijkstra, vooraf berekend uit de volledige geometrie vóórdat
+ * die geometrie zelf wordt weggelaten). Client-side (de orkestratiepagina)
+ * zet de volledige NwbSegment hiernaar om vlak vóór het versturen.
+ */
+export type SlimNwbSegment = {
+  id: string;
+  bstCode: string | null;
+  wegnummer: string | null;
+  straatnaam: string | null;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  lengthM: number;
+};
 
 export type CombinedEdgeSource = "goknoop" | "nwb" | "connector";
 
@@ -44,12 +63,6 @@ class UnionFind {
   }
 }
 
-function segmentLengthM(coords: { x: number; y: number }[]): number {
-  let total = 0;
-  for (let i = 1; i < coords.length; i++) total += Math.hypot(coords[i].x - coords[i - 1].x, coords[i].y - coords[i - 1].y);
-  return total;
-}
-
 /**
  * Bouwt de gecombineerde graaf. `nwbSegments` moet al Set B-geclassificeerd
  * zijn (of ruwer -- deze functie classificeert zelf nogmaals ter
@@ -61,7 +74,7 @@ function segmentLengthM(coords: { x: number; y: number }[]): number {
  */
 export function buildCombinedGraph(
   provider: GraphProvider,
-  nwbSegments: NwbSegment[],
+  nwbSegments: SlimNwbSegment[],
   toleranceM: number,
   connectorSearchBbox: { minX: number; minY: number; maxX: number; maxY: number }
 ): CombinedGraph {
@@ -85,17 +98,15 @@ export function buildCombinedGraph(
   }
 
   // 2. NWB-segmenten classificeren (Set B) en eindpunten snappen (Union-Find).
-  const setBSegments = nwbSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded" && s.coordinates.length >= 2);
+  const setBSegments = nwbSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded");
   const uf = new UnionFind();
   const pointKey = (segId: string, end: "from" | "to") => `${segId}:${end}`;
   const rawPoints: { key: string; x: number; y: number }[] = [];
   for (const seg of setBSegments) {
-    const from = seg.coordinates[0];
-    const to = seg.coordinates[seg.coordinates.length - 1];
     uf.add(pointKey(seg.id, "from"));
     uf.add(pointKey(seg.id, "to"));
-    rawPoints.push({ key: pointKey(seg.id, "from"), x: from.x, y: from.y });
-    rawPoints.push({ key: pointKey(seg.id, "to"), x: to.x, y: to.y });
+    rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y });
+    rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y });
   }
   // Grid-bucketing voor efficiënte snap-vergelijking (zelfde patroon als graph-analysis.ts).
   const grid = new Map<string, typeof rawPoints>();
@@ -134,7 +145,7 @@ export function buildCombinedGraph(
     const fromRoot = `nwb:${uf.find(pointKey(seg.id, "from"))}`;
     const toRoot = `nwb:${uf.find(pointKey(seg.id, "to"))}`;
     if (fromRoot === toRoot) continue; // lus op zichzelf, niet nuttig voor routering
-    const len = segmentLengthM(seg.coordinates);
+    const len = seg.lengthM;
     const info = { bstCode: seg.bstCode, straatnaam: seg.straatnaam, wegnummer: seg.wegnummer };
     addEdge(fromRoot, toRoot, { to: toRoot, distanceM: len, source: "nwb", nwbInfo: info });
     addEdge(toRoot, fromRoot, { to: fromRoot, distanceM: len, source: "nwb", nwbInfo: info });
