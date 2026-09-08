@@ -628,11 +628,17 @@ export async function GET(req: NextRequest) {
       }
 
       const batchStartTime = Date.now();
-      // Harde deadline (7-9-2026): 2s marge onder de Vercel Hobby 10s-limiet,
-      // voor het schrijven naar Firestore + antwoord-opbouw NA deze lus. Zie
-      // routeWithRetry() hierboven voor de volledige toelichting waarom dit
-      // nodig is naast de bestaande FUNCTION_TIME_BUDGET_MS-check.
-      const HARD_DEADLINE_MS = batchStartTime + 8000;
+      // Harde deadline (7-9-2026, herzien): 5s vanaf batchStartTime. Zo afgestemd
+      // op de nieuwe fetch-timeout in open-route-service-adapter.ts (2,5s per
+      // aanroep): een poging die net vóór deze deadline start, kan nog tot 2,5s
+      // duren -- dus in het slechtste geval is de ORS-aanroeplus rond de 7,5s
+      // vanaf batchStartTime klaar. Resteert nog marge voor de opzet-fase vóór
+      // batchStartTime (kandidaten/knoop-coördinaten laden) en het schrijven
+      // naar Firestore + antwoord-opbouw NA de lus, ruim binnen de Vercel Hobby
+      // 10s-harde-grens. Zie routeWithRetry() + de fetch-timeout hieronder voor
+      // de volledige toelichting waarom dit nodig is naast de bestaande
+      // FUNCTION_TIME_BUDGET_MS-check (die alleen TUSSEN items checkt).
+      const HARD_DEADLINE_MS = batchStartTime + 5000;
       const nowIso = new Date().toISOString();
       const results: StoredAttempt[] = [];
       let consecutiveProviderErrors = 0;

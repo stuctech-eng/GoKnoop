@@ -60,6 +60,20 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
     const orsProfile = ORS_PROFILE_MAP[profile];
     const url = `${this.baseUrl}/${orsProfile}/geojson`;
 
+    // TOEGEVOEGD 7-9-2026, n.a.v. een 504 FUNCTION_INVOCATION_TIMEOUT die
+    // bleef optreden ondanks een tijdsbudget-check in de aanroepende code
+    // (app/api/import/generate-bridges/route.ts): die check kon niet helpen
+    // omdat deze fetch() zelf GEEN timeout had -- een hangende verbinding
+    // (ORS reageert niet, sluit de socket niet netjes) liet de hele
+    // serverless-functie voor onbepaalde tijd wachten, tot Vercel 'm hard
+    // afbrak. AbortController hier zet een harde grens op de aanroep zelf,
+    // ruim onder de resterende tijd die de aanroepende code toestaat, zodat
+    // een hangende verbinding een nette, opvangbare `provider_error` wordt
+    // i.p.v. een ongecontroleerde platform-timeout.
+    const REQUEST_TIMEOUT_MS = 2500;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
     let res: Response;
     try {
       res = await fetch(url, {
@@ -75,9 +89,16 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
             [destination.lon, destination.lat],
           ],
         }),
+        signal: controller.signal,
       });
     } catch (err) {
-      return { reason: "provider_error", message: err instanceof Error ? err.message : String(err) };
+      const isTimeout = err instanceof Error && err.name === "AbortError";
+      return {
+        reason: "provider_error",
+        message: isTimeout ? `Geen antwoord van ORS binnen ${REQUEST_TIMEOUT_MS}ms (verbinding geforceerd afgebroken).` : err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (!res.ok) {
