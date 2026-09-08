@@ -70,26 +70,52 @@ export async function GET(req: NextRequest) {
     const endPoint = routeResult.geometry[routeResult.geometry.length - 1];
     const straightLineDistanceM = Math.hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y);
 
-    // Stap 2: het punt met de grootste loodrechte afwijking van de rechte lijn
-    // start->bestemming zoeken -- het vermoedelijke "breukpunt" van de omweg.
+    // Stap 2: TWEE punten bepalen, met verschillend doel.
+    //
+    // (a) Diepste punt (grootste loodrechte afwijking) -- puur informatief,
+    // laat zien HOE ERG de omweg is, maar is NIET waar het misgaat: het is het
+    // verste punt van een route die al lang van het pad af is.
+    //
+    // (b) EERSTE significante afwijking (TOEGEVOEGD 8-9-2026, n.a.v. het
+    // eerdere resultaat: het diepste punt bleek ~99km van de rechte lijn te
+    // liggen, ergens ver buiten het Amsterdam/Hilversum-gebied -- duidelijk
+    // niet de daadwerkelijke gat-locatie). Dit is het eerste punt waar de
+    // route meer dan 20% van de totale rechte-lijn-afstand van die lijn
+    // afwijkt -- de vermoedelijke DECISIE-plek waar de route voor het eerst
+    // gedwongen wordt om van het logische pad af te wijken. Dit punt wordt
+    // hieronder gebruikt als centrum van het NWB-onderzoeksgebied, niet het
+    // diepste punt.
     let maxDeviation = -1;
-    let breakpoint = startPoint;
-    let breakpointIndex = 0;
+    let deepestPoint = startPoint;
+    let deepestPointIndex = 0;
     routeResult.geometry.forEach((p, i) => {
       const dev = perpendicularDistance(p, startPoint, endPoint);
       if (dev > maxDeviation) {
         maxDeviation = dev;
-        breakpoint = p;
-        breakpointIndex = i;
+        deepestPoint = p;
+        deepestPointIndex = i;
       }
     });
 
-    // Stap 3: klein, gegarandeerd-compleet NWB-gebied rond het breukpunt.
+    const SIGNIFICANT_DEVIATION_THRESHOLD_M = straightLineDistanceM * 0.2;
+    let firstDeviationPoint = deepestPoint; // fallback als er nooit een "kleine" afwijking eerst voorkomt
+    let firstDeviationIndex = deepestPointIndex;
+    for (let i = 0; i < routeResult.geometry.length; i++) {
+      const dev = perpendicularDistance(routeResult.geometry[i], startPoint, endPoint);
+      if (dev > SIGNIFICANT_DEVIATION_THRESHOLD_M) {
+        firstDeviationPoint = routeResult.geometry[i];
+        firstDeviationIndex = i;
+        break;
+      }
+    }
+
+    // Stap 3: klein, gegarandeerd-compleet NWB-gebied rond het EERSTE
+    // significante afwijkingspunt (niet het diepste punt, zie hierboven).
     const bbox = {
-      minX: breakpoint.x - radiusM,
-      maxX: breakpoint.x + radiusM,
-      minY: breakpoint.y - radiusM,
-      maxY: breakpoint.y + radiusM,
+      minX: firstDeviationPoint.x - radiusM,
+      maxX: firstDeviationPoint.x + radiusM,
+      minY: firstDeviationPoint.y - radiusM,
+      maxY: firstDeviationPoint.y + radiusM,
     };
 
     const { segments: allSegments, pagesRetrieved, truncated, debugFirstFeatureKeys } = await fetchAllNwbSegmentsInBbox(bbox, 4);
@@ -134,11 +160,20 @@ export async function GET(req: NextRequest) {
         deviationFactor: (routeResult.distanceM / straightLineDistanceM).toFixed(1),
       },
       stap2_breukpunt: {
-        indexInRoute: breakpointIndex,
+        eersteSignificanteAfwijking: {
+          omschrijving: "Eerste punt waar de route >20% van de rechte-lijn-afstand afwijkt -- vermoedelijke decisie-plek, gebruikt als centrum van het NWB-onderzoeksgebied hieronder.",
+          indexInRoute: firstDeviationIndex,
+          percentageDoorRoute: ((firstDeviationIndex / routeResult.geometry.length) * 100).toFixed(1) + "%",
+          rdCoordinaten: firstDeviationPoint,
+        },
+        diepstePuntTerInformatie: {
+          omschrijving: "Punt met de grootste afwijking -- laat zien HOE ERG de omweg is, maar is NIET de gat-locatie (het is het verste punt van een reeds-afgedwaalde route).",
+          indexInRoute: deepestPointIndex,
+          percentageDoorRoute: ((deepestPointIndex / routeResult.geometry.length) * 100).toFixed(1) + "%",
+          rdCoordinaten: deepestPoint,
+          loodrechteAfwijkingM: Math.round(maxDeviation),
+        },
         totalRoutePoints: routeResult.geometry.length,
-        percentageDoorRoute: ((breakpointIndex / routeResult.geometry.length) * 100).toFixed(1) + "%",
-        rdCoordinaten: breakpoint,
-        loodrechteAfwijkingM: Math.round(maxDeviation),
       },
       stap3_nwbGebied: {
         bboxRD: bbox,
