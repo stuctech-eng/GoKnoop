@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/nwb-gap-pinpoint", label: "NWB-breukpunt-test", description: "Vindt het exacte breukpunt in een omweg-route en onderzoekt daar een klein, compleet NWB-gebied." },
       { href: "/debug/nwb-validation-test", label: "NWB ruimtelijke validatietest", description: "Bevat het Nationaal Wegenbestand bruikbare fietsverbindingen die de bekende gaten dichten?" },
       { href: "/debug/wfs-schema", label: "WFS-laagschema bekijken", description: "Checkt of een onbekende laag (bv. fietsnetwerken_nlfietsland) directe knooppunt-verwijzingen heeft." },
       { href: "/debug/wfs-layers", label: "Routedatabank — alle WFS-lagen", description: "Welke lagen biedt de bron in totaal aan, gebruiken we wel de beste?" },
