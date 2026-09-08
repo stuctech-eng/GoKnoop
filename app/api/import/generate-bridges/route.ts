@@ -283,17 +283,39 @@ function sleep(ms: number): Promise<void> {
  * `no_route_found` telt als een echte afwijzing. Na uitgeputte retries wordt
  * een provider-fout expliciet als zodanig geclassificeerd (nooit stilzwijgend
  * als "geen route", zie docstring bovenaan).
+ *
+ * TOEGEVOEGD 7-9-2026, n.a.v. een daadwerkelijke 504 FUNCTION_INVOCATION_TIMEOUT
+ * ondanks de bestaande FUNCTION_TIME_BUDGET_MS-check: die check gebeurde alleen
+ * TUSSEN items, niet TIJDENS de retry-backoff-reeks van één enkel item -- een
+ * item dat moest retryen kon daardoor alsnog de resterende tijd volledig
+ * opsouperen (initiële call + tot 2 retries + backoff-pauzes, samen soms
+ * 4-6s+) vóórdat de buitenste loop ooit weer kon controleren. `deadlineMs`
+ * (absolute Date.now()-tijdstip) laat deze functie zichzelf ook halverwege
+ * afbreken -- geen nieuwe poging/backoff meer starten als de tijd toch niet
+ * meer voldoende is om die veilig af te ronden.
  */
 async function routeWithRetry(
   router: LocalBikeRouter,
   from: { lat: number; lon: number },
-  to: { lat: number; lon: number }
+  to: { lat: number; lon: number },
+  deadlineMs: number
 ): Promise<
   | { ok: true; distanceM: number; durationS: number; geometry: { lat: number; lon: number }[] }
   | { ok: false; validationStatus: "rejected_no_route" | "rejected_provider_error"; rejectionReason: string }
+  | { ok: false; validationStatus: "deadline_exceeded"; rejectionReason: string }
 > {
   let lastReason = "";
   for (let attempt = 0; attempt <= ORS_RETRY_DELAYS_MS.length; attempt++) {
+    // Vóór ELKE poging (ook de eerste) checken -- niet alleen vóór retries --
+    // want zelfs de allereerste aanroep kan al te laat starten als eerdere
+    // items in deze batch veel tijd hebben gekost.
+    if (Date.now() >= deadlineMs) {
+      return {
+        ok: false,
+        validationStatus: "deadline_exceeded",
+        rejectionReason: lastReason ? `${lastReason} -- deadline bereikt vóór volgende poging` : "Deadline bereikt vóór eerste poging kon starten",
+      };
+    }
     const result = await router.route(from, to, "cycling");
     if (!("reason" in result)) {
       return { ok: true, distanceM: result.distanceM, durationS: result.durationS, geometry: result.geometry };
@@ -302,10 +324,15 @@ async function routeWithRetry(
       // Echte afwijzing -- geen retry nodig, ORS heeft een definitief antwoord gegeven.
       return { ok: false, validationStatus: "rejected_no_route", rejectionReason: `ORS: ${result.reason} (${result.message})` };
     }
-    // provider_error / invalid_response -- vermoedelijk transient (bv. 429). Retry met backoff.
+    // provider_error / invalid_response -- vermoedelijk transient (bv. 429). Retry met backoff,
+    // maar alleen als er na de pauze ook daadwerkelijk nog tijd over is.
     lastReason = `ORS: ${result.reason}${result.message ? ` (${result.message})` : ""}`;
     if (attempt < ORS_RETRY_DELAYS_MS.length) {
-      await sleep(ORS_RETRY_DELAYS_MS[attempt]);
+      const delay = ORS_RETRY_DELAYS_MS[attempt];
+      if (Date.now() + delay >= deadlineMs) {
+        return { ok: false, validationStatus: "deadline_exceeded", rejectionReason: `${lastReason} -- onvoldoende tijd over voor retry-pauze` };
+      }
+      await sleep(delay);
     }
   }
   return { ok: false, validationStatus: "rejected_provider_error", rejectionReason: `${lastReason} -- na ${ORS_RETRY_DELAYS_MS.length + 1} pogingen` };
@@ -601,6 +628,11 @@ export async function GET(req: NextRequest) {
       }
 
       const batchStartTime = Date.now();
+      // Harde deadline (7-9-2026): 2s marge onder de Vercel Hobby 10s-limiet,
+      // voor het schrijven naar Firestore + antwoord-opbouw NA deze lus. Zie
+      // routeWithRetry() hierboven voor de volledige toelichting waarom dit
+      // nodig is naast de bestaande FUNCTION_TIME_BUDGET_MS-check.
+      const HARD_DEADLINE_MS = batchStartTime + 8000;
       const nowIso = new Date().toISOString();
       const results: StoredAttempt[] = [];
       let consecutiveProviderErrors = 0;
@@ -633,9 +665,19 @@ export async function GET(req: NextRequest) {
 
         if (results.length > 0) await sleep(ORS_CALL_DELAY_MS); // proactieve rate-limit-preventie tussen calls
 
-        const outcome = await routeWithRetry(router, from, to);
+        const outcome = await routeWithRetry(router, from, to, HARD_DEADLINE_MS);
 
         if (!outcome.ok) {
+          if (outcome.validationStatus === "deadline_exceeded") {
+            // TOEGEVOEGD 7-9-2026: dit is GEEN aanwijzing dat ORS zelf onbereikbaar is --
+            // alleen dat DEZE functie-aanroep door de tijd heen is. Batch nu gewoon
+            // netjes stoppen (net als de tijdsbudget-check bovenaan de lus), dit item
+            // blijft in de wachtrij voor de volgende batch-aanroep. GEEN
+            // consecutiveProviderErrors ophogen, GEEN orsLikelyUnavailable zetten --
+            // dat zou de gebruiker ten onrechte laten denken dat het dagquotum op is.
+            stoppedEarly = `Harde deadline bereikt tijdens verwerking van dit item -- veilig gestopt. (${outcome.rejectionReason})`;
+            break;
+          }
           if (outcome.validationStatus === "rejected_provider_error") {
             // BELANGRIJK (6-9-2026, n.a.v. quota-uitputtingsincident): dit item wordt
             // NIET geschreven en telt NIET als verwerkt. Een providerfout na retries
