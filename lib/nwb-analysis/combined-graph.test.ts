@@ -117,4 +117,28 @@ describe("combined-graph", () => {
     // Geen connector binnen 5m -- knoop 1 moet dus geïsoleerd blijven van het NWB-segment.
     expect(result.found).toBe(false);
   });
+
+  it("vindt de correcte kortste route in een grotere keten (schaal-controle voor de heap-gebaseerde Dijkstra)", () => {
+    // Keten van 3000 knopen, elk verbonden met de volgende op afstand 10 --
+    // geen enorme graaf, maar groot genoeg om te bevestigen dat de
+    // heap-gebaseerde Dijkstra (i.p.v. de eerdere, te trage sort-per-stap-
+    // aanpak) ook op enige schaal correct blijft werken.
+    const CHAIN_LENGTH = 3000;
+    const nodes = new Map<string, GraphNode>();
+    const edges = new Map<string, GraphEdge[]>();
+    for (let i = 0; i < CHAIN_LENGTH; i++) {
+      nodes.set(String(i), makeNode(String(i), i * 10, 0));
+      const edgeList: GraphEdge[] = [];
+      if (i > 0) edgeList.push({ id: `e${i - 1}`, fromLogicalNodeId: String(i), toLogicalNodeId: String(i - 1), distanceM: 10, directionality: "unknown", geometry: [] });
+      if (i < CHAIN_LENGTH - 1) edgeList.push({ id: `e${i}`, fromLogicalNodeId: String(i), toLogicalNodeId: String(i + 1), distanceM: 10, directionality: "unknown", geometry: [] });
+      edges.set(String(i), edgeList);
+    }
+    const provider = new FakeGraphProvider(nodes, edges);
+    const graph = buildCombinedGraph(provider, [], 5, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
+    const result = dijkstraOnCombinedGraph(graph, "0", String(CHAIN_LENGTH - 1));
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.distanceM).toBe((CHAIN_LENGTH - 1) * 10);
+    }
+  });
 });

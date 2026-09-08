@@ -48,32 +48,51 @@ export default function NwbCombinedRouteTestPage() {
         });
         if (key) params.set("key", key);
         const res = await fetch(`/api/debug/nwb-corridor-tile?${params.toString()}`, { cache: "no-store" });
-        const json = await res.json();
+        const rawText = await res.text();
+        let json: Record<string, unknown>;
+        try {
+          json = JSON.parse(rawText);
+        } catch {
+          throw new Error(`Tegel ${i}: geen geldige JSON terug (status ${res.status}): ${rawText.slice(0, 300)}`);
+        }
         if (!res.ok) throw new Error(`Tegel ${i}: ${json.details ?? json.error ?? "onbekende fout"}`);
         for (const seg of json.segments as NwbSegment[]) {
           segmentsById.set(seg.id, seg); // dedupliceren op ID -- overlappende tegels tellen niet dubbel
         }
         if (json.truncated) anyTruncated = true;
-        setLog((prev) => [...prev, `Tegel ${i + 1}/${n}: ${json.segments.length} segmenten (${json.pagesRetrieved} pagina's, ${json.truncated ? "AFGEKAPT" : "compleet"}). Totaal uniek zover: ${segmentsById.size}`]);
+        setLog((prev) => [...prev, `Tegel ${i + 1}/${n}: ${(json.segments as NwbSegment[]).length} segmenten (${json.pagesRetrieved} pagina's, ${json.truncated ? "AFGEKAPT" : "compleet"}). Totaal uniek zover: ${segmentsById.size}`]);
       }
 
       setLog((prev) => [...prev, `Alle tegels opgehaald. ${segmentsById.size} unieke NWB-segmenten totaal. ${anyTruncated ? "⚠️ Minstens 1 tegel was afgekapt." : "Alle tegels compleet."}`]);
       setStatus("route");
-      setLog((prev) => [...prev, "Gecombineerde graaf bouwen en Dijkstra draaien (2m/5m/10m)..."]);
 
-      const routeRes = await fetch(`/api/debug/nwb-combined-route-test${key ? `?key=${encodeURIComponent(key)}` : ""}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          datasetVersionId,
-          from: fromNodeId,
-          to: toNodeId,
-          nwbSegments: Array.from(segmentsById.values()),
-          tolerances: [2, 5, 10],
-        }),
-      });
-      const routeJson = await routeRes.json();
-      if (!routeRes.ok) throw new Error(routeJson.details ?? routeJson.error ?? "Routetest mislukt.");
+      const nwbSegments = Array.from(segmentsById.values());
+      const resultatenPerTolerantie: Record<string, unknown> = {};
+      for (const tol of [2, 5, 10]) {
+        setLog((prev) => [...prev, `Gecombineerde graaf bouwen en Dijkstra draaien (${tol}m)...`]);
+        const routeRes = await fetch(`/api/debug/nwb-combined-route-test${key ? `?key=${encodeURIComponent(key)}` : ""}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            datasetVersionId,
+            from: fromNodeId,
+            to: toNodeId,
+            nwbSegments,
+            toleranceM: tol,
+          }),
+        });
+        const rawText = await routeRes.text();
+        let routeJson: Record<string, unknown>;
+        try {
+          routeJson = JSON.parse(rawText);
+        } catch {
+          throw new Error(`Tolerantie ${tol}m: geen geldige JSON terug (status ${routeRes.status}): ${rawText.slice(0, 300)}`);
+        }
+        if (!routeRes.ok) throw new Error(`Tolerantie ${tol}m: ${routeJson.details ?? routeJson.error ?? "onbekende fout"}`);
+        resultatenPerTolerantie[`${tol}m`] = routeJson;
+        setLog((prev) => [...prev, `${tol}m klaar: ${routeJson.routeFound ? `route gevonden, ${routeJson.distanceMeters}m` : "geen route gevonden"}`]);
+      }
+      const routeJson = { resultatenPerTolerantie };
 
       setResult(routeJson);
       setStatus("klaar");

@@ -173,22 +173,69 @@ export type DijkstraResult =
     }
   | { found: false };
 
-/** Simpele binary-heap-gebaseerde Dijkstra op de gecombineerde graaf. */
+/**
+ * Simpele binary min-heap, uitsluitend voor deze Dijkstra-implementatie.
+ *
+ * TOEGEVOEGD 8-9-2026, ná een daadwerkelijke Vercel-timeout op een graaf van
+ * ~11.000 GoKnoop-knopen + ~33.000 NWB-punten: de eerdere aanpak
+ * (`queue.sort()` bij elke stap) bleek in de praktijk te traag -- dat is
+ * O(n log n) PER stap i.p.v. O(log n), een reëel prestatieprobleem bij deze
+ * schaal, niet een toevallige hik. Niet gegokt op een snelheidsaanname,
+ * hersteld op basis van het daadwerkelijke, waargenomen falen.
+ */
+class MinHeap {
+  private heap: { id: string; d: number }[] = [];
+
+  get size() {
+    return this.heap.length;
+  }
+
+  push(item: { id: string; d: number }) {
+    this.heap.push(item);
+    let i = this.heap.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (this.heap[parent].d <= this.heap[i].d) break;
+      [this.heap[parent], this.heap[i]] = [this.heap[i], this.heap[parent]];
+      i = parent;
+    }
+  }
+
+  pop(): { id: string; d: number } | undefined {
+    if (this.heap.length === 0) return undefined;
+    const top = this.heap[0];
+    const last = this.heap.pop()!;
+    if (this.heap.length > 0) {
+      this.heap[0] = last;
+      let i = 0;
+      for (;;) {
+        const left = 2 * i + 1;
+        const right = 2 * i + 2;
+        let smallest = i;
+        if (left < this.heap.length && this.heap[left].d < this.heap[smallest].d) smallest = left;
+        if (right < this.heap.length && this.heap[right].d < this.heap[smallest].d) smallest = right;
+        if (smallest === i) break;
+        [this.heap[i], this.heap[smallest]] = [this.heap[smallest], this.heap[i]];
+        i = smallest;
+      }
+    }
+    return top;
+  }
+}
+
+/** Dijkstra op de gecombineerde graaf, met een echte binary heap (zie MinHeap hierboven). */
 export function dijkstraOnCombinedGraph(graph: CombinedGraph, startId: string, endId: string): DijkstraResult {
   const dist = new Map<string, number>();
   const prevNode = new Map<string, string>();
   const prevEdge = new Map<string, CombinedEdge>();
   const visited = new Set<string>();
 
-  // Simpele array-gebaseerde priority queue -- bij deze schaal (~11k+ knopen)
-  // ruim snel genoeg binnen de 10s-tijdslimiet; geen aparte heap-implementatie
-  // nodig voor een eenmalige, tijdelijke test.
-  const queue: { id: string; d: number }[] = [{ id: startId, d: 0 }];
+  const queue = new MinHeap();
+  queue.push({ id: startId, d: 0 });
   dist.set(startId, 0);
 
-  while (queue.length > 0) {
-    queue.sort((a, b) => a.d - b.d);
-    const current = queue.shift()!;
+  while (queue.size > 0) {
+    const current = queue.pop()!;
     if (visited.has(current.id)) continue;
     visited.add(current.id);
     if (current.id === endId) break;
