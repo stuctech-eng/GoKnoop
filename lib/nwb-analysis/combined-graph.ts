@@ -41,6 +41,12 @@ export type CombinedEdge = {
 export type CombinedGraph = {
   adjacency: Map<string, CombinedEdge[]>;
   nodePosition: Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>;
+  /** TOEGEVOEGD 8-9-2026: totaal aantal connector-edges dat daadwerkelijk in
+   * de graaf is aangemaakt (niet per se allemaal gebruikt door Dijkstra) --
+   * onderscheidt "er ontstonden helemaal geen connectors" (dekkingsprobleem)
+   * van "connectors bestaan, maar geen ervan levert een kortere route op"
+   * (een legitieme, andere uitkomst). */
+  totalConnectorsCreated: number;
 };
 
 class UnionFind {
@@ -178,7 +184,7 @@ export function buildCombinedGraph(
     }
   }
 
-  return { adjacency, nodePosition };
+  return { adjacency, nodePosition, totalConnectorsCreated: connectorCount };
 }
 
 export type DijkstraStep = { nodeId: string; edgeSource: CombinedEdgeSource | "start"; distanceM: number; nwbInfo?: CombinedEdge["nwbInfo"] };

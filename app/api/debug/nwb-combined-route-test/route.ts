@@ -80,6 +80,7 @@ export async function POST(req: NextRequest) {
         toleranceM,
         straightLineDistanceM: Math.round(straightLineDistanceM),
         nwbSegmentenGebruikt: nwbSegments.length,
+        totalConnectorsInGraph: graph.totalConnectorsCreated,
         routeFound: false,
       });
     }
@@ -112,6 +113,7 @@ export async function POST(req: NextRequest) {
       toleranceM,
       straightLineDistanceM: Math.round(straightLineDistanceM),
       nwbSegmentenGebruikt: nwbSegments.length,
+      totalConnectorsInGraph: graph.totalConnectorsCreated,
       huidigeGoKnoopOnlyAfstandM: 366859, // bekend, eerder gemeten -- ter vergelijking
       routeFound: true,
       distanceMeters: Math.round(result.distanceM),
