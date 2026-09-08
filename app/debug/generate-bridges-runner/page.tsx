@@ -58,11 +58,26 @@ export default function GenerateBridgesRunnerPage() {
     window.localStorage.setItem("goknoop_debug_secret", value);
   }
 
-  async function call(params: Record<string, string>) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function call(params: Record<string, string>): Promise<any> {
     const qs = new URLSearchParams({ datasetVersionId, key: debugKey, _t: String(Date.now()), ...params }).toString();
     const res = await fetch(`/api/import/generate-bridges?${qs}`, { cache: "no-store" });
-    const json = await res.json();
-    if (!res.ok) throw new ApiCallError(json.error || "Onbekende fout.", json);
+    // Veilige JSON-afhandeling (7-9-2026, n.a.v. de cryptische Safari-fout
+    // "The string did not match the expected pattern" -- dat was in werkelijkheid
+    // een niet-JSON-antwoord, waarschijnlijk een rauwe Vercel-10s-timeoutpagina
+    // tijdens een zware ORS-batch, die res.json() ongefilterd liet crashen.
+    // Zelfde les/patroon als eerder vandaag bij de loop-diagnose-tool.
+    const rawText = await res.text();
+    let json: Record<string, unknown>;
+    try {
+      json = JSON.parse(rawText);
+    } catch {
+      throw new ApiCallError(`Server gaf geen geldige JSON terug (status ${res.status}) -- waarschijnlijk een timeout tijdens een zware batch.`, {
+        details: rawText.slice(0, 300),
+        transient: true,
+      });
+    }
+    if (!res.ok) throw new ApiCallError((json.error as string) || "Onbekende fout.", json);
     return json;
   }
 
@@ -103,9 +118,12 @@ export default function GenerateBridgesRunnerPage() {
       //    door een dubbeltik): bij een 409 met expectedBatchOffset past de loop
       //    zichzelf aan i.p.v. hard te stoppen -- de server weet het beter dan
       //    de lokale teller.
+      let transientRetries = 0;
+      const MAX_TRANSIENT_RETRIES = 3;
       while (processedCount < totalDirectionalItems) {
         try {
           const batch: BatchResult = await call({ phase: "compute-batch", scope, batchOffset: String(processedCount) });
+          transientRetries = 0; // teller resetten na een geslaagde aanroep
           setLog((prev) => [...prev, batch]);
           processedCount = batch.processedCount;
           if (batch.orsLikelyUnavailable) {
@@ -127,6 +145,30 @@ export default function GenerateBridgesRunnerPage() {
           if (err instanceof ApiCallError && typeof err.data.expectedBatchOffset === "number") {
             processedCount = err.data.expectedBatchOffset as number;
             continue; // opnieuw proberen met de door de server aangegeven juiste offset
+          }
+          // TOEGEVOEGD 7-9-2026: een niet-JSON-antwoord (waarschijnlijk een
+          // Vercel-10s-timeout tijdens een zware batch) is vermoedelijk tijdelijk --
+          // eerst een paar keer automatisch herproberen i.p.v. meteen te stoppen.
+          // Dit was vermoedelijk de daadwerkelijke reden dat de runner steeds na
+          // korte tijd afbrak, ook ruim ná een ORS-dagquotum-reset.
+          if (err instanceof ApiCallError && err.data.transient && transientRetries < MAX_TRANSIENT_RETRIES) {
+            transientRetries++;
+            setLog((prev) => [
+              ...prev,
+              {
+                batchOffset: processedCount,
+                batchProcessed: 0,
+                stoppedEarly: `Tijdelijke hapering (poging ${transientRetries}/${MAX_TRANSIENT_RETRIES}), automatisch opnieuw...`,
+                orsLikelyUnavailable: false,
+                batchValidCount: 0,
+                batchRejectedBreakdown: { rejected_no_route: 0, rejected_distance: 0, rejected_circuity: 0, rejected_provider_error: 0 },
+                processedCount,
+                totalDirectionalItems,
+                status: "retrying",
+              },
+            ]);
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
           }
           throw err;
         }
