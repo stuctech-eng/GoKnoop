@@ -86,6 +86,33 @@ export async function GET(req: NextRequest) {
     { dispatcher: ipv4Agent }
   );
 
+  // Poging 3: simpele GET naar de hoofddomein-pagina, VANAF VERCEL zelf (niet mijn
+  // eigen netwerk) -- test of ELKE verbinding vanaf Vercel naar deze host traag is,
+  // of specifiek deze POST-aanvraag/dit endpoint.
+  const t3 = Date.now();
+  let rootGetResult: Record<string, unknown>;
+  try {
+    const controller3 = new AbortController();
+    const timeoutId3 = setTimeout(() => controller3.abort(), 8000);
+    const res3 = await fetch("https://api.heigit.org/", { signal: controller3.signal });
+    clearTimeout(timeoutId3);
+    rootGetResult = { ok: true, httpStatus: res3.status, elapsedMs: Date.now() - t3 };
+  } catch (err) {
+    rootGetResult = {
+      ok: false,
+      isTimeout: err instanceof Error && err.name === "AbortError",
+      elapsedMs: Date.now() - t3,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  // Poging 4: dezelfde POST, maar met een overduidelijk ONGELDIGE sleutel -- test of
+  // het specifiek aan ONZE sleutel ligt (zou dan met een foutieve sleutel juist WEL
+  // snel een 401/403 moeten geven), of dat elke aanvraag naar dit endpoint hangt.
+  const invalidKeyResult = await attempt("POST met overduidelijk ongeldige sleutel", fetch, {
+    headers: { "Content-Type": "application/json", Authorization: "dit-is-een-overduidelijk-ongeldige-testsleutel" },
+  });
+
   return NextResponse.json({
     conclusion:
       standardResult.ok && !ipv4Result.ok
@@ -97,5 +124,7 @@ export async function GET(req: NextRequest) {
         : "Beide faalden -- wijst niet specifiek op IPv6, iets anders aan de hand.",
     standard: standardResult,
     ipv4Forced: ipv4Result,
+    rootGetFromVercel: rootGetResult,
+    invalidKeyAttempt: invalidKeyResult,
   });
 }
