@@ -70,20 +70,23 @@ class UnionFind {
 }
 
 /**
- * Bouwt de gecombineerde graaf. `nwbSegments` moet al Set B-geclassificeerd
- * zijn (of ruwer -- deze functie classificeert zelf nogmaals ter
- * zekerheid). `connectorSearchBbox` beperkt de dure GoKnoop<->NWB-
- * nabijheidscontrole tot een relevant gebied (i.p.v. alle 11.003 landelijke
- * knopen te vergelijken) -- puur een efficiëntiemaatregel, geen inhoudelijke
- * beperking (de volledige GoKnoop-graaf blijft wel altijd meedoen voor
- * Dijkstra zelf).
+ * Gedeelde opbouw voor stap 1-3 (GoKnoop-graaf + NWB-graaf + clustering) --
+ * uitgesplitst zodat zowel de oorspronkelijke buildCombinedGraph (blinde
+ * nabijheids-connectors, onderzoeksfase) als de nieuwe
+ * buildValidatedCombinedGraph (Fase 4, echte gevalideerde connectors)
+ * dezelfde, al-geteste snap-logica hergebruiken zonder duplicatie.
  */
-export function buildCombinedGraph(
+function buildBaseGraph(
   provider: GraphProvider,
   nwbSegments: SlimNwbSegment[],
-  toleranceM: number,
-  connectorSearchBbox: { minX: number; minY: number; maxX: number; maxY: number }
-): CombinedGraph {
+  toleranceM: number
+): {
+  adjacency: Map<string, CombinedEdge[]>;
+  nodePosition: Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>;
+  addEdge: (from: string, to: string, edge: CombinedEdge) => void;
+  findNwbClusterNodeId: (segId: string, end: "from" | "to") => string;
+  clusterList: { id: string; x: number; y: number }[];
+} {
   const adjacency = new Map<string, CombinedEdge[]>();
   const nodePosition = new Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>();
 
@@ -92,28 +95,17 @@ export function buildCombinedGraph(
     adjacency.get(from)!.push(edge);
   }
 
-  // 1. Volledige GoKnoop-graaf toevoegen (ongewijzigd, alle 11.003 knopen).
   const allNodeIds = provider.getAllNodeIds();
   for (const id of allNodeIds) {
     const n = provider.getNode(id);
     if (!n) continue;
     nodePosition.set(id, { x: n.x, y: n.y, source: "goknoop" });
     for (const e of provider.getEdgesFrom(id)) {
-      // KRITIEKE FIX (8-9-2026): de bestaande FirestoreGraphProvider indexeert
-      // elke edge onder ZOWEL fromLogicalNodeId als toLogicalNodeId (voor
-      // bidirectionele toegang). Blind e.toLogicalNodeId als bestemming
-      // aannemen is dus fout zodra je de edge van de "to"-kant bekijkt -- dan
-      // IS e.toLogicalNodeId gewoon het huidige knooppunt zelf, en ontstaat
-      // een lus naar zichzelf i.p.v. een echte verbinding naar de overkant.
-      // Dit brak grofweg de helft van alle GoKnoop-verbindingen in deze
-      // tijdelijke graaf (ontdekt na een onverklaarbare "geen route
-      // gevonden"-uitkomst bij alle drie de toleranties).
       const otherEnd = e.fromLogicalNodeId === id ? e.toLogicalNodeId : e.fromLogicalNodeId;
       addEdge(id, otherEnd, { to: otherEnd, distanceM: e.distanceM, source: "goknoop" });
     }
   }
 
-  // 2. NWB-segmenten classificeren (Set B) en eindpunten snappen (Union-Find).
   const setBSegments = nwbSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded");
   const uf = new UnionFind();
   const pointKey = (segId: string, end: "from" | "to") => `${segId}:${end}`;
@@ -124,7 +116,6 @@ export function buildCombinedGraph(
     rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y });
     rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y });
   }
-  // Grid-bucketing voor efficiënte snap-vergelijking (zelfde patroon als graph-analysis.ts).
   const grid = new Map<string, typeof rawPoints>();
   const cellOf = (x: number, y: number) => `${Math.floor(x / toleranceM)}:${Math.floor(y / toleranceM)}`;
   for (const p of rawPoints) {
@@ -146,7 +137,6 @@ export function buildCombinedGraph(
     }
   }
 
-  // NWB-clusterknopen registreren (representatief punt = eerste punt van de cluster).
   const clusterRepresentative = new Map<string, { x: number; y: number }>();
   for (const p of rawPoints) {
     const root = uf.find(p.key);
@@ -156,25 +146,49 @@ export function buildCombinedGraph(
     }
   }
 
-  // 3. NWB-edges toevoegen (elk segment = edge tussen zijn twee cluster-ID's).
   for (const seg of setBSegments) {
     const fromRoot = `nwb:${uf.find(pointKey(seg.id, "from"))}`;
     const toRoot = `nwb:${uf.find(pointKey(seg.id, "to"))}`;
-    if (fromRoot === toRoot) continue; // lus op zichzelf, niet nuttig voor routering
+    if (fromRoot === toRoot) continue;
     const len = seg.lengthM;
     const info = { bstCode: seg.bstCode, straatnaam: seg.straatnaam, wegnummer: seg.wegnummer };
     addEdge(fromRoot, toRoot, { to: toRoot, distanceM: len, source: "nwb", nwbInfo: info });
     addEdge(toRoot, fromRoot, { to: fromRoot, distanceM: len, source: "nwb", nwbInfo: info });
   }
 
-  // 4. Connectors: GoKnoop-knopen binnen het zoekgebied koppelen aan nabije NWB-clusters.
-  const nwbClusterList = Array.from(clusterRepresentative.entries()).map(([root, pos]) => ({ id: `nwb:${root}`, ...pos }));
+  return {
+    adjacency,
+    nodePosition,
+    addEdge,
+    findNwbClusterNodeId: (segId, end) => `nwb:${uf.find(pointKey(segId, end))}`,
+    clusterList: Array.from(clusterRepresentative.entries()).map(([root, pos]) => ({ id: `nwb:${root}`, ...pos })),
+  };
+}
+
+/**
+ * Bouwt de gecombineerde graaf. `nwbSegments` moet al Set B-geclassificeerd
+ * zijn (of ruwer -- deze functie classificeert zelf nogmaals ter
+ * zekerheid). `connectorSearchBbox` beperkt de dure GoKnoop<->NWB-
+ * nabijheidscontrole tot een relevant gebied (i.p.v. alle 11.003 landelijke
+ * knopen te vergelijken) -- puur een efficiëntiemaatregel, geen inhoudelijke
+ * beperking (de volledige GoKnoop-graaf blijft wel altijd meedoen voor
+ * Dijkstra zelf).
+ */
+export function buildCombinedGraph(
+  provider: GraphProvider,
+  nwbSegments: SlimNwbSegment[],
+  toleranceM: number,
+  connectorSearchBbox: { minX: number; minY: number; maxX: number; maxY: number }
+): CombinedGraph {
+  const { adjacency, nodePosition, addEdge, clusterList } = buildBaseGraph(provider, nwbSegments, toleranceM);
+
+  const allNodeIds = provider.getAllNodeIds();
   let connectorCount = 0;
   for (const id of allNodeIds) {
     const n = provider.getNode(id);
     if (!n) continue;
     if (n.x < connectorSearchBbox.minX || n.x > connectorSearchBbox.maxX || n.y < connectorSearchBbox.minY || n.y > connectorSearchBbox.maxY) continue;
-    for (const cluster of nwbClusterList) {
+    for (const cluster of clusterList) {
       const d = Math.hypot(n.x - cluster.x, n.y - cluster.y);
       if (d <= toleranceM) {
         addEdge(id, cluster.id, { to: cluster.id, distanceM: d, source: "connector" });
@@ -187,7 +201,92 @@ export function buildCombinedGraph(
   return { adjacency, nodePosition, totalConnectorsCreated: connectorCount };
 }
 
+/**
+ * TOEGEVOEGD 9-9-2026, Fase 4: bouwt de gecombineerde graaf met de reeds
+ * GEVALIDEERDE connectorlaag (connector-candidates.ts) in plaats van blinde
+ * nabijheid. Alleen niet-afgewezen kandidaten (high/lower) worden als
+ * daadwerkelijke connector-edge toegevoegd -- elke edge draagt zijn
+ * confidence-niveau mee voor latere rapportage.
+ */
+export type ValidatedConnectorInput = {
+  goknoopNodeId: string;
+  nwbSegmentId: string;
+  nwbEndpoint: "from" | "to";
+  distanceM: number;
+  confidence: "high" | "lower";
+};
+
+export type ValidatedCombinedGraph = CombinedGraph & {
+  connectorsUsed: { high: number; lower: number };
+};
+
+export function buildValidatedCombinedGraph(
+  provider: GraphProvider,
+  nwbSegments: SlimNwbSegment[],
+  toleranceM: number,
+  validatedConnectors: ValidatedConnectorInput[]
+): ValidatedCombinedGraph {
+  const { adjacency, nodePosition, addEdge, findNwbClusterNodeId } = buildBaseGraph(provider, nwbSegments, toleranceM);
+
+  let highCount = 0;
+  let lowerCount = 0;
+  for (const c of validatedConnectors) {
+    const nwbNodeId = findNwbClusterNodeId(c.nwbSegmentId, c.nwbEndpoint);
+    if (!nodePosition.has(nwbNodeId)) continue; // NWB-segment viel buiten Set B na classificatie -- veilig overslaan
+    addEdge(c.goknoopNodeId, nwbNodeId, { to: nwbNodeId, distanceM: c.distanceM, source: "connector" });
+    addEdge(nwbNodeId, c.goknoopNodeId, { to: c.goknoopNodeId, distanceM: c.distanceM, source: "connector" });
+    if (c.confidence === "high") highCount++;
+    else lowerCount++;
+  }
+
+  return { adjacency, nodePosition, totalConnectorsCreated: highCount + lowerCount, connectorsUsed: { high: highCount, lower: lowerCount } };
+}
+
 export type DijkstraStep = { nodeId: string; edgeSource: CombinedEdgeSource | "start"; distanceM: number; nwbInfo?: CombinedEdge["nwbInfo"] };
+
+export type CombinedComponentStats = {
+  totalNodes: number;
+  componentCount: number;
+  largestComponentSize: number;
+  largestComponentPercent: number;
+  componentOfNode: Map<string, string>; // node-ID -> component-root-ID, handig om specifieke knopen op te zoeken
+};
+
+/**
+ * TOEGEVOEGD 9-9-2026, Fase 4: telt connected components op de VOLLEDIGE
+ * gecombineerde graaf (GoKnoop + NWB + connectors samen) -- in tegenstelling
+ * tot graph-analysis.ts's analyzeSlimNwbGraph (die uitsluitend NWB-interne
+ * connectiviteit meet), dit gebruikt de daadwerkelijke adjacency-lijst van
+ * de CombinedGraph, dus edges van elk type (goknoop/nwb/connector) tellen mee.
+ */
+export function computeConnectedComponents(graph: CombinedGraph): CombinedComponentStats {
+  const uf = new UnionFind();
+  for (const nodeId of graph.nodePosition.keys()) uf.add(nodeId);
+  for (const [from, edges] of graph.adjacency.entries()) {
+    for (const edge of edges) {
+      uf.union(from, edge.to);
+    }
+  }
+
+  const componentOfNode = new Map<string, string>();
+  const sizeByRoot = new Map<string, number>();
+  for (const nodeId of graph.nodePosition.keys()) {
+    const root = uf.find(nodeId);
+    componentOfNode.set(nodeId, root);
+    sizeByRoot.set(root, (sizeByRoot.get(root) || 0) + 1);
+  }
+
+  const totalNodes = graph.nodePosition.size;
+  const largestComponentSize = Math.max(0, ...Array.from(sizeByRoot.values()));
+
+  return {
+    totalNodes,
+    componentCount: sizeByRoot.size,
+    largestComponentSize,
+    largestComponentPercent: totalNodes > 0 ? (largestComponentSize / totalNodes) * 100 : 0,
+    componentOfNode,
+  };
+}
 
 export type DijkstraResult =
   | {
