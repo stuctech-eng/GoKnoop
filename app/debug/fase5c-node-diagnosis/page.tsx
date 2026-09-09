@@ -181,6 +181,65 @@ export default function Fase5cNodeDiagnosisPage() {
     setLog((prev) => [...prev, "Werkelijk pad natrekken (ongewogen, F niet aangeraakt)..."]);
     const routeResult = dijkstraOnCombinedGraph(combined, FROM_NODE_ID, TARGET_NODE_ID);
 
+    // Padgeometrie-analyse: voor elke stap de coördinaat opzoeken (zowel
+    // GoKnoop- als NWB-cluster-knopen staan in combined.nodePosition) en de
+    // loodrechte afwijking t.o.v. de rechte lijn start->doel berekenen --
+    // zelfde techniek als de eerdere Hilversum-breukpunt-analyse. Nog steeds
+    // GEEN F/kosten aangeraakt, puur uitlezen van het al-berekende pad.
+    let pathGeometryAnalysis: Record<string, unknown> = { LET_OP: "geen route gevonden, geometrie-analyse overgeslagen" };
+    if (routeResult.found) {
+      const startPos = combined.nodePosition.get(FROM_NODE_ID);
+      const endPos = combined.nodePosition.get(TARGET_NODE_ID);
+      if (startPos && endPos) {
+        function perpendicularDistance(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const lengthSq = dx * dx + dy * dy;
+          if (lengthSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+          const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq;
+          const projX = a.x + t * dx;
+          const projY = a.y + t * dy;
+          return Math.hypot(p.x - projX, p.y - projY);
+        }
+
+        const stepsWithGeometry = routeResult.steps.map((s, i) => {
+          const pos = combined.nodePosition.get(s.nodeId);
+          const deviationM = pos ? perpendicularDistance(pos, startPos, endPos) : null;
+          return { index: i, nodeId: s.nodeId, bron: s.edgeSource, x: pos?.x, y: pos?.y, loodrechteAfwijkingM: deviationM !== null ? Math.round(deviationM) : null };
+        });
+
+        let maxDeviation = -1;
+        let maxDeviationStep: (typeof stepsWithGeometry)[number] | null = null;
+        for (const s of stepsWithGeometry) {
+          if (s.loodrechteAfwijkingM !== null && s.loodrechteAfwijkingM > maxDeviation) {
+            maxDeviation = s.loodrechteAfwijkingM;
+            maxDeviationStep = s;
+          }
+        }
+
+        const sampleEveryN = Math.max(1, Math.floor(stepsWithGeometry.length / 25)); // ~25 gelijkmatig verspreide punten
+        const sampled = stepsWithGeometry.filter((_, i) => i % sampleEveryN === 0);
+
+        pathGeometryAnalysis = {
+          totalStappen: stepsWithGeometry.length,
+          diepstePunt: maxDeviationStep
+            ? {
+                ...maxDeviationStep,
+                percentageDoorRoute: ((maxDeviationStep.index / stepsWithGeometry.length) * 100).toFixed(1) + "%",
+                wgs84: maxDeviationStep.x !== undefined && maxDeviationStep.y !== undefined ? rdToWgs84(maxDeviationStep.x, maxDeviationStep.y) : null,
+              }
+            : null,
+          verspreideSteekproef: sampled.map((s) => ({
+            index: s.index,
+            percentageDoorRoute: ((s.index / stepsWithGeometry.length) * 100).toFixed(1) + "%",
+            bron: s.bron,
+            loodrechteAfwijkingM: s.loodrechteAfwijkingM,
+            wgs84: s.x !== undefined && s.y !== undefined ? rdToWgs84(s.x, s.y) : null,
+          })),
+        };
+      }
+    }
+
     setReport({
       vraag1_locatie: { nodeId: TARGET_NODE_ID, rd: { x: targetNode.x, y: targetNode.y }, wgs84: targetWgs84 },
       vraag2_directeGoKnoopBuren: { aantal: directNeighbors.length, buren: directNeighbors },
@@ -217,6 +276,7 @@ export default function Fase5cNodeDiagnosisPage() {
             laatsteVijftienStappen: routeResult.steps.slice(-15).map((s) => ({ nodeId: s.nodeId, bron: s.edgeSource, cumulatieveAfstandM: Math.round(s.distanceM) })),
           }
         : { routeFound: false },
+      padgeometrieAnalyse: pathGeometryAnalysis,
     });
     setLog((prev) => [...prev, "Diagnose klaar."]);
     setRunning(false);
