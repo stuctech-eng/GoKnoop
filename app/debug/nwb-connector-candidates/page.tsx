@@ -9,6 +9,28 @@ const REGIONS = [
   { key: "volendam", label: "Volendam / Edam / Purmerend" },
 ];
 
+/** Herbruikbare kopieerknop -- belangrijk op mobiel, waar tekst handmatig selecteren in een <pre>-blok onhandig is. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      style={{ fontSize: 11, padding: "4px 10px", background: copied ? "#085041" : "#ddd", color: copied ? "white" : "#333", border: "none", borderRadius: 6, marginBottom: 4 }}
+    >
+      {copied ? "Gekopieerd ✓" : "Kopieer"}
+    </button>
+  );
+}
+
 export default function NwbConnectorCandidatesPage() {
   const [datasetVersionId, setDatasetVersionId] = useState("uINZ3y2QsgBdEyky3duq");
   const [searchRadiusM, setSearchRadiusM] = useState("20");
@@ -106,24 +128,43 @@ export default function NwbConnectorCandidatesPage() {
       </button>
 
       {log.length > 0 && (
-        <div style={{ fontSize: 11, background: "#f0f0eb", padding: 10, borderRadius: 8, marginBottom: 12, maxHeight: 200, overflowY: "auto" }}>
-          {log.map((l, i) => (
-            <div key={i}>{l}</div>
-          ))}
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <CopyButton text={log.join("\n")} />
+          </div>
+          <div style={{ fontSize: 11, background: "#f0f0eb", padding: 10, borderRadius: 8, maxHeight: 200, overflowY: "auto" }}>
+            {log.map((l, i) => (
+              <div key={i}>{l}</div>
+            ))}
+          </div>
         </div>
       )}
 
       {Object.entries(results).map(([regionKey, result]) => (
         <div key={regionKey} style={{ marginBottom: 20, border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
-          <h2 style={{ fontSize: 16, marginBottom: 8 }}>{regionKey}</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <h2 style={{ fontSize: 16 }}>{regionKey}</h2>
+            <CopyButton text={JSON.stringify(result, null, 2)} />
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 12, fontWeight: "bold" }}>Samenvatting</span>
+            <CopyButton text={JSON.stringify(result.summary, null, 2)} />
+          </div>
           <pre style={{ fontSize: 11, background: "#f5f5f0", padding: 8, borderRadius: 6, marginBottom: 8 }}>{JSON.stringify(result.summary, null, 2)}</pre>
 
-          <p style={{ fontSize: 12, fontWeight: "bold" }}>Voorbeelden -- high confidence:</p>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 12, fontWeight: "bold" }}>Voorbeelden -- high confidence</span>
+            <CopyButton text={JSON.stringify(result.candidates.filter((c) => c.confidence === "high").slice(0, 3), null, 2)} />
+          </div>
           <pre style={{ fontSize: 10, background: "#eef7ee", padding: 8, borderRadius: 6, marginBottom: 8, overflowX: "auto" }}>
             {JSON.stringify(result.candidates.filter((c) => c.confidence === "high").slice(0, 3), null, 2)}
           </pre>
 
-          <p style={{ fontSize: 12, fontWeight: "bold" }}>Voorbeelden -- afgewezen (met reden):</p>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 12, fontWeight: "bold" }}>Voorbeelden -- afgewezen (met reden)</span>
+            <CopyButton text={JSON.stringify(result.candidates.filter((c) => c.confidence === "rejected").slice(0, 3), null, 2)} />
+          </div>
           <pre style={{ fontSize: 10, background: "#fdf0f0", padding: 8, borderRadius: 6, overflowX: "auto" }}>
             {JSON.stringify(result.candidates.filter((c) => c.confidence === "rejected").slice(0, 3), null, 2)}
           </pre>
