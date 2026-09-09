@@ -93,6 +93,44 @@ export type ComponentStats = {
   isolatedComponentCount: number; // componenten met precies 1 node (geen enkele verbinding)
 };
 
+/**
+ * Telt hoeveel punten uit `pointsA` binnen `toleranceM` van TEN MINSTE ÉÉN
+ * punt uit `pointsB` liggen -- grid-gebaseerd (O(n+m) i.p.v. O(n*m)).
+ *
+ * TOEGEVOEGD 9-9-2026, ná een echte 504-timeout bij Hilversum: de eerdere
+ * naïeve geneste lus (elk punt in A tegen elk punt in B) was te traag bij
+ * honderden × tienduizenden punten. Geëxtraheerd als losse functie zodat dit
+ * apart getest kan worden, niet alleen aangenomen.
+ */
+export function countPointsNearAnyOther(pointsA: { x: number; y: number }[], pointsB: { x: number; y: number }[], toleranceM: number): number {
+  const grid = new Map<string, { x: number; y: number }[]>();
+  const cellOf = (x: number, y: number) => `${Math.floor(x / toleranceM)}:${Math.floor(y / toleranceM)}`;
+  for (const p of pointsB) {
+    const cell = cellOf(p.x, p.y);
+    if (!grid.has(cell)) grid.set(cell, []);
+    grid.get(cell)!.push(p);
+  }
+  let count = 0;
+  for (const a of pointsA) {
+    const [cx, cy] = cellOf(a.x, a.y).split(":").map(Number);
+    let found = false;
+    for (let dx = -1; dx <= 1 && !found; dx++) {
+      for (let dy = -1; dy <= 1 && !found; dy++) {
+        const candidates = grid.get(`${cx + dx}:${cy + dy}`);
+        if (!candidates) continue;
+        for (const b of candidates) {
+          if (Math.hypot(b.x - a.x, b.y - a.y) <= toleranceM) {
+            found = true;
+            break;
+          }
+        }
+      }
+    }
+    if (found) count++;
+  }
+  return count;
+}
+
 function segmentLengthM(coords: { x: number; y: number }[]): number {
   let total = 0;
   for (let i = 1; i < coords.length; i++) {

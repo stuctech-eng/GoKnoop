@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { analyzeNwbGraph, analyzeSlimNwbGraph } from "./graph-analysis";
+import { analyzeNwbGraph, analyzeSlimNwbGraph, countPointsNearAnyOther } from "./graph-analysis";
 import type { NwbSegment } from "./nwb-client";
 
 describe("graph-analysis", () => {
@@ -60,6 +60,39 @@ describe("graph-analysis", () => {
 
       expect(slimResult.componentCount).toBe(fullResult.componentCount);
       expect(slimResult.largestComponentLengthM).toBe(fullResult.largestComponentLengthM);
+    });
+  });
+
+  describe("countPointsNearAnyOther (nieuw, grid-gebaseerde nabijheid -- vervangt een trage O(n*m)-lus die een 504 veroorzaakte)", () => {
+    it("telt punten die binnen tolerantie van ten minste één ander punt liggen", () => {
+      const a = [
+        { x: 0, y: 0 },
+        { x: 100, y: 100 },
+      ];
+      const b = [{ x: 3, y: 0 }];
+      expect(countPointsNearAnyOther(a, b, 5)).toBe(1);
+    });
+
+    it("geeft 0 als geen enkel punt binnen tolerantie ligt", () => {
+      expect(countPointsNearAnyOther([{ x: 0, y: 0 }], [{ x: 1000, y: 1000 }], 5)).toBe(0);
+    });
+
+    it("geeft het volledige aantal als alle punten binnen tolerantie liggen", () => {
+      const a = [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 0 }];
+      expect(countPointsNearAnyOther(a, [{ x: 0, y: 0 }], 5)).toBe(3);
+    });
+
+    it("werkt correct bij lege input", () => {
+      expect(countPointsNearAnyOther([], [{ x: 0, y: 0 }], 5)).toBe(0);
+      expect(countPointsNearAnyOther([{ x: 0, y: 0 }], [], 5)).toBe(0);
+    });
+
+    it("geeft hetzelfde resultaat als een naïeve O(n*m)-implementatie (consistentiecontrole)", () => {
+      const a = Array.from({ length: 50 }, (_, i) => ({ x: i * 3, y: 0 }));
+      const b = Array.from({ length: 30 }, (_, i) => ({ x: i * 5 + 1, y: 0 }));
+      const tol = 4;
+      const naive = a.filter((p) => b.some((q) => Math.hypot(p.x - q.x, p.y - q.y) <= tol)).length;
+      expect(countPointsNearAnyOther(a, b, tol)).toBe(naive);
     });
   });
 });

@@ -4,7 +4,7 @@ import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { COLLECTOR_REGIONS, regionRootBbox } from "@/lib/nwb-analysis/collector-regions";
 import { classifySegment } from "@/lib/nwb-analysis/classify";
-import { analyzeSlimNwbGraph } from "@/lib/nwb-analysis/graph-analysis";
+import { analyzeSlimNwbGraph, countPointsNearAnyOther } from "@/lib/nwb-analysis/graph-analysis";
 import type { SlimNwbSegment } from "@/lib/nwb-analysis/combined-graph";
 
 export const maxDuration = 10;
@@ -102,9 +102,13 @@ export async function GET(req: NextRequest) {
       }
     }
     const nwbEndpoints = setBSegments.flatMap((s) => [s.from, s.to]);
+
+    // Grid-gebaseerde nabijheidscheck (countPointsNearAnyOther, graph-analysis.ts)
+    // i.p.v. een naïeve O(N×M)-geneste-lus -- die gaf een echte 504-timeout
+    // bij Hilversum (honderden knopen x tienduizenden NWB-punten x 3 toleranties).
     const proximity: Record<string, number> = {};
     for (const tol of [10, 20, 50]) {
-      proximity[`${tol}m`] = goknoopNodesInRegion.filter((gn) => nwbEndpoints.some((p) => Math.hypot(p.x - gn.x, p.y - gn.y) <= tol)).length;
+      proximity[`${tol}m`] = countPointsNearAnyOther(goknoopNodesInRegion, nwbEndpoints, tol);
     }
 
     return NextResponse.json({
