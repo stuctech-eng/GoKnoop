@@ -1,7 +1,9 @@
 "use client";
-// forceer-diff 9-9-2026
 
 import { useState, useRef } from "react";
+import { analyzeSlimNwbGraph, countPointsNearAnyOther } from "@/lib/nwb-analysis/graph-analysis";
+import { classifySegment } from "@/lib/nwb-analysis/classify";
+import type { SlimNwbSegment } from "@/lib/nwb-analysis/combined-graph";
 
 const REGIONS = [
   { key: "hilversum", label: "Amsterdam <-> Hilversum" },
@@ -103,42 +105,104 @@ export default function NwbCollectorRunnerPage() {
   async function finalize(regionKey: string) {
     setRunning(true);
     setFinalResult(null);
+    setLog([]);
     const key = getKey();
 
-    // Stap 1: lichte component-analyse -- altijd, voor alle regio's.
-    let componentsJson: Record<string, unknown> | null = null;
+    // Stap 1: alle tegels gepagineerd inlezen (klein en snel per aanroep,
+    // vermijdt de 504 die ontstond door 100+ tegels in één keer te lezen).
+    const segmentsById = new Map<string, SlimNwbSegment>();
+    let offset = 0;
+    let totalTiles = 0;
+    for (;;) {
+      try {
+        const params = new URLSearchParams({ region: regionKey, offset: String(offset) });
+        if (key) params.set("key", key);
+        const res = await fetch(`/api/debug/nwb-collector-read-tiles?${params.toString()}`, { cache: "no-store" });
+        const rawText = await res.text();
+        let json: Record<string, unknown>;
+        try {
+          json = JSON.parse(rawText);
+        } catch {
+          setLog((prev) => [...prev, `⚠️ Tegels lezen (offset ${offset}): geen geldige JSON (status ${res.status}): ${rawText.slice(0, 300)}`]);
+          setRunning(false);
+          return;
+        }
+        if (!res.ok) {
+          setLog((prev) => [...prev, `⚠️ Tegels lezen (offset ${offset}): ${json.details ?? json.error}`]);
+          setRunning(false);
+          return;
+        }
+        totalTiles = json.totalTiles as number;
+        for (const seg of json.segments as SlimNwbSegment[]) {
+          segmentsById.set(seg.id, seg);
+        }
+        setLog((prev) => [...prev, `Tegels ${offset + 1}-${offset + (json.tilesInPage as number)} van ${totalTiles} gelezen. Totaal uniek zover: ${segmentsById.size}`]);
+        if (json.done) break;
+        offset += json.tilesInPage as number;
+      } catch (err) {
+        setLog((prev) => [...prev, `⚠️ Tegels lezen (offset ${offset}): ${err instanceof Error ? err.message : String(err)}`]);
+        setRunning(false);
+        return;
+      }
+    }
+
+    // Stap 2: GoKnoop-knopen voor deze regio ophalen (klein, snel).
+    setLog((prev) => [...prev, "Alle tegels gelezen -- GoKnoop-knopen ophalen..."]);
+    let goknoopNodes: { x: number; y: number }[] = [];
+    let routingTestBeschikbaar = false;
     try {
       const params = new URLSearchParams({ region: regionKey, datasetVersionId });
       if (key) params.set("key", key);
-      const res = await fetch(`/api/debug/nwb-collector-finalize-components?${params.toString()}`, { cache: "no-store" });
-      const rawText = await res.text();
-      try {
-        componentsJson = JSON.parse(rawText);
-      } catch {
-        setLog((prev) => [...prev, `⚠️ Afronden (componenten): geen geldige JSON (status ${res.status}): ${rawText.slice(0, 300)}`]);
-        setRunning(false);
-        return;
-      }
+      const res = await fetch(`/api/debug/nwb-collector-goknoop-nodes?${params.toString()}`, { cache: "no-store" });
+      const json = await res.json();
       if (!res.ok) {
-        setLog((prev) => [...prev, `⚠️ Afronden (componenten): ${componentsJson?.details ?? componentsJson?.error}`]);
+        setLog((prev) => [...prev, `⚠️ GoKnoop-knopen: ${json.details ?? json.error}`]);
         setRunning(false);
         return;
       }
+      goknoopNodes = json.nodes;
+      routingTestBeschikbaar = json.routingTestBeschikbaar;
     } catch (err) {
-      setLog((prev) => [...prev, `⚠️ Afronden (componenten): ${err instanceof Error ? err.message : String(err)}`]);
+      setLog((prev) => [...prev, `⚠️ GoKnoop-knopen: ${err instanceof Error ? err.message : String(err)}`]);
       setRunning(false);
       return;
     }
 
-    if (!componentsJson) {
-      setLog((prev) => [...prev, "⚠️ Afronden (componenten): onbekende fout, geen resultaat ontvangen."]);
-      setRunning(false);
-      return;
+    // Stap 3: berekening CLIENT-SIDE (de browser heeft geen 10s-tijdslimiet).
+    setLog((prev) => [...prev, "Berekening starten (kan even duren bij grote regio's)..."]);
+    await sleep(50); // laat de UI de logregel nog tonen vóór de (synchrone) berekening start
+    const allSegments = Array.from(segmentsById.values());
+    const bstCodeDistribution: Record<string, number> = {};
+    for (const s of allSegments) {
+      const code = s.bstCode ?? "(leeg)";
+      bstCodeDistribution[code] = (bstCodeDistribution[code] || 0) + 1;
+    }
+    const setASegments = allSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) === "setA");
+    const setBSegments = allSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded");
+    const componentAnalyse = {
+      setA: Object.fromEntries([5, 10, 20].map((t) => [`${t}m`, analyzeSlimNwbGraph(setASegments, t)])),
+      setB: Object.fromEntries([5, 10, 20].map((t) => [`${t}m`, analyzeSlimNwbGraph(setBSegments, t)])),
+    };
+    const nwbEndpoints = setBSegments.flatMap((s) => [s.from, s.to]);
+    const proximity: Record<string, number> = {};
+    for (const tol of [10, 20, 50]) {
+      proximity[`${tol}m`] = countPointsNearAnyOther(goknoopNodes, nwbEndpoints, tol);
     }
 
-    // Stap 2: routetest, alleen als het component-eindpunt aangeeft dat dit van toepassing is.
+    const componentsResult = {
+      region: regionKey,
+      tegelsCompleet: totalTiles,
+      uniekeSegmenten: allSegments.length,
+      bstCodeVerdeling: bstCodeDistribution,
+      setASegmentCount: setASegments.length,
+      setBSegmentCount: setBSegments.length,
+      componentAnalyse,
+      goknoop: { knopenInRegio: goknoopNodes.length, proximityTotNwbSetB: proximity },
+    };
+
+    // Stap 4: routetest, alleen indien van toepassing (server-side, apart eindpunt).
     let routingJson: Record<string, unknown> | null = null;
-    if (componentsJson.routingTestBeschikbaarVia) {
+    if (routingTestBeschikbaar) {
       setLog((prev) => [...prev, "Componenten klaar -- routetest starten (kan een paar seconden duren)..."]);
       try {
         const params = new URLSearchParams({ region: regionKey, datasetVersionId, toleranceM: "10" });
@@ -159,7 +223,7 @@ export default function NwbCollectorRunnerPage() {
       }
     }
 
-    setFinalResult({ ...componentsJson, routingTest: routingJson ?? componentsJson.routingTestBeschikbaarVia ?? "niet van toepassing" });
+    setFinalResult({ ...componentsResult, routingTest: routingJson ?? "niet van toepassing voor deze regio (connectiviteit-only)" });
     setRunning(false);
   }
 
