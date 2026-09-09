@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { buildCombinedGraph, buildValidatedCombinedGraph, computeConnectedComponents, dijkstraOnCombinedGraph } from "./combined-graph";
+import {
+  buildCombinedGraph,
+  buildValidatedCombinedGraph,
+  computeConnectedComponents,
+  dijkstraOnCombinedGraph,
+  dijkstraWithCostModel,
+  makeCostFn,
+} from "./combined-graph";
 import type { GraphProvider, GraphNode, GraphEdge } from "../route-engine/types";
 import type { SlimNwbSegment, ValidatedConnectorInput } from "./combined-graph";
 
@@ -287,5 +294,90 @@ describe("computeConnectedComponents (Fase 4 -- topologie op de volledige gecomb
     const stats = computeConnectedComponents(graph);
     expect(stats.componentCount).toBe(1);
     expect(stats.largestComponentPercent).toBe(100);
+  });
+});
+
+describe("dijkstraWithCostModel + makeCostFn (Fase 5 -- empirisch kostenmodel)", () => {
+  /**
+   * Scenario: twee parallelle routes tussen dezelfde start/eind -- één via
+   * GoKnoop (40 km werkelijk), één via NWB (35 km werkelijk). Dit test
+   * PRECIES het wiskundige omslagpunt uit de architectuurreview van
+   * vandaag: NWB wint zolang D_nwb × F < D_goknoop, dus bij D_g=40, D_n=35
+   * is het omslagpunt F = 40/35 ≈ 1,143.
+   */
+  function buildParallelRoutesScenario() {
+    // GoKnoop-pad: 1 -> 2 -> 3, elk 20km, totaal 40km.
+    const goknoopEdge1: GraphEdge = { id: "g1", fromLogicalNodeId: "1", toLogicalNodeId: "mid", distanceM: 20000, directionality: "unknown", geometry: [] };
+    const goknoopEdge2: GraphEdge = { id: "g2", fromLogicalNodeId: "mid", toLogicalNodeId: "3", distanceM: 20000, directionality: "unknown", geometry: [] };
+    const nodes = new Map<string, GraphNode>([
+      ["1", makeNode("1", 0, 0)],
+      ["mid", makeNode("mid", 20000, 0)],
+      ["3", makeNode("3", 40000, 0)],
+    ]);
+    const edges = new Map<string, GraphEdge[]>([
+      ["1", [goknoopEdge1]],
+      ["mid", [goknoopEdge1, goknoopEdge2]],
+      ["3", [goknoopEdge2]],
+    ]);
+    const provider = new FakeGraphProvider(nodes, edges);
+    // NWB-pad: rechtstreeks van 1 naar 3, 35km werkelijk, via connectors op afstand 0 (voor een schoon, exact narekenbaar scenario).
+    const nwbSegments: SlimNwbSegment[] = [{ id: "shortcut", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: 100 }, to: { x: 35000, y: 100 }, lengthM: 35000 }];
+    const validatedConnectors: ValidatedConnectorInput[] = [
+      { goknoopNodeId: "1", nwbSegmentId: "shortcut", nwbEndpoint: "from", distanceM: 0, confidence: "high" },
+      { goknoopNodeId: "3", nwbSegmentId: "shortcut", nwbEndpoint: "to", distanceM: 0, confidence: "high" },
+    ];
+    return buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
+  }
+
+  it("bij F=1,00 (baseline) wint NWB (35km) van GoKnoop (40km) -- reproduceert de Fase 4-bevinding", () => {
+    const graph = buildParallelRoutesScenario();
+    const result = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.0, 1.0));
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.nwbEdgeCount).toBeGreaterThan(0);
+      expect(result.goknoopEdgeCount).toBe(0);
+      expect(result.distanceM).toBeCloseTo(35000, -1);
+    }
+  });
+
+  it("bij F=1,10 (onder het omslagpunt 1,143) wint NWB nog steeds", () => {
+    const graph = buildParallelRoutesScenario();
+    const result = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.1, 1.0));
+    expect(result.found).toBe(true);
+    if (result.found) expect(result.goknoopEdgeCount).toBe(0);
+  });
+
+  it("bij F=1,15 (boven het omslagpunt 1,143) wint GoKnoop -- het voorspelde omslagpunt klopt empirisch", () => {
+    const graph = buildParallelRoutesScenario();
+    const result = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.15, 1.0));
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.goknoopEdgeCount).toBe(2);
+      expect(result.nwbEdgeCount).toBe(0);
+      // Cruciaal: de GERAPPORTEERDE afstand is de WERKELIJKE 40km, nooit de opgehoogde kosten.
+      expect(result.distanceM).toBeCloseTo(40000, -1);
+    }
+  });
+
+  it("distanceM (werkelijk) en costTotal (gewogen) zijn verschillende getallen zodra F != 1", () => {
+    const graph = buildParallelRoutesScenario();
+    const result = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.0, 1.0));
+    expect(result.found).toBe(true);
+    if (result.found) {
+      // Bij F=1.0 voor dit pad (NWB) zijn kosten en afstand toevallig gelijk -- test daarom met een van-1-afwijkende F.
+    }
+    const result2 = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.2, 1.0));
+    expect(result2.found).toBe(true);
+    if (result2.found) {
+      // Bij F=1.2 wint GoKnoop (40km, kosten=40000) -- costTotal en distanceM zijn hier gelijk want GoKnoop-edges wegen altijd 1.0.
+      // Test daarom expliciet het NWB-pad zelf bij een F waarbij het nog wint, om het verschil te tonen.
+    }
+    const result3 = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.1, 1.0));
+    expect(result3.found).toBe(true);
+    if (result3.found) {
+      expect(result3.distanceM).toBeCloseTo(35000, -1); // werkelijke afstand van het NWB-pad
+      expect(result3.costTotal).toBeCloseTo(38500, -1); // 35000 * 1.1 -- de kosten die de keuze bepaalden
+      expect(result3.distanceM).not.toBeCloseTo(result3.costTotal, -1);
+    }
   });
 });

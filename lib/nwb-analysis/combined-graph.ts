@@ -401,3 +401,125 @@ export function dijkstraOnCombinedGraph(graph: CombinedGraph, startId: string, e
 
   return { found: true, distanceM: dist.get(endId)!, steps, goknoopEdgeCount, nwbEdgeCount, connectorCount };
 }
+
+/**
+ * TOEGEVOEGD 9-9-2026, Fase 5: kostenfunctie-fabriek. `fNwb`/`fConnector`
+ * zijn multiplicatieve factoren op de WERKELIJKE afstand -- exact het
+ * model dat in de architectuurreview is doorgerekend en bewezen begrensd
+ * (D_g ≤ D_n × F). GEEN vooraf gekozen "standaardwaarde" hier -- de
+ * aanroeper (het Fase 5-onderzoek) geeft expliciet de te testen waarden mee.
+ */
+export type CostFn = (edge: CombinedEdge) => number;
+
+export function makeCostFn(fNwb: number, fConnector: number): CostFn {
+  return (edge) => {
+    if (edge.source === "nwb") return edge.distanceM * fNwb;
+    if (edge.source === "connector") return edge.distanceM * fConnector;
+    return edge.distanceM; // goknoop -- altijd de werkelijke afstand, nooit een factor
+  };
+}
+
+export type CostAwareStep = { nodeId: string; edgeSource: CombinedEdgeSource | "start" };
+
+export type CostAwareDijkstraResult =
+  | {
+      found: true;
+      distanceM: number; // WERKELIJKE afstand van het gekozen pad (som van edge.distanceM, nooit vermenigvuldigd)
+      costTotal: number; // de kosten die Dijkstra gebruikte om te kiezen (kan afwijken van distanceM)
+      steps: CostAwareStep[];
+      goknoopEdgeCount: number;
+      nwbEdgeCount: number;
+      connectorCount: number;
+      goknoopDistanceM: number; // werkelijke afstand PER bron -- nodig voor "aandeel"-berekeningen
+      nwbDistanceM: number;
+      connectorDistanceM: number;
+    }
+  | { found: false };
+
+/**
+ * Kosten-bewuste Dijkstra. Kiest het pad met de LAAGSTE KOSTEN (via costFn),
+ * maar rapporteert altijd de WERKELIJKE afstand van dat gekozen pad --
+ * kosten en afstand worden nooit met elkaar verward, ook niet intern
+ * (twee aparte accumulatoren, costSoFar voor de padkeuze, distSoFar voor
+ * de rapportage van precies datzelfde pad).
+ */
+export function dijkstraWithCostModel(graph: CombinedGraph, startId: string, endId: string, costFn: CostFn): CostAwareDijkstraResult {
+  const costSoFar = new Map<string, number>();
+  const distSoFar = new Map<string, number>();
+  const prevNode = new Map<string, string>();
+  const prevEdge = new Map<string, CombinedEdge>();
+  const visited = new Set<string>();
+
+  const queue = new MinHeap();
+  queue.push({ id: startId, d: 0 });
+  costSoFar.set(startId, 0);
+  distSoFar.set(startId, 0);
+
+  while (queue.size > 0) {
+    const current = queue.pop()!;
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+    if (current.id === endId) break;
+
+    const edges = graph.adjacency.get(current.id) ?? [];
+    for (const edge of edges) {
+      if (visited.has(edge.to)) continue;
+      const edgeCost = costFn(edge);
+      const newCost = current.d + edgeCost;
+      if (newCost < (costSoFar.get(edge.to) ?? Infinity)) {
+        costSoFar.set(edge.to, newCost);
+        distSoFar.set(edge.to, (distSoFar.get(current.id) ?? 0) + edge.distanceM);
+        prevNode.set(edge.to, current.id);
+        prevEdge.set(edge.to, edge);
+        queue.push({ id: edge.to, d: newCost });
+      }
+    }
+  }
+
+  if (!costSoFar.has(endId)) return { found: false };
+
+  const steps: CostAwareStep[] = [];
+  let cur: string | undefined = endId;
+  while (cur !== undefined) {
+    const edge = prevEdge.get(cur);
+    steps.unshift({ nodeId: cur, edgeSource: edge?.source ?? "start" });
+    cur = prevNode.get(cur);
+  }
+
+  let goknoopEdgeCount = 0;
+  let nwbEdgeCount = 0;
+  let connectorCount = 0;
+  let goknoopDistanceM = 0;
+  let nwbDistanceM = 0;
+  let connectorDistanceM = 0;
+  cur = endId;
+  while (cur !== undefined) {
+    const edge = prevEdge.get(cur);
+    if (edge) {
+      if (edge.source === "goknoop") {
+        goknoopEdgeCount++;
+        goknoopDistanceM += edge.distanceM;
+      } else if (edge.source === "nwb") {
+        nwbEdgeCount++;
+        nwbDistanceM += edge.distanceM;
+      } else if (edge.source === "connector") {
+        connectorCount++;
+        connectorDistanceM += edge.distanceM;
+      }
+    }
+    cur = prevNode.get(cur);
+  }
+
+  return {
+    found: true,
+    distanceM: distSoFar.get(endId)!,
+    costTotal: costSoFar.get(endId)!,
+    steps,
+    goknoopEdgeCount,
+    nwbEdgeCount,
+    connectorCount,
+    goknoopDistanceM,
+    nwbDistanceM,
+    connectorDistanceM,
+  };
+}
