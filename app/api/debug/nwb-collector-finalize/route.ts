@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
-import { COLLECTOR_REGIONS } from "@/lib/nwb-analysis/collector-regions";
+import { COLLECTOR_REGIONS, regionRootBbox } from "@/lib/nwb-analysis/collector-regions";
 import { classifySegment } from "@/lib/nwb-analysis/classify";
+import { analyzeSlimNwbGraph } from "@/lib/nwb-analysis/graph-analysis";
 import { buildCombinedGraph, dijkstraOnCombinedGraph, type SlimNwbSegment } from "@/lib/nwb-analysis/combined-graph";
 
 export const maxDuration = 10;
@@ -78,11 +79,39 @@ export async function GET(req: NextRequest) {
       bstCodeDistribution[code] = (bstCodeDistribution[code] || 0) + 1;
     }
 
-    const setACount = allSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) === "setA").length;
-    const setBCount = allSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded").length;
+    const setASegments = allSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) === "setA");
+    const setBSegments = allSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded");
+    const setACount = setASegments.length;
+    const setBCount = setBSegments.length;
+
+    // Component-analyse (nu met de gecorrigeerde analyzeSlimNwbGraph -- zie
+    // graph-analysis.ts, 9-9-2026: een segment verbindt voortaan ook zijn
+    // eigen begin- en eindpunt, wat eerder ontbrak en connectiviteit
+    // stelselmatig onderschatte).
+    const componentAnalyse = {
+      setA: Object.fromEntries([5, 10, 20].map((t) => [`${t}m`, analyzeSlimNwbGraph(setASegments, t)])),
+      setB: Object.fromEntries([5, 10, 20].map((t) => [`${t}m`, analyzeSlimNwbGraph(setBSegments, t)])),
+    };
 
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
+
+    // GoKnoop-knopen binnen de regio + hun nabijheid tot NWB Set B.
+    const regionBbox = regionRootBbox(region);
+    const allNodeIds = provider.getAllNodeIds();
+    const goknoopNodesInRegion: { x: number; y: number; edgeCount: number }[] = [];
+    for (const id of allNodeIds) {
+      const n = provider.getNode(id);
+      if (!n) continue;
+      if (n.x >= regionBbox.minX && n.x <= regionBbox.maxX && n.y >= regionBbox.minY && n.y <= regionBbox.maxY) {
+        goknoopNodesInRegion.push({ x: n.x, y: n.y, edgeCount: provider.getEdgesFrom(id).length });
+      }
+    }
+    const nwbEndpoints = setBSegments.flatMap((s) => [s.from, s.to]);
+    const proximity: Record<string, number> = {};
+    for (const tol of [10, 20, 50]) {
+      proximity[`${tol}m`] = goknoopNodesInRegion.filter((gn) => nwbEndpoints.some((p) => Math.hypot(p.x - gn.x, p.y - gn.y) <= tol)).length;
+    }
 
     const doRoutingTest = region.fromNodeId !== region.toNodeId;
     let routingResult: Record<string, unknown> | null = null;
@@ -131,6 +160,11 @@ export async function GET(req: NextRequest) {
       bstCodeVerdeling: bstCodeDistribution,
       setASegmentCount: setACount,
       setBSegmentCount: setBCount,
+      componentAnalyse,
+      goknoop: {
+        knopenInRegio: goknoopNodesInRegion.length,
+        proximityTotNwbSetB: proximity,
+      },
       routingTest: doRoutingTest ? routingResult : "niet van toepassing voor deze regio (connectiviteit-only)",
     });
   } catch (err) {

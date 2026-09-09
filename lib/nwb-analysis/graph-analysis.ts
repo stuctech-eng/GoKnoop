@@ -34,6 +34,14 @@ class UnionFind {
  * via grid-bucketing (voorkomt een trage O(n²)-vergelijking bij duizenden
  * punten): elk punt wordt in een rastercel van toleranceM geplaatst, en
  * alleen punten in dezelfde of aangrenzende cel worden met elkaar vergeleken.
+ *
+ * KRITIEKE FIX (9-9-2026): naast nabijheid TUSSEN verschillende segmenten
+ * moet ook het begin- en eindpunt van HETZELFDE segment aan elkaar verbonden
+ * worden -- je kunt het segment zelf immers afleggen, dus dat is altijd een
+ * geldige verbinding, ongeacht hoe ver from en to uit elkaar liggen. Dit
+ * ontbrak volledig en onderschatte de connectiviteit stelselmatig (bv. twee
+ * exact aansluitende segmenten leverden componentCount=3 op i.p.v. de
+ * juiste 1 -- ontdekt via een test die dit expliciet controleerde).
  */
 function snapPoints(points: { x: number; y: number; segId: string; end: "from" | "to" }[], toleranceM: number) {
   const uf = new UnionFind();
@@ -46,6 +54,12 @@ function snapPoints(points: { x: number; y: number; segId: string; end: "from" |
     const cell = cellOf(p.x, p.y);
     if (!grid.has(cell)) grid.set(cell, []);
     grid.get(cell)!.push(p);
+  }
+
+  // Elk segment verbindt sowieso zijn eigen from/to.
+  const segIds = new Set(points.map((p) => p.segId));
+  for (const segId of segIds) {
+    uf.union(`${segId}:from`, `${segId}:to`);
   }
 
   for (const p of points) {
@@ -123,5 +137,51 @@ export function analyzeNwbGraph(segments: NwbSegment[], toleranceM: number): Com
     largestComponentSize: sizes[0] ?? 0,
     largestComponentLengthM: largestRoot ? largestRoot[1] : 0,
     isolatedComponentCount: sizes.filter((s) => s === 2).length, // 1 segment, 2 (from+to) node-ids, geen enkele andere verbinding
+  };
+}
+
+/**
+ * TOEGEVOEGD 8-9-2026: variant van analyzeNwbGraph voor het "slanke"
+ * segmentformaat (from/to/lengthM, geen volledige geometrie -- zie
+ * combined-graph.ts SlimNwbSegment, ingevoerd om de 413-payloadfout en
+ * Firestore-documentgrootte-limiet te vermijden). Hergebruikt dezelfde
+ * snapPoints-logica hierboven; de enige wijziging is hoe punten/lengte uit
+ * het segment gehaald worden. Bewust een aparte functie i.p.v. de
+ * bestaande analyzeNwbGraph aan te passen, om niets te wijzigen aan een
+ * al-werkend, al-gebruikt eindpunt (nwb-validation-test).
+ */
+export function analyzeSlimNwbGraph(
+  segments: { id: string; from: { x: number; y: number }; to: { x: number; y: number }; lengthM: number }[],
+  toleranceM: number
+): ComponentStats {
+  const points: { x: number; y: number; segId: string; end: "from" | "to" }[] = [];
+  for (const seg of segments) {
+    points.push({ x: seg.from.x, y: seg.from.y, segId: seg.id, end: "from" });
+    points.push({ x: seg.to.x, y: seg.to.y, segId: seg.id, end: "to" });
+  }
+
+  const uf = snapPoints(points, toleranceM);
+
+  const rootLength = new Map<string, number>();
+  const rootNodeIds = new Map<string, Set<string>>();
+  for (const seg of segments) {
+    const fromRoot = uf.find(`${seg.id}:from`);
+    rootLength.set(fromRoot, (rootLength.get(fromRoot) || 0) + seg.lengthM);
+    if (!rootNodeIds.has(fromRoot)) rootNodeIds.set(fromRoot, new Set());
+    rootNodeIds.get(fromRoot)!.add(`${seg.id}:from`);
+    rootNodeIds.get(fromRoot)!.add(`${seg.id}:to`);
+  }
+
+  const sizes2 = Array.from(rootNodeIds.values()).map((s) => s.size).sort((a, b) => b - a);
+  const largestRoot2 = Array.from(rootLength.entries()).sort((a, b) => b[1] - a[1])[0];
+
+  return {
+    segmentCount: segments.length,
+    nodeCount: uf.allIds().length,
+    edgeCount: segments.length,
+    componentCount: new Set(uf.allIds().map((id) => uf.find(id))).size,
+    largestComponentSize: sizes2[0] ?? 0,
+    largestComponentLengthM: largestRoot2 ? largestRoot2[1] : 0,
+    isolatedComponentCount: sizes2.filter((s) => s === 2).length,
   };
 }

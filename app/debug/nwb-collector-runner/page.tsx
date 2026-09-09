@@ -23,6 +23,32 @@ export default function NwbCollectorRunnerPage() {
     return window.localStorage.getItem("goknoop_debug_secret") || "";
   }
 
+  function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /** Eén tick-aanroep, zonder te gooien -- retourneert altijd een resultaat, zodat de aanroeper zelf over retries kan beslissen. */
+  async function fetchTickOnce(regionKey: string, key: string): Promise<{ ok: true; json: Record<string, unknown> } | { ok: false; errorMsg: string }> {
+    try {
+      const params = new URLSearchParams({ region: regionKey });
+      if (key) params.set("key", key);
+      const res = await fetch(`/api/debug/nwb-collector-tick?${params.toString()}`, { method: "POST", cache: "no-store" });
+      const rawText = await res.text();
+      let json: Record<string, unknown>;
+      try {
+        json = JSON.parse(rawText);
+      } catch {
+        return { ok: false, errorMsg: `geen geldige JSON (status ${res.status}): ${rawText.slice(0, 200)}` };
+      }
+      if (!res.ok) {
+        return { ok: false, errorMsg: String(json.details ?? json.error ?? "onbekende fout") };
+      }
+      return { ok: true, json };
+    } catch (err) {
+      return { ok: false, errorMsg: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async function runCollector(regionKey: string) {
     setActiveRegion(regionKey);
     setRunning(true);
@@ -36,40 +62,38 @@ export default function NwbCollectorRunnerPage() {
     const key = getKey();
     let ticks = 0;
     const MAX_TICKS = 500; // veiligheidslimiet -- voorkomt een oneindige loop bij een onverwachte fout
+    const MAX_RETRIES_PER_TICK = 3;
+    const RETRY_DELAYS_MS = [1000, 2000, 4000];
 
     while (!stopRef.current && ticks < MAX_TICKS) {
       ticks++;
-      try {
-        const params = new URLSearchParams({ region: regionKey });
-        if (key) params.set("key", key);
-        const res = await fetch(`/api/debug/nwb-collector-tick?${params.toString()}`, { method: "POST", cache: "no-store" });
-        const rawText = await res.text();
-        let json: Record<string, unknown>;
-        try {
-          json = JSON.parse(rawText);
-        } catch {
-          setLog((prev) => [...prev, `⚠️ Tick ${ticks}: geen geldige JSON (status ${res.status}): ${rawText.slice(0, 200)}`]);
-          break;
-        }
-        if (!res.ok) {
-          setLog((prev) => [...prev, `⚠️ Tick ${ticks}: ${json.details ?? json.error}`]);
-          break;
-        }
-        setTickCount(ticks);
-        if (json.done) {
-          setCompleteTiles(json.completeTiles as number);
-          setSplitTiles(json.splitTiles as number);
-          setLog((prev) => [...prev, `✅ Verzameling compleet na ${ticks} stappen. ${json.completeTiles} tegels compleet, ${json.splitTiles} gesplitst.`]);
-          break;
-        }
-        if (json.action === "split") {
-          setLog((prev) => [...prev, `Tick ${ticks}: tegel ${json.tileId} gesplitst (${json.reason}, ${json.segmentsSeen} segmenten gezien)`]);
-        } else {
-          setLog((prev) => [...prev, `Tick ${ticks}: tegel ${json.tileId} compleet (${json.segmentCount} segmenten)`]);
-        }
-      } catch (err) {
-        setLog((prev) => [...prev, `⚠️ Tick ${ticks}: ${err instanceof Error ? err.message : String(err)}`]);
+
+      let attempt = 0;
+      let result = await fetchTickOnce(regionKey, key);
+      while (!result.ok && attempt < MAX_RETRIES_PER_TICK) {
+        setLog((prev) => [...prev, `⚠️ Tick ${ticks}, poging ${attempt + 1} mislukt (${result.ok ? "" : result.errorMsg}) -- opnieuw proberen...`]);
+        await sleep(RETRY_DELAYS_MS[attempt] ?? 4000);
+        result = await fetchTickOnce(regionKey, key);
+        attempt++;
+      }
+
+      if (!result.ok) {
+        setLog((prev) => [...prev, `⚠️ Tick ${ticks}: definitief mislukt na ${MAX_RETRIES_PER_TICK} nieuwe pogingen: ${result.ok ? "" : result.errorMsg}. Gestopt.`]);
         break;
+      }
+
+      const json = result.json;
+      setTickCount(ticks);
+      if (json.done) {
+        setCompleteTiles(json.completeTiles as number);
+        setSplitTiles(json.splitTiles as number);
+        setLog((prev) => [...prev, `✅ Verzameling compleet na ${ticks} stappen. ${json.completeTiles} tegels compleet, ${json.splitTiles} gesplitst.`]);
+        break;
+      }
+      if (json.action === "split") {
+        setLog((prev) => [...prev, `Tick ${ticks}: tegel ${json.tileId} gesplitst (${json.reason}, ${json.segmentsSeen} segmenten gezien)`]);
+      } else {
+        setLog((prev) => [...prev, `Tick ${ticks}: tegel ${json.tileId} compleet (${json.segmentCount} segmenten)`]);
       }
     }
     setRunning(false);
