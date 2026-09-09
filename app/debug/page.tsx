@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/fase5b-calibration", label: "Fase 5B: Kalibratieronde (24 paren)", description: "Verfijnde F-reeks over 24 echte routeparen -- toetst of de 1,15-1,30-zone stabiel blijft." },
       { href: "/debug/fase5-cost-model-research", label: "Fase 5: Empirisch kostenmodel", description: "Brede F-sweep + connector-kostenvarianten, zoekt omslagpunten leeg, kiest niets vooraf." },
       { href: "/debug/fase4-combined-topology", label: "Fase 4: Gecombineerde-graaf-topologie", description: "GoKnoop + NWB + gevalideerde connectoren samengevoegd, topologie gemeten, geen kostenmodel." },
       { href: "/debug/nwb-visual-sample", label: "Visuele-validatiesteekproef", description: "90 representatieve connector-kandidaten met WGS84-coördinaten en geometrisch voor-oordeel." },
