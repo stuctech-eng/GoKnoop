@@ -1,6 +1,6 @@
 # GoKnoop — Handoff-briefing voor een nieuwe sessie
 
-**Laatst bijgewerkt:** 28 augustus 2026
+**Laatst bijgewerkt:** 9 september 2026
 **Doel van dit document:** een nieuwe Claude-sessie (of ontwikkelaar) in enkele minuten volledig op de hoogte brengen, zonder de oorspronkelijke, zeer lange ontwikkelsessie te hoeven doorlezen.
 
 ---
@@ -24,6 +24,101 @@ Phase 4 — Navigation                ⬜ nog niet gestart
 - `docs/phase2-route-engine-design.md` — Route Engine-contract, benchmarkresultaten, Phase 3-voorbereiding, Amsterdam-bugfix, Phase 3 MVP-validatie
 
 Dit handoff-document herhaalt die inhoud niet, maar geeft de **praktische, operationele context** die nergens anders staat.
+
+---
+
+## 1a. NWB-ARCHITECTUURBESLUIT (9 september 2026) — LEES DIT EERST
+
+**Dit is het meest recente, belangrijkste besluit in het project. Elke nieuwe sessie moet dit gelezen hebben vóór verder werk aan netwerkdekking/routing.**
+
+### Besluit
+
+De eerdere strategie om het GoKnoop-netwerk voornamelijk te repareren met individuele Bridge Layer-verbindingen wordt niet langer als primaire architectuur beschouwd.
+
+De nieuwe richting is:
+
+> **GoKnoop-knooppunten vormen de voorkeurslaag binnen een breder, compleet fietsnetwerk.**
+
+De beoogde gecombineerde netwerklaag bestaat uit: **GoKnoop knooppunten + NWB fietsrelevante infrastructuur**.
+
+GoKnoop behoudt daarmee zijn belangrijkste eigenschap — routeren via fietsknooppunten — maar is niet langer afhankelijk van de volledigheid van uitsluitend het knooppuntennetwerk.
+
+### Onderzoek dat dit besluit ondersteunt
+
+Een grootschalige NWB-verzameling over het onderzochte gebied (Amsterdam–Hilversum, ruime buffer) leverde:
+
+- 190.296 NWB-knopen;
+- 189.702 knopen in één component bij 20m tolerantie — **99,7%** in één samenhangend geheel;
+- bij 5m tolerantie al 88,6% in één component;
+- 303–334 van 340 onderzochte GoKnoop-knopen binnen 10–50m van NWB-infrastructuur.
+
+Dit is sterk bewijs dat NWB in het onderzochte gebied niet slechts uit losse lokale eilandjes bestaat, maar een vrijwel continu netwerk vormt dat ruimtelijk dicht bij het bestaande GoKnoop-netwerk ligt. Eerdere gerichte tests bevestigden bovendien dat echte GoKnoop ↔ NWB-connectors kunnen worden opgebouwd (connectorlogica getest en functioneel).
+
+Zelfde resultaat, herbevestigd via Lochem (99,6% in één component, 9.203 setB-segmenten) en Volendam/Edam/Purmerend (85,8% in één component, 20.489 setB-segmenten) — dit is dus geen toevalstreffer specifiek voor het Hilversum-gebied.
+
+### Belangrijke nuance: Amsterdam → Hilversum blijft een OPEN vraag
+
+De specifieke vraag *"kan de gecombineerde GoKnoop + NWB-graaf een realistische fietsroute van Amsterdam naar Hilversum vinden?"* is **nog niet definitief bewezen én ook niet weerlegd**.
+
+Een eerdere routetest gebruikte een relatief smalle corridor rond de rechte lijn Amsterdam → Hilversum. Daarbij werden 31–52 GoKnoop ↔ NWB-connectors gevonden (afhankelijk van tolerantie), werkte de connectorlogica, maar gebruikte Dijkstra geen enkele connector — er werd geen betere route gevonden dan de bestaande, zeer slechte GoKnoop-route van circa 366 km.
+
+**Deze negatieve routetest mag NIET worden geïnterpreteerd als "NWB kan Amsterdam → Hilversum niet verbinden."** De meest waarschijnlijke verklaring: de gebruikte NWB-corridor kwam onvoldoende overeen met de geografische ligging van de bestaande foutieve GoKnoop-route. Die route wijkt al zeer vroeg (rond 1,5% van de totale route-afstand) sterk af van de geografisch logische richting, en komt uiteindelijk tot circa 99 km van de rechte lijn. Daardoor kon Dijkstra in de smalle NWB-corridor geen NWB-overstap vinden vanaf het deel van de GoKnoop-graaf dat hij daadwerkelijk gebruikte — een corridor-dekkingsprobleem, geen eigenschap van NWB zelf.
+
+**Correcte formulering voor toekomstige sessies:**
+> "Een eerdere smalle-corridor-test vond geen route, maar die test was geografisch onvoldoende om de volledige NWB-verbinding te beoordelen. De vraag is daarom nog open."
+
+Niet: ~~"NWB kan Amsterdam → Hilversum niet routeren."~~ — dat is niet wat er is aangetoond.
+
+### Wat wél bewezen is
+
+1. NWB bevat in het onderzochte gebied zeer veel fietsrelevante infrastructuur.
+2. NWB vormt daar bij geschikte connectietolerantie een vrijwel continu netwerk.
+3. NWB ligt geografisch zeer dicht bij het overgrote deel van de onderzochte GoKnoop-knooppunten.
+4. GoKnoop ↔ NWB-connectors kunnen daadwerkelijk worden gegenereerd.
+5. De connectorlogica zelf is getest en functioneert.
+6. Het huidige GoKnoop-netwerk heeft aantoonbare ernstige netwerkproblemen die een breder fietsnetwerk kan helpen oplossen.
+7. Een architectuur waarin knooppunten de voorkeurslaag zijn binnen een breder fietsnetwerk is daarom technisch veelbelovender dan uitsluitend het bestaande knooppuntennetwerk proberen te repareren.
+
+### Wat nog niet bewezen is
+
+Of een volledig verzamelde NWB-graaf, gecombineerd met GoKnoop, daadwerkelijk een realistische Amsterdam → Hilversum-route kan produceren. Dit is een open validatievraag, geen bekende beperking van NWB. Een toekomstige test moet hiervoor een voldoende groot en volledig NWB-gebied gebruiken (bijv. rond de daadwerkelijke, huidige omweg-route heen, niet alleen de rechte lijn) en mag niet uitsluitend worden gebaseerd op een smalle rechte-lijncorridor.
+
+### Architectuurrichting
+
+De toekomstige router moet conceptueel kunnen werken als:
+
+```
+Start
+  ↓
+breed fietsnetwerk
+  ↓
+GoKnoop-knooppunt beschikbaar?
+  ├── ja → knooppuntroute krijgt voorkeur
+  │
+  └── nee → normaal fietsnetwerk
+  ↓
+volgend knooppunt
+  ↓
+opnieuw voorkeur voor GoKnoop
+  ↓
+Bestemming
+```
+
+GoKnoop wordt daarmee geen geïsoleerde knooppuntenrouter, maar een knooppunten-georiënteerde router binnen een breder fietsnetwerk. Dit sluit conceptueel aan bij het eerder onderzochte model van de Fietsersbond Routeplanner: knooppunten worden zoveel mogelijk gevolgd, terwijl buiten het knooppuntennetwerk het normale fietsnetwerk kan worden gebruikt.
+
+### Status (samenvatting)
+
+| Onderdeel | Status |
+|---|---|
+| Architectuurrichting | GoKnoop + breder fietsnetwerk |
+| NWB als aanvullende laag | Sterk ondersteund |
+| GoKnoop ↔ NWB connectors | Bewezen technisch mogelijk |
+| NWB-connectiviteit in onderzochte gebieden | Zeer sterk ondersteund (3 gebieden getest) |
+| Amsterdam → Hilversum via volledige gecombineerde graph | **OPEN** — niet bewezen, niet weerlegd |
+| Bridge Layer als primaire oplossing | Niet langer de voorkeursrichting |
+| Productie-integratie NWB | **Nog niet uitvoeren** voordat de gecombineerde netwerkarchitectuur en routeringsregels zijn ontworpen |
+
+De onderzoeksinfrastructuur die dit heeft aangetoond (NWB-client, quad-tree-verzamelaar, component-analyse, gecombineerde-graaf-Dijkstra-test) staat in `lib/nwb-analysis/` en de bijbehorende `/api/debug/nwb-*`-eindpunten — puur onderzoek, geen productiecode, nooit geactiveerd in de daadwerkelijke route-engine.
 
 ---
 

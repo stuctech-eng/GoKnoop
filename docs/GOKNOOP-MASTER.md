@@ -3069,3 +3069,34 @@ gemist (Buiksloterweg, nu gepatcht).
   (nooit bulk), en met expliciete bevestigingsstap.
 
 **Teststand aan het einde van de sessie**: 437/437 tests slagen, `tsc --noEmit` schoon.
+
+---
+
+## SESSIE-AFSLUITING 9 september 2026 — NWB-architectuurbesluit
+
+**Volledige versie van dit besluit staat in `docs/HANDOFF.md`, sectie "1a. NWB-ARCHITECTUURBESLUIT" — lees die sectie eerst bij een nieuwe sessie. Hier alleen de samenvatting.**
+
+**Besluit:** de Bridge Layer-strategie (individuele verbindingen repareren) is niet langer de primaire architectuurrichting. Nieuwe richting: **GoKnoop-knooppunten als voorkeurslaag binnen een breder, gecombineerd fietsnetwerk (GoKnoop + NWB)**.
+
+**Onderbouwing (drie onderzochte gebieden, allemaal met een eigen, tijdelijke onderzoeksinfrastructuur in `lib/nwb-analysis/` + `/api/debug/nwb-*`, geen productiecode):**
+
+| Gebied | NWB-segmenten (Set B) | Grootste component | Percentage |
+|---|---|---|---|
+| Amsterdam–Hilversum (ruime buffer) | 95.148 | 189.702 van 190.296 knopen (20m) | 99,7% |
+| Lochem/Achterhoek | 9.203 | 18.314–18.326 van 18.406 knopen | 99,6% |
+| Volendam/Edam/Purmerend | 20.489 | 35.158–35.190 van 40.978 knopen | 85,8–85,9% |
+
+GoKnoop ↔ NWB-connectors zijn bewezen technisch mogelijk en functioneren (getest via een tijdelijke gecombineerde-graaf-Dijkstra-implementatie).
+
+**Belangrijke open vraag, NIET verward met een negatief resultaat:** of de gecombineerde graph een realistische Amsterdam→Hilversum-route oplevert is nog niet bewezen. Een eerdere smalle-corridor-routetest (16.759 segmenten, langs de rechte lijn) vond geen betere route dan de bestaande, kapotte 366km-GoKnoop-route — maar dat komt vermoedelijk doordat die corridor niet aansloot bij waar de bestaande foutieve route daadwerkelijk heen dwaalt (tot 99km van de rechte lijn af, al vanaf 1,5% in de route). Zie HANDOFF.md 1a voor de volledige redenering. **Niet concluderen dat NWB deze verbinding niet kan** — de vraag staat open, niet weerlegd.
+
+**Belangrijke technische lessen uit deze sessie** (aanvullend op eerdere lessen elders in dit document):
+
+- **Union-Find-connectiviteit moet het eigen begin/eindpunt van elk segment expliciet verbinden.** Ontbrak aanvankelijk in `graph-analysis.ts`, gaf een stelselmatige onderschatting van connectiviteit (twee exact aansluitende segmenten leverden `componentCount: 3` op i.p.v. 1). Gevonden via een test die dit expliciet controleerde — niet toevallig gezien in productiedata.
+- **O(n×m)-nabijheidschecks zonder ruimtelijke indexering veroorzaken echte Vercel-timeouts** bij realistische datasets (honderden knopen × tienduizenden punten). Grid-bucketing (zelfde patroon als de bestaande snap-logica) lost dit op.
+- **Firestore: veel tegels tegelijk lezen (100+) is zelf al een bottleneck**, los van de daaropvolgende berekening. Oplossing: klein-gepagineerd lezen (10 tegels per aanvraag), en de zware berekening naar de browser verplaatsen (geen 10s-limiet client-side).
+- **Payload-grootte (zowel POST-aanvragen als Firestore-documenten)**: volledige NWB-lijngeometrie NIET meesturen/opslaan — alleen eindpunten + vooraf-berekende lengte ("slank formaat"). Voorkomt zowel 413-fouten als Firestore's 1MB-documentlimiet.
+- **`GeoServer`-specifieke query-parameters (`CQL_FILTER`) zijn geen garantie** — deze PDOK-WFS-dienst negeerde het stilzwijgend. Standaard WFS-parameters (`bbox`) zijn betrouwbaarder; attribuutfilters client-side toepassen op ongefilterde data.
+- **`getEdgesFrom()` geeft edges terug vanaf beide kanten** (bidirectioneel geïndexeerd) — bij het zelf navigeren van zo'n edge moet het "andere" eindpunt worden bepaald relatief tot het huidige knooppunt (`fromLogicalNodeId === id ? toLogicalNodeId : fromLogicalNodeId`), nooit blind `edge.toLogicalNodeId` aannemen.
+
+**Productie-integratie van NWB: nog niet uitvoeren** voordat de gecombineerde netwerkarchitectuur en routeringsregels (voorkeur voor knooppunten, hoe/wanneer overstappen naar NWB) zijn ontworpen. Dit was uitsluitend onderzoek.
