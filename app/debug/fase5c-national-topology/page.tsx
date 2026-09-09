@@ -16,6 +16,10 @@ const WEST_THRESHOLD_X = 180000;
 // Volendam-regio) en Oost-kant (Lochem/Achterhoek) -- voor de multi-route-test.
 const WEST_TEST_NODES = ["CJSXBPUMG49vOPmYvhJd", "7fmSWIHYsKu3Wb3yOtM2", "3Sx24AWzdYTR4Psx0JJW", "AG9myGNbdE6eH0W2SUmi"];
 const EAST_TEST_NODES = ["0pgYw2kgDphP2IT1RAi7", "9GsDbaxRKR3SKA6rMkiq", "CDdOFbRpdb959FzzPLc0"];
+// TOEGEVOEGD: gerichte component-check -- deze knoop bleek vanuit alle vier
+// de West-testpunten onbereikbaar (GoKnoop-only), terwijl de andere twee
+// Lochem-knopen wel bereikbaar waren.
+const SUSPECT_LOCHEM_NODE_ID = "0pgYw2kgDphP2IT1RAi7";
 
 class ClientGraphProvider implements GraphProvider {
   private nodeMap = new Map<string, { id: string; x: number; y: number; displayNumber: string | null }>();
@@ -168,6 +172,82 @@ export default function Fase5cNationalTopologyPage() {
     }
     setLog((prev) => [...prev, `Multi-route-test klaar. ${usedBridgeNodeIds.size} unieke bridge-knopen gebruikt over alle geteste paren samen.`]);
 
+    // Gerichte component-check voor de verdachte Lochem-knoop -- puur
+    // uitlezen van de al-berekende componentStats, geen nieuwe berekening,
+    // geen NWB, geen F.
+    setLog((prev) => [...prev, `Component-check voor ${SUSPECT_LOCHEM_NODE_ID}...`]);
+    const suspectRoot = componentStats.componentOfNode.get(SUSPECT_LOCHEM_NODE_ID);
+    const nodeIdsInSuspectComponent: string[] = [];
+    for (const [nodeId, root] of componentStats.componentOfNode.entries()) {
+      if (root === suspectRoot) nodeIdsInSuspectComponent.push(nodeId);
+    }
+    const suspectComponentSet = new Set(nodeIdsInSuspectComponent);
+
+    // Edges/degree binnen deze component (voor isolated/dead-end-telling).
+    let edgesInComponent = 0;
+    const degree = new Map<string, number>();
+    for (const id of nodeIdsInSuspectComponent) degree.set(id, 0);
+    for (const e of rawEdges) {
+      if (suspectComponentSet.has(e.from) && suspectComponentSet.has(e.to)) {
+        edgesInComponent++;
+        degree.set(e.from, (degree.get(e.from) || 0) + 1);
+        degree.set(e.to, (degree.get(e.to) || 0) + 1);
+      }
+    }
+    const isolatedInComponent = nodeIdsInSuspectComponent.filter((id) => degree.get(id) === 0).length;
+    const deadEndsInComponent = nodeIdsInSuspectComponent.filter((id) => degree.get(id) === 1).length;
+
+    // Geografische omvang (bbox) van deze component.
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const id of nodeIdsInSuspectComponent) {
+      const n = nodeById.get(id);
+      if (!n) continue;
+      if (n.x < minX) minX = n.x;
+      if (n.x > maxX) maxX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.y > maxY) maxY = n.y;
+    }
+
+    // Directe buren van de verdachte knoop zelf.
+    const suspectDirectNeighbors = provider.getEdgesFrom(SUSPECT_LOCHEM_NODE_ID).map((e) => {
+      const otherEnd = e.fromLogicalNodeId === SUSPECT_LOCHEM_NODE_ID ? e.toLogicalNodeId : e.fromLogicalNodeId;
+      return { nodeId: otherEnd, distanceM: Math.round(e.distanceM) };
+    });
+
+    // De andere twee Lochem-knopen: zelfde of andere component?
+    const otherLochemNodes = EAST_TEST_NODES.filter((id) => id !== SUSPECT_LOCHEM_NODE_ID);
+    const otherLochemComparison = otherLochemNodes.map((id) => ({
+      nodeId: id,
+      zelfdeComponentAlsVerdachteKnoop: componentStats.componentOfNode.get(id) === suspectRoot,
+      componentGrootte: (() => {
+        const root = componentStats.componentOfNode.get(id);
+        let size = 0;
+        for (const r of componentStats.componentOfNode.values()) if (r === root) size++;
+        return size;
+      })(),
+    }));
+
+    const suspectComponentAnalysis = {
+      nodeId: SUSPECT_LOCHEM_NODE_ID,
+      componentId: suspectRoot,
+      aantalNodes: nodeIdsInSuspectComponent.length,
+      aantalEdges: edgesInComponent,
+      geisoleerdeNodesInComponent: isolatedInComponent,
+      deadEndNodesInComponent: deadEndsInComponent,
+      grootsteComponentTerVergelijking: componentStats.largestComponentSize,
+      grootsteComponentPercentTerVergelijking: Math.round(componentStats.largestComponentPercent * 10) / 10,
+      geografischeOmvang: minX !== Infinity ? { rdBbox: { minX, maxX, minY, maxY }, wgs84Hoek1: rdToWgs84(minX, minY), wgs84Hoek2: rdToWgs84(maxX, maxY) } : null,
+      directeBuren: suspectDirectNeighbors,
+      vergelijkingMetAndereLochemKnopen: otherLochemComparison,
+      vergelijkingMetFase1: {
+        fase1TotaalComponenten: 1111,
+        fase1GrootsteComponent: 8372,
+        fase1GrootsteComponentPercent: 76.1,
+        opmerking: "Deze meting is dezelfde GoKnoop-only-graaf als Fase 1 (geen NWB/connectors/F), dus de landelijke totalen horen exact overeen te komen.",
+      },
+    };
+    setLog((prev) => [...prev, `Component van ${SUSPECT_LOCHEM_NODE_ID}: ${nodeIdsInSuspectComponent.length} nodes.`]);
+
     setReport({
       componentAnalyse: {
         totaalComponenten: componentStats.componentCount,
@@ -195,6 +275,7 @@ export default function Fase5cNationalTopologyPage() {
         resultaten: multiRouteResults,
         uniekeBridgeKnopenGebruikt: Array.from(usedBridgeNodeIds),
       },
+      GERICHTE_COMPONENT_CHECK_0pgYw2: suspectComponentAnalysis,
     });
     setLog((prev) => [...prev, "Analyse klaar."]);
     setRunning(false);
