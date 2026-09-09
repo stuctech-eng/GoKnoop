@@ -101,29 +101,64 @@ export default function NwbCollectorRunnerPage() {
 
   async function finalize(regionKey: string) {
     setRunning(true);
+    setFinalResult(null);
+    const key = getKey();
+
+    // Stap 1: lichte component-analyse -- altijd, voor alle regio's.
+    let componentsJson: Record<string, unknown> | null = null;
     try {
-      const key = getKey();
       const params = new URLSearchParams({ region: regionKey, datasetVersionId });
       if (key) params.set("key", key);
-      const res = await fetch(`/api/debug/nwb-collector-finalize?${params.toString()}`, { cache: "no-store" });
+      const res = await fetch(`/api/debug/nwb-collector-finalize-components?${params.toString()}`, { cache: "no-store" });
       const rawText = await res.text();
-      let json: Record<string, unknown>;
       try {
-        json = JSON.parse(rawText);
+        componentsJson = JSON.parse(rawText);
       } catch {
-        setLog((prev) => [...prev, `⚠️ Afronden: geen geldige JSON (status ${res.status}): ${rawText.slice(0, 300)}`]);
+        setLog((prev) => [...prev, `⚠️ Afronden (componenten): geen geldige JSON (status ${res.status}): ${rawText.slice(0, 300)}`]);
         setRunning(false);
         return;
       }
       if (!res.ok) {
-        setLog((prev) => [...prev, `⚠️ Afronden: ${json.details ?? json.error}`]);
+        setLog((prev) => [...prev, `⚠️ Afronden (componenten): ${componentsJson?.details ?? componentsJson?.error}`]);
         setRunning(false);
         return;
       }
-      setFinalResult(json);
     } catch (err) {
-      setLog((prev) => [...prev, `⚠️ Afronden: ${err instanceof Error ? err.message : String(err)}`]);
+      setLog((prev) => [...prev, `⚠️ Afronden (componenten): ${err instanceof Error ? err.message : String(err)}`]);
+      setRunning(false);
+      return;
     }
+
+    if (!componentsJson) {
+      setLog((prev) => [...prev, "⚠️ Afronden (componenten): onbekende fout, geen resultaat ontvangen."]);
+      setRunning(false);
+      return;
+    }
+
+    // Stap 2: routetest, alleen als het component-eindpunt aangeeft dat dit van toepassing is.
+    let routingJson: Record<string, unknown> | null = null;
+    if (componentsJson.routingTestBeschikbaarVia) {
+      setLog((prev) => [...prev, "Componenten klaar -- routetest starten (kan een paar seconden duren)..."]);
+      try {
+        const params = new URLSearchParams({ region: regionKey, datasetVersionId, toleranceM: "10" });
+        if (key) params.set("key", key);
+        const res = await fetch(`/api/debug/nwb-collector-finalize-routing?${params.toString()}`, { cache: "no-store" });
+        const rawText = await res.text();
+        try {
+          routingJson = JSON.parse(rawText);
+        } catch {
+          setLog((prev) => [...prev, `⚠️ Afronden (routetest): geen geldige JSON (status ${res.status}): ${rawText.slice(0, 300)}`]);
+        }
+        if (routingJson && !res.ok) {
+          setLog((prev) => [...prev, `⚠️ Afronden (routetest): ${routingJson?.details ?? routingJson?.error}`]);
+          routingJson = { error: routingJson.error, details: routingJson.details };
+        }
+      } catch (err) {
+        setLog((prev) => [...prev, `⚠️ Afronden (routetest): ${err instanceof Error ? err.message : String(err)}`]);
+      }
+    }
+
+    setFinalResult({ ...componentsJson, routingTest: routingJson ?? componentsJson.routingTestBeschikbaarVia ?? "niet van toepassing" });
     setRunning(false);
   }
 
