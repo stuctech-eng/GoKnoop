@@ -4,14 +4,17 @@ Knooppunt-first fietsrouteplatform. Zie Master Plan v1.0 (CodeSnap) voor de voll
 
 **Live:** https://go-knoop.vercel.app
 
-## STATUS (28 augustus 2026)
+## STATUS (9 september 2026)
 
 ```
 Phase 1 — Data Foundation           ✅ COMPLETE
 Phase 2 — Graph + Route Engine      ✅ COMPLETE (benchmark-onderbouwd)
 Phase 3 — Core GoKnoop UX (MVP)     ✅ VALIDATED op echte productiedata
 Phase 4 — Navigation                ⬜ nog niet gestart
+NWB-netwerkonderzoek                🔄 Fase 2/7 lopend (zie docs/HANDOFF.md 1a)
 ```
+
+**Belangrijk lopend traject:** GoKnoop onderzoekt een architectuurwijziging (GoKnoop-knooppunten als voorkeurslaag binnen een breder fietsnetwerk, aangevuld met NWB). Dit is een gefaseerd, streng gecontroleerd onderzoeks-/bouwtraject (7 fasen, elke fase apart goedgekeurd vóór de volgende start). Zie **[`docs/HANDOFF.md`](docs/HANDOFF.md)**, sectie 1a, voor de volledige context — begin daar bij een nieuwe sessie.
 
 Voor een volledige, gedetailleerde briefing (bedoeld om een nieuwe ontwikkelsessie snel op snelheid te brengen): zie **[`docs/HANDOFF.md`](docs/HANDOFF.md)**.
 
@@ -50,7 +53,7 @@ Environment variables (Vercel → GoKnoop → Settings → Environment Variables
 npm test
 ```
 
-45 tests (Vitest) over de volledige Route Engine-kern: Dijkstra, parallelle edges, constraints, disconnected-gevallen, route-reconstructie, distance-invariant, RoutePlanner-diversiteit, Location Resolver, rondje-generator.
+546+ tests (Vitest, groeit met elke sessie) over de volledige Route Engine-kern: Dijkstra, parallelle edges, constraints, disconnected-gevallen, route-reconstructie, distance-invariant, RoutePlanner-diversiteit, Location Resolver, rondje-generator, navigatie, en (tijdelijk, onderzoek) NWB-analyse.
 
 ## PUBLIEKE API
 

@@ -131,15 +131,18 @@ Vercel-regio:            fra1 (Frankfurt) -- bewust gekozen, dicht bij Firestore
 Vercel-plan:             Hobby (zie sectie 3, punt 1 -- dit is een harde beperking)
 ```
 
-**Datavolume (huidige actieve dataset):**
+**Datavolume (bijgewerkt 9 september 2026, live geverifieerd — Fase 1-rapport NWB-onderzoek):**
 ```
 sourceNodes:        13.152
 logicalNodes:        11.003  (1.191 samengevoegd, 9.698 los, 114 exception_review)
-source edges:        28.067
-valid graph edges:   28.060  (7 excluded/unresolved -- traceerbaar, nooit stilzwijgend verwijderd)
-matched edges:       16.345  (dit is de daadwerkelijke routing-graph, 58,3% van alle edges)
-Hoofdcomponent:      84,4% van alle logicalNodes (669 connected components totaal)
+source edges:        28.061
+matched edges:       15.495  (dit is de daadwerkelijke routing-graph)
+Hoofdcomponent:      76,1% van alle logicalNodes (8.372 nodes, 1.111 connected components totaal)
+Geïsoleerde nodes:   729
+Dead-ends:           1.206
 ```
+
+**Correctie t.o.v. eerdere versie van dit document:** de vorige waarden (28.067 source edges, 16.345 matched edges, 84,4%/669 componenten) zijn vervangen door bovenstaande, op 9-9-2026 live opgevraagde cijfers. Het verschil in matched edges (16.345→15.495) én in componentverdeling (84,4%/669→76,1%/1.111) is substantieel en de **oorzaak is nog niet vastgesteld** — mogelijk documentatie-veroudering, mogelijk een tussentijdse, niet-gedocumenteerde wijziging. Dit blokkeert het lopende NWB-onderzoek niet (de live cijfers gelden als baseline), maar verdient uitzoeken vóórdat een eventuele NWB-verbetering wordt toegeschreven aan NWB terwijl het gedeeltelijk een GoKnoop-datawijziging zou kunnen zijn.
 
 ---
 
@@ -157,7 +160,7 @@ Hoofdcomponent:      84,4% van alle logicalNodes (669 connected components totaa
 
 6. **De Location Resolver sluit sinds 28-8-2026 geïsoleerde nodes (0 edges) uit.** Vóór die fix kon de dichtstbijzijnde-node-selectie een volledig onbruikbaar startpunt opleveren (concreet gevonden bij een Amsterdam-test — zie `docs/phase2-route-engine-design.md` sectie 9C). Als je ooit weer "0 routes gevonden" ziet zonder duidelijke reden, check eerst `edgeCount` van het gekozen startpunt.
 
-7. **Alleen `matchConfidence === 'matched'` edges vormen de routing-graph** (16.345 van 28.060). De overige edges blijven gewoon in de database staan (nooit verwijderd) voor herleidbaarheid/toekomstige verbetering, maar worden simpelweg niet meegenomen in de Dijkstra-adjacency.
+7. **Alleen `matchConfidence === 'matched'` edges vormen de routing-graph** (15.495 van 28.061, live geverifieerd 9-9-2026 — zie sectie 2 voor de eerdere afwijkende waarde en de nog-openstaande verklaring daarvoor). De overige edges blijven gewoon in de database staan (nooit verwijderd) voor herleidbaarheid/toekomstige verbetering, maar worden simpelweg niet meegenomen in de Dijkstra-adjacency.
 
 8. **Web_fetch-tool van Claude heeft een cache-bug** bij herhaalde, sterk gelijkende URL's naar hetzelfde domein (bijv. bij paginering met oplopende `startIndex`). Bij dat patroon: vraag de gebruiker om elke URL zelf te plakken in plaats van zelf te herhalen fetch'en — dat werkte in deze sessie altijd betrouwbaar, zelf herhalen gaf herhaaldelijk verouderde/gecachte resultaten.
 

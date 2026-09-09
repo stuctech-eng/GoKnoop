@@ -32,10 +32,10 @@ Phase 4   — Navigation UI                ⬜ stap 12 — logpaneel-bug gefixt 
 ### 2.1 Data Foundation
 ```
 Source nodes         13.152        →  Logical nodes      11.003
-Source edges         28.067        →  Valid graph edges  28.060  (7 excluded/unresolved, traceerbaar)
-Matched edges        16.345  (58,3% — dit is de daadwerkelijke routing-graph)
-Hoofdcomponent       84,4% van alle logicalNodes
+Source edges         28.061        →  Matched edges      15.495
+Hoofdcomponent        76,1% van alle logicalNodes (1.111 componenten)
 ```
+**Bijgewerkt 9-9-2026** (live geverifieerd, Fase 1-rapport NWB-onderzoek — zie `docs/HANDOFF.md` sectie 2 voor de eerdere afwijkende waarden 16.345/84,4%/669 en de nog-openstaande verklaring voor dat verschil).
 Firestore (niet Supabase — gewijzigd tijdens Phase 1B, project `go-knoop`). Coördinaten blijven platte `x`/`y`-velden in RD New (EPSG:28992), geen `GeoPoint`/PostGIS. Drie-lagen-datamodel: `sourceNodes` → `logicalNodes` (via `sourceNodeMappings`, nooit destructief) → `edges` (met `endpointMatches` voor volledige herleidbaarheid, matchtoleranties 0,5m/2m/5m).
 
 **Bewust nog niet opgelost, geen blocker:** 7 excluded/unresolved edges, 114 `exception_review`-clusters, rijrichting-semantiek gepauzeerd (`directionality: 'unknown'` als veilige default, `isTraversable()` behandelt dit als bidirectioneel), Firebase Spark-vs-Blaze-status onbevestigd.
