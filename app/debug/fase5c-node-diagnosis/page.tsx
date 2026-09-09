@@ -9,6 +9,12 @@ import type { GraphProvider, GraphNode, GraphEdge } from "@/lib/route-engine/typ
 const TARGET_NODE_ID = "AG9myGNbdE6eH0W2SUmi";
 const FROM_NODE_ID = "3Sx24AWzdYTR4Psx0JJW"; // v1-paar uit Fase 5B, waar de 337km-omweg optrad
 const REGION = "volendam";
+// TOEGEVOEGD 9-9-2026: dit exacte punt bleek het "diepste punt" van zowel de
+// oorspronkelijke Amsterdam->Hilversum-omweg als deze Volendam-omweg --
+// dezelfde coördinaat tot op de decimaal, vanuit twee compleet verschillende
+// routes. Sterke aanwijzing voor één gedeelde, landelijke afwijking in de
+// GoKnoop-graaf zelf, geen regio-specifiek probleem.
+const SUSPECT_NODE_ID = "VQdRuD4Ms8f0sigZTCWP";
 
 class ClientGraphProvider implements GraphProvider {
   private nodeMap = new Map<string, { id: string; x: number; y: number; displayNumber: string | null }>();
@@ -240,6 +246,40 @@ export default function Fase5cNodeDiagnosisPage() {
       }
     }
 
+    // Gerichte controle van de verdachte knoop: voor elke buur-edge de
+    // OPGESLAGEN afstand vergelijken met de WERKELIJKE, geografische afstand
+    // tussen de twee eindpunten (Euclidisch, uit de RD-coördinaten). Een
+    // grote mismatch (opgeslagen << werkelijk) zou verklaren waarom Dijkstra
+    // dit overal als een onterecht goedkope sluiproute gebruikt.
+    const suspectNode = provider.getNode(SUSPECT_NODE_ID);
+    let suspectNodeAnalysis: Record<string, unknown> = { gevonden: false };
+    if (suspectNode) {
+      const suspectEdges = provider.getEdgesFrom(SUSPECT_NODE_ID);
+      const edgeAnalysis = suspectEdges.map((e) => {
+        const otherEnd = e.fromLogicalNodeId === SUSPECT_NODE_ID ? e.toLogicalNodeId : e.fromLogicalNodeId;
+        const otherNode = provider.getNode(otherEnd);
+        const werkelijkeAfstandM = otherNode ? Math.hypot(otherNode.x - suspectNode.x, otherNode.y - suspectNode.y) : null;
+        const opgeslagenAfstandM = e.distanceM;
+        const ratio = werkelijkeAfstandM && werkelijkeAfstandM > 0 ? opgeslagenAfstandM / werkelijkeAfstandM : null;
+        return {
+          buurNodeId: otherEnd,
+          buurWgs84: otherNode ? rdToWgs84(otherNode.x, otherNode.y) : null,
+          opgeslagenAfstandM: Math.round(opgeslagenAfstandM),
+          werkelijkeAfstandM: werkelijkeAfstandM !== null ? Math.round(werkelijkeAfstandM) : null,
+          ratioOpgeslagenVsWerkelijk: ratio !== null ? Math.round(ratio * 1000) / 1000 : null,
+          VERDACHT: ratio !== null && ratio < 0.5 ? "JA -- opgeslagen afstand is minder dan de helft van de werkelijke afstand" : "nee",
+        };
+      });
+      suspectNodeAnalysis = {
+        gevonden: true,
+        nodeId: SUSPECT_NODE_ID,
+        rd: { x: suspectNode.x, y: suspectNode.y },
+        wgs84: rdToWgs84(suspectNode.x, suspectNode.y),
+        aantalBuren: suspectEdges.length,
+        edges: edgeAnalysis,
+      };
+    }
+
     setReport({
       vraag1_locatie: { nodeId: TARGET_NODE_ID, rd: { x: targetNode.x, y: targetNode.y }, wgs84: targetWgs84 },
       vraag2_directeGoKnoopBuren: { aantal: directNeighbors.length, buren: directNeighbors },
@@ -277,6 +317,7 @@ export default function Fase5cNodeDiagnosisPage() {
           }
         : { routeFound: false },
       padgeometrieAnalyse: pathGeometryAnalysis,
+      VERDACHTE_KNOOP_EDGE_CONTROLE: suspectNodeAnalysis,
     });
     setLog((prev) => [...prev, "Diagnose klaar."]);
     setRunning(false);
