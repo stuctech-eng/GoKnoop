@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/fase5c-vqd-interaction", label: "Fase 5C: GoKnoop\u2194NWB-interactie bij VQd...", description: "Component-analyse, padtrace, connector-cluster-spreidingscheck, vergelijking met normale route." },
       { href: "/debug/fase5c-national-topology", label: "Fase 5C: Landelijke topologie West/Oost", description: "Components, bridges (single points of failure), multi-route-test. Puur GoKnoop-only topologie." },
       { href: "/debug/fase5c-node-diagnosis", label: "Fase 5C: Knoop-diagnose (Volendam-anomalie)", description: "Onderzoekt waarom knoop AG9myG... een 337km-omweg veroorzaakt. Geen F/kosten aangeraakt." },
       { href: "/debug/fase5b-calibration", label: "Fase 5B: Kalibratieronde (24 paren)", description: "Verfijnde F-reeks over 24 echte routeparen -- toetst of de 1,15-1,30-zone stabiel blijft." },
