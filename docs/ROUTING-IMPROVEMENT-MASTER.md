@@ -385,3 +385,27 @@ nwbSegments/{nwbDatasetVersionId}/segments/{segmentId}  (subcollectie, SLIM form
 4. Dit nieuwe eindpunt is nog nergens door de UI aangeroepen — dat is bewust, en een aparte, latere beslissing.
 
 **VOLGENDE STAP:** Fase J — productieregressies (dezelfde bekende testgevallen via de ECHTE `/api/route/combined` draaien, zodra er NWB-data beschikbaar is om tegen te testen).
+
+---
+
+### FASE: G (vervolg) — NWB-migratietooling naar productie
+**DATUM:** 9 september 2026
+**STATUS:** PASS (tooling gebouwd en geverifieerd) — MIGRATIE ZELF NOG NIET UITGEVOERD (vereist een bewuste actie door Te via de nieuwe pagina).
+**DOEL:** het eerste open punt uit Fase G/H/I oplossen: de al-verzamelde, al-gevalideerde onderzoeksdata (drie regio's, ~144k segmenten) naar het Fase F-productieschema krijgen — GEEN nieuwe PDOK-aanroepen.
+
+**GEBOUWD:**
+- `app/api/admin/migrate-nwb-to-production/route.ts` — schrijft een chunk segmenten naar `nwbSegments/{nwbDatasetVersionId}/segments/*`, maakt bij de eerste chunk ook `nwbDatasetVersions/{id}` (metadata) aan.
+- `app/api/admin/activate-nwb-dataset/route.ts` — **bewust apart** van het schrijven van data: zet `config/activeNwbDataset`. Rollback = simpelweg opnieuw aanroepen met een eerdere versie-ID.
+- `app/debug/migrate-nwb-runner/page.tsx` — leest de drie regio's uit `nwbResearchTiles` (onderzoeks-collectie, al bestaand), dedupliceert, migreert in chunks van 400. Activeren is een aparte tweede knop, verschijnt pas na een geslaagde migratie.
+
+**VEILIGHEIDSEIGENSCHAPPEN:**
+- `git status`: alleen nieuwe bestanden + de hub-pagina (link toegevoegd) — niets bestaands gewijzigd.
+- 612/612 tests slagen, tsc exit 0, productie-build geslaagd, beide nieuwe eindpunten correct gecompileerd.
+- **"Schrijven" en "live zetten" zijn twee aparte, bewuste stappen** — een gemigreerde dataset heeft geen enkel effect op `/api/route/combined` totdat de activatie-knop expliciet wordt ingedrukt.
+- Geen nieuwe PDOK-aanroepen — puur een overzetting van al-gevalideerde data.
+
+**BELANGRIJK, NOG NIET GEDAAN:** de daadwerkelijke migratie is nog niet uitgevoerd — dat vereist dat Te de code eerst pusht en dan de pagina daadwerkelijk gebruikt. Dit is bewust: het daadwerkelijk vullen van productie-Firestore met ~144k nieuwe documenten is een reële, niet-triviale actie die een expliciete handeling verdient, niet een stille bijwerking van het schrijven van code.
+
+**PRODUCTIE GEWIJZIGD:** NEE (nog niet — de tooling bestaat, is niet uitgevoerd).
+
+**VOLGENDE STAP:** zodra de migratie + activatie daadwerkelijk zijn uitgevoerd, kan Fase G (connector-generatie) en daarna Fase J (productieregressies) tegen echte productie-NWB-data worden getest.
