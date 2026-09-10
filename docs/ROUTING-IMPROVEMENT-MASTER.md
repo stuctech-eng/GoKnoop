@@ -282,3 +282,66 @@ buildRoute() → Route-object → 200 OK
 **PRODUCTIE GEWIJZIGD:** NEE — uitsluitend gelezen, niets aangepast.
 
 **VOLGENDE STAP:** Fase F — NWB productie-data-infrastructuur (dataset-versionering, reproduceerbaarheid) ontwerpen; daarna pas daadwerkelijke productiecode-wijzigingen (Fase G-I), telkens met volledige test/typecheck/build-verificatie zoals de rest van vandaag.
+
+---
+
+### FASE: F — Productie-data-infrastructuur (ontwerp)
+**DATUM:** 9 september 2026
+**STATUS:** PASS (ontwerp) — nog geen implementatie, dat is bewust Fase G/H.
+**DOEL:** NWB gecontroleerd, reproduceerbaar en met rollback-mogelijkheid in productie kunnen krijgen — zonder nu al daadwerkelijk te schrijven naar productie-Firestore.
+
+**UITGEVOERD:** het bestaande, in Fase E bevestigde GoKnoop-dataset-versioneringspatroon (`config/activeDataset` → `datasetVersionId`, zie `app/api/import/activate-dataset/route.ts`) hergebruikt als sjabloon — geen nieuw patroon verzonnen.
+
+**ONTWERP:**
+
+```
+config/activeNwbDataset  (nieuw Firestore-document, naast het bestaande activeDataset)
+  { nwbDatasetVersionId: string, activatedAt, activatedBy }
+
+nwbDatasetVersions/{nwbDatasetVersionId}  (nieuwe collectie -- metadata, geen segmenten)
+  {
+    bron: "PDOK WFS, service.pdok.nl/rws/nwbwegen",
+    licentie: "CC0 -- bevestigd rechtstreeks uit GetCapabilities, Fase 2",
+    opgehaaldOp: ISO-datum,
+    regios: string[],
+    setAClassificatie: "bstCode=FP",
+    setBClassificatie: "FP+HR+RB, excl. motorways/buslanes",
+    segmentCount: number,
+    reproduceerbaar: true,
+  }
+
+nwbSegments/{nwbDatasetVersionId}/segments/{segmentId}  (subcollectie, SLIM formaat)
+  -- exact het formaat dat vandaag al bewezen veilig is voor Firestore
+     (id, bstCode, wegnummer, straatnaam, from, to, lengthM) --
+     GEEN volledige geometrie, zelfde reden als de eerdere 413-fix.
+```
+
+**Rollback:** simpelweg `config/activeNwbDataset.nwbDatasetVersionId` terugzetten naar een eerdere waarde — geen data wordt ooit verwijderd, exact hetzelfde rollback-mechanisme als GoKnoop's bestaande `activeDataset`.
+
+**Reproduceerbaarheid:** elke `nwbDatasetVersions`-entry legt vast onder welke voorwaarden (bron, licentie, regio's, classificatieregels, datum) de data is verzameld -- een toekomstige her-verzameling produceert een NIEUWE versie-ID, overschrijft nooit een bestaande.
+
+**Secrets:** PDOK WFS vereist geen API-sleutel (publieke, CC0-dienst) — bevestigd in Fase 2 van vandaag. Geen secret-management nodig voor deze specifieke bron.
+
+**Datasetupdate:** NWB wordt periodiek (maandelijks, bevestigd in Fase 2) bijgewerkt door RWS. De hierboven ontworpen versionering ondersteunt dit direct: een nieuwe collectieronde produceert een nieuwe `nwbDatasetVersionId`, activeren is een enkele documentwijziging.
+
+**BESLUIT:** dit ontwerp is definitief voor Fase G/H (daadwerkelijke implementatie). Nog geen Firestore-schema daadwerkelijk aangemaakt in productie.
+
+**PRODUCTIE GEWIJZIGD:** NEE — uitsluitend ontwerp, geen schema aangemaakt, geen data geschreven.
+
+**VOLGENDE STAP:** Fase G — connectors productieklaar maken (implementatie, met volledige tests/typecheck/build).
+
+---
+
+### BELANGRIJKE, NIEUW ONTDEKTE BEPERKING (tijdens ontwerp Fase G/H)
+**DATUM:** 9 september 2026
+**GEVONDEN TIJDENS:** ontwerp van de productie-route-engine-integratie.
+
+**HET PROBLEEM:** alle vandaag verzamelde NWB-data (`SlimNwbSegment`) bevat bewust alleen eindpunten + lengte, geen volledige geometrie — een bewuste keuze om de eerdere 413-payloadfout en Firestore-documentgrootte-limiet te vermijden. Dat is voldoende voor alles wat vandaag onderzocht is: afstand, topologie, connectiviteit, kostenmodel, validatie.
+
+**Het is NIET voldoende voor productie-navigatie.** Een gebruiker die een route via NWB krijgt, moet de daadwerkelijke lijn op de kaart kunnen zien en volgen — daarvoor is de volledige polylijn-geometrie van elk NWB-segment nodig, niet alleen de twee eindpunten.
+
+**GEVOLG VOOR DIT TRAJECT:** de productie-integratie die nu volgt (Fase G-I) kan een route se **afstand, samenstelling (GoKnoop/NWB/connector-aandeel) en kwaliteitsoordeel** correct berekenen en teruggeven — dat is direct bruikbaar en testbaar. Maar de **daadwerkelijke, volgbare geometrie** voor het NWB-deel van zo'n route kan nog niet worden geleverd zonder een aanvullende, nieuwe dataverzamelingsronde die WEL de volledige geometrie bewaart (met een andere opslagstrategie dan vandaag, om de eerdere 413/documentgrootte-problemen niet te herintroduceren).
+
+**BESLUIT:** dit wordt expliciet als open punt vastgelegd, niet stilzwijgend genegeerd. Fase G-I worden nu gebouwd met dit scope-onderscheid expliciet zichtbaar in de API-respons (`geometryAvailable: boolean` per route-segment-type), zodat niemand — inclusief een toekomstige Claude-sessie — kan aannemen dat dit al opgelost is.
+
+**STATUS:** open, apart te plannen na Fase I.
