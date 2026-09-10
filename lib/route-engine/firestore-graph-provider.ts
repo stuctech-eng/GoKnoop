@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/firebase-admin";
 import { GraphEdge, GraphNode, GraphProvider } from "./types";
+import { reportProgress } from "@/lib/diagnostics/report-progress";
 
 /**
  * Firestore-implementatie van GraphProvider (ontwerp sectie 4, optie A:
@@ -15,6 +16,13 @@ import { GraphEdge, GraphNode, GraphProvider } from "./types";
  * elk document een array van meerdere items); valt terug op het oude,
  * ongewijzigde per-document-formaat als er nog geen gebatchte data bestaat
  * (veilige overgang, geen harde volgorde-afhankelijkheid met de migratie).
+ *
+ * TOEGEVOEGD 10-9-2026 (vervolg-diagnose): expliciete reportProgress-
+ * checkpoints die aangeven welk pad daadwerkelijk gebruikt werd -- na de
+ * eerste migratiepoging bleef laden onverwacht traag (6,8-8,3s i.p.v. een
+ * fractie van een seconde), wat vermoeden doet dat de migratie niet
+ * (volledig) gelukt is en er stilzwijgend werd teruggevallen. Dit maakt dat
+ * zichtbaar i.p.v. te gokken.
  */
 export class FirestoreGraphProvider implements GraphProvider {
   private nodes: Map<string, GraphNode> = new Map();
@@ -24,12 +32,24 @@ export class FirestoreGraphProvider implements GraphProvider {
 
   async load(): Promise<void> {
     const db = getDb();
+    reportProgress("latest", "FirestoreGraphProvider.load: start", { datasetVersionId: this.datasetVersionId });
 
+    const tCheck = Date.now();
     const batchedNodesSnap = await db.collection("goknoopBatched").doc(this.datasetVersionId).collection("nodes").get();
+    reportProgress("latest", "FirestoreGraphProvider.load: gebatcht-check klaar", {
+      gebatchteNodeDocumenten: batchedNodesSnap.size,
+      checkDurationMs: Date.now() - tCheck,
+    });
 
     if (!batchedNodesSnap.empty) {
       // Gebatcht formaat beschikbaar -- gebruiken.
+      reportProgress("latest", "FirestoreGraphProvider.load: GEBATCHT PAD gekozen");
+      const tEdges = Date.now();
       const batchedEdgesSnap = await db.collection("goknoopBatched").doc(this.datasetVersionId).collection("edges").get();
+      reportProgress("latest", "FirestoreGraphProvider.load: gebatchte edges opgehaald", {
+        gebatchteEdgeDocumenten: batchedEdgesSnap.size,
+        durationMs: Date.now() - tEdges,
+      });
 
       for (const doc of batchedNodesSnap.docs) {
         const data = doc.data() as { items: (GraphNode & { id: string })[] };
@@ -50,10 +70,16 @@ export class FirestoreGraphProvider implements GraphProvider {
           this.addEdgeIndex(edge.toLogicalNodeId, edge);
         }
       }
+      reportProgress("latest", "FirestoreGraphProvider.load: GEBATCHT PAD volledig klaar", {
+        nodeCount: this.nodes.size,
+        edgeIndexSize: this.edgesByNode.size,
+      });
       return;
     }
 
     // Terugval: oude, per-document-formaat (nog niet gemigreerd voor deze datasetVersionId).
+    reportProgress("latest", "FirestoreGraphProvider.load: TERUGVAL-PAD gekozen (geen gebatchte data gevonden!)");
+    const tFallback = Date.now();
     const [nodesSnap, edgesSnap] = await Promise.all([
       db.collection("logicalNodes").where("datasetVersionId", "==", this.datasetVersionId).get(),
       db
@@ -62,6 +88,11 @@ export class FirestoreGraphProvider implements GraphProvider {
         .where("matchConfidence", "==", "matched")
         .get(),
     ]);
+    reportProgress("latest", "FirestoreGraphProvider.load: terugval-query's klaar", {
+      nodeDocs: nodesSnap.size,
+      edgeDocs: edgesSnap.size,
+      durationMs: Date.now() - tFallback,
+    });
 
     for (const doc of nodesSnap.docs) {
       const d = doc.data();
@@ -87,6 +118,7 @@ export class FirestoreGraphProvider implements GraphProvider {
       this.addEdgeIndex(edge.fromLogicalNodeId, edge);
       this.addEdgeIndex(edge.toLogicalNodeId, edge);
     }
+    reportProgress("latest", "FirestoreGraphProvider.load: TERUGVAL-PAD volledig klaar");
   }
 
   private addEdgeIndex(nodeId: string, edge: GraphEdge) {
