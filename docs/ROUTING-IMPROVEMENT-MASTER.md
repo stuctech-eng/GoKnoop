@@ -749,3 +749,33 @@ Deze sandbox-omgeving blokkeert uitgaand verkeer naar `service.pdok.nl`: bevesti
 **PRODUCTIE GEWIJZIGD:** NEE.
 
 **VOLGENDE STAP:** Volendam en Lochem nog bevestigen (`?route=volendam` en `?route=lochem`) voordat punt 5-6 van de audit volledig wordt afgesloten.
+
+---
+
+### FASE: M — VOLLEDIG AFGESLOTEN. Alle drie testroutes exact bevestigd.
+**DATUM:** 10 september 2026
+**STATUS:** PASS, definitief.
+
+**RESULTAAT, alle drie routes, 0m verschil:**
+
+| Route | NWB-doorkruisingen | Unieke segmenten | Opgelost | Verschil |
+|---|---|---|---|---|
+| Amsterdam → Hilversum | 85 | 85 | 85/85 | **0m** |
+| Volendam → Amsterdam | 40 | 40 | 40/40 | **0m** |
+| Lochem l1 | 11 | 11 | 11/11 | **0m** |
+
+Geen enkele mislukking, geen enkel segment dubbel doorkruist, geen enkel geometrie-verschil in alle drie de gevallen. Dit bevestigt exact, niet bij benadering: de opgehaalde NWB-geometrie komt overeen met de afstand die het kostenmodel al die tijd al gebruikte.
+
+**Statusonderscheid, definitief voor Fase M:**
+```
+Geometry Integration Audit (punt 1-6):
+  RESEARCH: n.v.t.
+  DESIGNED: PASS
+  IMPLEMENTED: PASS
+  TESTED: PASS (622 unit tests + 3× exacte productiebevestiging, 0m verschil elk)
+  DEPLOYED: PASS (resolver + segmentId-fix + testtooling, nog niet gekoppeld aan UI)
+```
+
+**PRODUCTIE GEWIJZIGD:** NEE bij deze specifieke stap (alleen bevestiging).
+
+**VOLGENDE STAP (punt 7 uit Te's opdracht): `/api/route` → gecombineerde engine migreren.** Dit is een wezenlijk andere stap dan alles in Fase M — het raakt de daadwerkelijke UI/navigatie-ervaring van echte gebruikers, niet alleen backend-infrastructuur. Conform dezelfde discipline als bij Fase E (eerst de bestaande productiecode lezen vóór wijzigen): vóór enige wijziging aan `/api/route` of de client-aanroep ervan, eerst de daadwerkelijke UI-integratiepunten in kaart brengen (welke component roept `/api/route` aan, hoe wordt de respons gebruikt voor kaartweergave/navigatie) — nog niet gedaan.
