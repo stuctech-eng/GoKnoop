@@ -558,3 +558,30 @@ STATUS: verklaard, niet apart op te lossen -- geen actie vereist
 **PRODUCTIE GEWIJZIGD:** JA — wijziging aan een bestaand (maar zelf ook pas-vandaag-toegevoegd) productie-bestand.
 
 **VOLGENDE STAP:** deze wijziging moet gepusht worden, en dan een herhaalde `/api/route/combined`-aanroep (via Fase J's runner-pagina) om de daadwerkelijke verbetering te meten — theoretische verbetering is niet hetzelfde als bewezen verbetering.
+
+---
+
+### FASE: K (correctie) — eerste hypothese was onjuist, herziene, bewezen root cause
+**DATUM:** 9 september 2026
+**STATUS:** PASS
+**DOEL:** de eerste Fase K-fix (caching van ruwe NWB-segmenten) bleek bij meting geen verbetering te geven — dit eerlijk vastleggen en de daadwerkelijke oorzaak vinden.
+
+**WAT DE PRODUCTIEMETING LIET ZIEN:** na het pushen van de eerste fix bleef `computeTimeMs` nagenoeg ongewijzigd (~5000-5700ms), ook bij `nwbCacheHit: true`. Aangezien `computeTimeMs` strikt gemeten wordt NA het laden van data (binnen `computeCombinedRoute`), bewees dit dat de Firestore-lees NIET de dominante kostenpost was — mijn eerste hypothese was **fout**, niet gedeeltelijk juist.
+
+**HERZIENE ROOT CAUSE, bevestigd door code-inspectie:** de VOLLEDIGE gecombineerde graaf (NWB-clustering via union-find over tot 144k segmenten, GoKnoop-edges toevoegen, connectoren verwerken) werd bij ELKE aanvraag opnieuw gebouwd — ook wanneer de ruwe data al in het geheugen zat. Het clustering-algoritme zelf is overigens wel degelijk efficiënt (grid-bucketing, niet O(n²)) — de kostenpost zat in het feit dát het bij elke aanvraag opnieuw draaide, niet in hoe het draait.
+
+**HERZIENE FIX:**
+- `cached-nwb-provider.ts` herschreven: cachet nu de **volledig gebouwde `CombinedGraph`** (adjacency + nodePosition), niet de ruwe segmenten.
+- `combined-route-engine.ts`: `computeCombinedRoute` accepteert nu een AL-GEBOUWDE graaf als parameter i.p.v. zelf te bouwen — haalt coördinaten voor de hemelsbrede-afstand nu uit `graph.nodePosition` (bevat zowel GoKnoop- als NWB-knopen), geen aparte `GraphProvider` meer nodig in deze functie.
+- `route.ts`: gebruikt de nieuwe `loadCachedCombinedGraph`, respons bevat nu `graphCacheHit` (preciezer dan het eerdere `nwbCacheHit` — dit meet de daadwerkelijk dure stap).
+
+**VEILIGHEIDSEIGENSCHAPPEN:**
+- 613/613 tests (7 in `combined-route-engine.test.ts`, +1 t.o.v. eerder, plus een expliciete test dat coördinaten nu uit `graph.nodePosition` komen).
+- tsc exit 0, build geslaagd.
+- Alle gewijzigde bestanden zijn bestanden die zelf pas vandaag zijn toegevoegd (Fase G/H/I) — geen wijziging aan iets dat al langer, ongewijzigd in productie stond.
+
+**LES, expliciet vastgelegd (zoals de opdracht zelf vraagt bij ontdekkingen):** een genoemde oorzaak moet geverifieerd worden op basis van waar de meting daadwerkelijk begint/eindigt in de code, niet op basis van een aannemelijk klinkend verhaal. De eerste fix "voelde" logisch (NWB heeft geen caching, GoKnoop wel) maar mat niet waar de tijd echt heenging.
+
+**PRODUCTIE GEWIJZIGD:** JA — herziening van de Fase K-wijziging van eerder vandaag, zelf nog niet gepusht.
+
+**VOLGENDE STAP:** pushen, dan Fase J's runner-pagina nogmaals draaien om de daadwerkelijke verbetering te bevestigen (`graphCacheHit: true` zou nu een merkbaar lagere `computeTimeMs` moeten geven dan bij `false`).

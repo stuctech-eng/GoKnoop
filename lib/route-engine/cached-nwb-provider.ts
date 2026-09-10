@@ -1,51 +1,63 @@
 import { getDb } from "@/lib/firebase-admin";
-import type { SlimNwbSegment, ValidatedConnectorInput } from "@/lib/nwb-analysis/combined-graph";
+import { buildValidatedCombinedGraph, type CombinedGraph, type SlimNwbSegment, type ValidatedConnectorInput } from "@/lib/nwb-analysis/combined-graph";
+import type { GraphProvider } from "./types";
 
 /**
- * Fase K (performance), 9-9-2026. Exact hetzelfde patroon als
- * cached-graph-provider.ts voor GoKnoop -- module-niveau in-memory cache,
- * hergebruikt zolang de serverless-instance warm blijft.
+ * Fase K (performance), 9-9-2026 -- HERZIENE VERSIE.
  *
- * WAAROM DIT NODIG WAS: Fase J-productiemetingen toonden computeTimeMs van
- * 5.047-5.867ms per aanvraag. Oorzaak: /api/route/combined las de ~144.000
- * NWB-segment-documenten bij ELKE aanvraag opnieuw uit Firestore, zonder
- * enige caching -- in schril contrast met GoKnoop, dat al sinds Phase 2
- * gecached wordt. Dit lost exact dat verschil op, geen ander gedrag.
+ * EERSTE POGING (verworpen door productiemeting): cachte alleen de RUWE NWB-
+ * segmenten/connectoren. Productiedata toonde dat computeTimeMs (gemeten
+ * strikt NA het laden van data, rond het bouwen van de graaf + Dijkstra)
+ * nauwelijks veranderde tussen cache hit en miss (~5000-5700ms in beide
+ * gevallen) -- het cachen van de ruwe data loste dus niet het echte probleem
+ * op. Root cause (herzien): de VOLLEDIGE gecombineerde graaf (NWB-clustering
+ * via union-find over ~144k segmenten, GoKnoop-edges toevoegen, connectoren
+ * verwerken) werd bij ELKE aanvraag opnieuw gebouwd, ook al waren de ruwe
+ * data al in het geheugen.
+ *
+ * DEZE VERSIE cachet de AL-GEBOUWDE CombinedGraph zelf (adjacency +
+ * nodePosition -- de daadwerkelijk dure output), niet de ruwe invoer. Een
+ * warme aanvraag hoeft nu alleen nog Dijkstra te draaien, geen enkele
+ * hernieuwde clustering.
  */
 
-type CachedNwbData = {
-  nwbDatasetVersionId: string;
-  segments: SlimNwbSegment[];
-  connectors: ValidatedConnectorInput[];
+type CachedGraphEntry = {
+  graph: CombinedGraph;
+  nwbDatasetVersionId: string | null;
   loadedAt: number;
 };
 
-const moduleCache = new Map<string, CachedNwbData>();
+const moduleCache = new Map<string, CachedGraphEntry>();
 
-export type NwbDataLoadResult = { nwbDatasetVersionId: string | null; segments: SlimNwbSegment[]; connectors: ValidatedConnectorInput[]; cacheHit: boolean };
+const CONNECTOR_SEARCH_TOLERANCE_M = 20;
 
-export async function loadCachedNwbData(datasetVersionId: string): Promise<NwbDataLoadResult> {
+export type CachedCombinedGraphResult = { graph: CombinedGraph; nwbDatasetVersionId: string | null; cacheHit: boolean };
+
+export async function loadCachedCombinedGraph(provider: GraphProvider, datasetVersionId: string): Promise<CachedCombinedGraphResult> {
   const db = getDb();
 
   const activeNwbSnap = await db.collection("config").doc("activeNwbDataset").get();
-  if (!activeNwbSnap.exists) {
-    return { nwbDatasetVersionId: null, segments: [], connectors: [], cacheHit: false };
-  }
-  const nwbDatasetVersionId = activeNwbSnap.data()!.nwbDatasetVersionId as string;
-  const cacheKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
+  const nwbDatasetVersionId: string | null = activeNwbSnap.exists ? (activeNwbSnap.data()!.nwbDatasetVersionId as string) : null;
 
+  const cacheKey = `${datasetVersionId}__${nwbDatasetVersionId ?? "none"}`;
   const cached = moduleCache.get(cacheKey);
   if (cached) {
-    return { nwbDatasetVersionId, segments: cached.segments, connectors: cached.connectors, cacheHit: true };
+    return { graph: cached.graph, nwbDatasetVersionId: cached.nwbDatasetVersionId, cacheHit: true };
   }
 
-  const segmentsSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("segments").get();
-  const segments = segmentsSnap.docs.map((d) => d.data() as SlimNwbSegment);
+  let nwbSegments: SlimNwbSegment[] = [];
+  let validatedConnectors: ValidatedConnectorInput[] = [];
+  if (nwbDatasetVersionId) {
+    const segmentsSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("segments").get();
+    nwbSegments = segmentsSnap.docs.map((d) => d.data() as SlimNwbSegment);
 
-  const connectorsSnap = await db.collection("nwbConnectors").doc(cacheKey).collection("connectors").get();
-  const connectors = connectorsSnap.docs.map((d) => d.data() as ValidatedConnectorInput);
+    const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
+    const connectorsSnap = await db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get();
+    validatedConnectors = connectorsSnap.docs.map((d) => d.data() as ValidatedConnectorInput);
+  }
 
-  moduleCache.set(cacheKey, { nwbDatasetVersionId, segments, connectors, loadedAt: Date.now() });
+  const graph = buildValidatedCombinedGraph(provider, nwbSegments, CONNECTOR_SEARCH_TOLERANCE_M, validatedConnectors);
+  moduleCache.set(cacheKey, { graph, nwbDatasetVersionId, loadedAt: Date.now() });
 
-  return { nwbDatasetVersionId, segments, connectors, cacheHit: false };
+  return { graph, nwbDatasetVersionId, cacheHit: false };
 }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { computeCombinedRoute } from "@/lib/route-engine/combined-route-engine";
-import { loadCachedNwbData } from "@/lib/route-engine/cached-nwb-provider";
+import { loadCachedCombinedGraph } from "@/lib/route-engine/cached-nwb-provider";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -58,12 +58,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `toLogicalNodeId '${toLogicalNodeId}' bestaat niet in dataset ${datasetVersionId}.` }, { status: 404 });
     }
 
-    // NWB-data laden -- NU MET CACHING (Fase K), zelfde patroon als CachedGraphProvider.
-    // Veilige degradatie blijft: als er geen actieve NWB-dataset is, geeft dit lege lijsten.
-    const nwbData = await loadCachedNwbData(datasetVersionId);
-    const { nwbDatasetVersionId, segments: nwbSegments, connectors: validatedConnectors } = nwbData;
+    // Gecombineerde graaf laden -- NU VOLLEDIG GECACHET (Fase K, herzien): een
+    // warme aanvraag hergebruikt de al-gebouwde graaf, geen hernieuwde
+    // NWB-clustering. Veilige degradatie blijft: geen actieve NWB-dataset ->
+    // GoKnoop-only graaf.
+    const { graph, nwbDatasetVersionId, cacheHit } = await loadCachedCombinedGraph(provider, datasetVersionId);
 
-    const result = computeCombinedRoute(provider, nwbSegments, validatedConnectors, fromLogicalNodeId, toLogicalNodeId);
+    const result = computeCombinedRoute(graph, fromLogicalNodeId, toLogicalNodeId);
 
     if (!result.ok) {
       const status = result.reason === "node_not_found" ? 404 : 422;
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest) {
       datasetVersionId,
       nwbDatasetVersionId,
       nwbActief: nwbDatasetVersionId !== null,
-      nwbCacheHit: nwbData.cacheHit,
+      graphCacheHit: cacheHit,
     });
   } catch (err) {
     return NextResponse.json(
