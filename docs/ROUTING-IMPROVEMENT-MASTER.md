@@ -640,3 +640,34 @@ Performance-fix (graafcaching):
 **PRODUCTIE GEWIJZIGD:** JA — kleine, additieve toevoeging.
 
 **VOLGENDE STAP:** automatisch door naar Fase M — deployment (grotendeels al impliciet gebeurd via de incrementele pushes vandaag; dit wordt een consolidatie-controle, geen nieuwe stap) en Fase N — post-productie.
+
+---
+
+### FASE: M — Geometry Integration Audit
+**DATUM:** 9 september 2026
+**STATUS:** GEDEELTELIJK BLOCKED — expliciet zo gedocumenteerd, niet omzeild.
+**ARCHITECTUURBESLUIT (Te, dit gesprek):** géén dubbele route-engine op basis van "past het wel/niet volledig binnen GoKnoop" — de gecombineerde engine wordt de ENIGE route-engine. Een Geometry Resolver-laag moet ervoor zorgen dat elke gebruikte routecomponent een tekenbare geometrie heeft, niet een voorwaarde die soms de oude engine gebruikt.
+
+**Punt 1 — waarom `geometryAvailable.nwb = false`: VASTGESTELD.**
+`SlimNwbSegment` (`combined-graph.ts`) bevat uitsluitend `from`/`to`/`lengthM` — geen tussenliggende punten. Bevestigd in `nwb-collector-tick/route.ts`, functie `toSlim()`, met een expliciete reden in de code zelf: volledige geometrie zou tegen Firestore's 1MB-documentgrootte-limiet aanlopen (dezelfde beperking als de eerdere 413-fout).
+
+**Punt 2 — welke geometrie al beschikbaar is: VASTGESTELD.**
+De volledige polylijn-geometrie wordt WEL opgehaald uit PDOK (`nwb-client.ts`, `NwbSegment.coordinates: {x,y}[]`, rechtstreeks uit de WFS `LineString`/`MultiLineString`-respons) — die gaat pas bij de stap naar `SlimNwbSegment` verloren, niet bij de bron.
+
+**Punt 3 — hoe NWB-segmenten terug te vertalen naar geometrie: ONTWERP KLAAR, NIET GEVERIFIEERD.**
+Niet opnieuw alles met volledige geometrie opslaan (zelfde opslagprobleem terug). In plaats daarvan: geometrie LIVE bij PDOK opvragen, alleen voor de specifieke segmenten die een al-berekende route daadwerkelijk gebruikt (typisch tientallen, niet 144k), via de WFS 2.0-standaard `resourceId`-parameter (meerdere features per aanroep).
+
+Gebouwd: `lib/nwb-analysis/nwb-geometry-resolver.ts` (hergebruikt de bestaande GeoJSON-parsing uit `nwb-client.ts`, geen dubbele code) + `app/api/admin/test-nwb-geometry-resolver/route.ts` (geïsoleerde test met 4 echte, al-in-productie-gebruikte segment-ID's uit de 337km-trace).
+
+**ECHTE, TECHNISCHE BLOKKADE (punt 4-6, niet omzeild):**
+Deze sandbox-omgeving blokkeert uitgaand verkeer naar `service.pdok.nl`: bevestigd met `curl -v`, HTTP 403, header `x-deny-reason: host_not_allowed`. Dit is een beperking van de ontwikkelomgeving, geen aanname over PDOK. **Ik kan daardoor niet zelf verifiëren of `resourceId` daadwerkelijk werkt tegen deze specifieke dienst** — de WFS 2.0-standaard ondersteunt het, maar dit project heeft al eerder een vendor-extensie (`CQL_FILTER`) stilzwijgend zien falen ondanks correcte syntax, dus "hoort te werken volgens de standaard" is nadrukkelijk geen garantie.
+
+**Punt 4-6 (testen met echte routes, regel-voor-regel-controle): NIET UITGEVOERD door mij — vereist netwerktoegang die ik niet heb.**
+
+**Punt 7-8 (endpoint migreren, oude endpoint niet verwijderen): NOG NIET AAN DE ORDE — expliciet afhankelijk van een geslaagde punt 4-6-verificatie.**
+
+**WAT WEL AL ZEKER IS:** geen fallback naar de oude route-engine als permanente oplossing (Te's besluit, hierboven vastgelegd) — als de geometrie-resolver het uiteindelijk niet blijkt te redden, is de vervolgvraag een architectuurvraag (alternatieve geometriebron?), geen reden om alsnog twee engines naast elkaar te laten bestaan.
+
+**VOLGENDE, CONCRETE STAP (voor Te, vereist netwerktoegang die ik niet heb):** push deze code, draai `GET /api/admin/test-nwb-geometry-resolver`, en stuur het resultaat terug. Als `opgelost` overeenkomt met de 4 gevraagde segmenten en de coördinaten er plausibel uitzien, kan de resolver in de route-flow geïntegreerd worden (punt 7). Als het mislukt, is dat de basis voor een concreet, tweede ontwerp (bijvoorbeeld: alsnog compacte, gecomprimeerde geometrie opslaan per gebruikt segment, on-demand vanuit een aparte collectie).
+
+**PRODUCTIE GEWIJZIGD:** NEE — uitsluitend nieuwe, geïsoleerde testcode, nergens aan gekoppeld.
