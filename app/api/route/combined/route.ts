@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { computeCombinedRoute } from "@/lib/route-engine/combined-route-engine";
-import type { SlimNwbSegment, ValidatedConnectorInput } from "@/lib/nwb-analysis/combined-graph";
+import { loadCachedNwbData } from "@/lib/route-engine/cached-nwb-provider";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -58,21 +58,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `toLogicalNodeId '${toLogicalNodeId}' bestaat niet in dataset ${datasetVersionId}.` }, { status: 404 });
     }
 
-    // NWB-data laden -- VEILIGE DEGRADATIE als config/activeNwbDataset nog niet bestaat.
-    let nwbSegments: SlimNwbSegment[] = [];
-    let validatedConnectors: ValidatedConnectorInput[] = [];
-    let nwbDatasetVersionId: string | null = null;
-
-    const activeNwbSnap = await db.collection("config").doc("activeNwbDataset").get();
-    if (activeNwbSnap.exists) {
-      nwbDatasetVersionId = activeNwbSnap.data()!.nwbDatasetVersionId as string;
-      const segmentsSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("segments").get();
-      nwbSegments = segmentsSnap.docs.map((d) => d.data() as SlimNwbSegment);
-
-      const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
-      const connectorsSnap = await db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get();
-      validatedConnectors = connectorsSnap.docs.map((d) => d.data() as ValidatedConnectorInput);
-    }
+    // NWB-data laden -- NU MET CACHING (Fase K), zelfde patroon als CachedGraphProvider.
+    // Veilige degradatie blijft: als er geen actieve NWB-dataset is, geeft dit lege lijsten.
+    const nwbData = await loadCachedNwbData(datasetVersionId);
+    const { nwbDatasetVersionId, segments: nwbSegments, connectors: validatedConnectors } = nwbData;
 
     const result = computeCombinedRoute(provider, nwbSegments, validatedConnectors, fromLogicalNodeId, toLogicalNodeId);
 
@@ -86,6 +75,7 @@ export async function POST(req: NextRequest) {
       datasetVersionId,
       nwbDatasetVersionId,
       nwbActief: nwbDatasetVersionId !== null,
+      nwbCacheHit: nwbData.cacheHit,
     });
   } catch (err) {
     return NextResponse.json(

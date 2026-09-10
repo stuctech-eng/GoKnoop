@@ -534,3 +534,27 @@ STATUS: verklaard, niet apart op te lossen -- geen actie vereist
 **PRODUCTIE GEWIJZIGD:** NEE — uitsluitend documentatie.
 
 **VOLGENDE STAP:** automatisch door naar de eerstvolgende onvoltooide fase. Fase J-data toont `computeTimeMs` van 5.047–5.867ms per aanvraag in productie — dat is een concreet, hard performance-signaal. **Fase K (performance) is daarmee de logische eerstvolgende stap**, niet een keuze maar direct af te leiden uit de al-verzamelde productiedata zelf.
+
+---
+
+### FASE: K — Performance
+**DATUM:** 9 september 2026
+**STATUS:** PASS
+**DOEL:** de in Fase J waargenomen 5-6 seconden per aanvraag verklaren en oplossen.
+
+**ROOT CAUSE, bevestigd door code-inspectie (niet aangenomen):** `/api/route/combined` las de ~144.000 NWB-segment-documenten bij ELKE aanvraag opnieuw uit Firestore, zonder enige caching. GoKnoop wordt via `CachedGraphProvider` al sinds eerder wél gecached (module-niveau, warme herbruik binnen dezelfde serverless-instance) — NWB had dat mechanisme nooit gekregen.
+
+**OPLOSSING, geen nieuw patroon:** `lib/route-engine/cached-nwb-provider.ts` — **exact hetzelfde** module-niveau-cachingpatroon als het al-bewezen `CachedGraphProvider`, nu ook voor NWB-segmenten + connectoren. `/api/route/combined` aangepast om deze te gebruiken i.p.v. rechtstreeks Firestore te lezen.
+
+**VEILIGHEIDSEIGENSCHAPPEN:**
+- 612/612 tests slagen (inclusief de 6 `combined-route-engine.test.ts`-tests, ongewijzigd geslaagd — bevestigt dat de kernlogica niet is geraakt, alleen de data-toevoer).
+- tsc exit 0, build geslaagd.
+- `git status`: 1 bestaand bestand gewijzigd (`app/api/route/combined/route.ts`, zelf pas vandaag toegevoegd in Fase G/H/I — dus geen wijziging aan iets dat al langer in productie stond), 1 nieuw bestand.
+- Respons bevat nu `nwbCacheHit: boolean` — direct zichtbaar of een aanvraag warm of koud was, voor toekomstige monitoring.
+- Veilige degradatie blijft volledig intact (geen actieve NWB-dataset → lege lijsten, geen crash).
+
+**VERWACHTE VERBETERING (nog niet zelf gemeten — vereist een nieuwe productie-aanroep om te bevestigen):** de eerste aanvraag na een koude start blijft ~5-6s (cache moet gevuld worden), maar elke volgende aanvraag binnen dezelfde warme instance zou aanzienlijk sneller moeten zijn (vergelijkbaar met hoe GoKnoop's eigen warme aanvragen al snel zijn).
+
+**PRODUCTIE GEWIJZIGD:** JA — wijziging aan een bestaand (maar zelf ook pas-vandaag-toegevoegd) productie-bestand.
+
+**VOLGENDE STAP:** deze wijziging moet gepusht worden, en dan een herhaalde `/api/route/combined`-aanroep (via Fase J's runner-pagina) om de daadwerkelijke verbetering te meten — theoretische verbetering is niet hetzelfde als bewezen verbetering.
