@@ -112,28 +112,22 @@ export default function Trace337kmCausePage() {
     }
 
     setLog((prev) => [...prev, "Actieve NWB-productiedata lezen..."]);
-    const nwbSegments: SlimNwbSegment[] = [];
-    let cursor: string | null = null;
-    for (;;) {
-      try {
-        const params = new URLSearchParams();
-        if (cursor) params.set("cursor", cursor);
-        if (key) params.set("key", key);
-        const res = await fetch(`/api/admin/read-active-nwb-segments?${params.toString()}`, { cache: "no-store" });
-        const json = await res.json();
-        if (!res.ok) {
-          setLog((prev) => [...prev, `⚠️ ${json.details ?? json.error}`]);
-          setRunning(false);
-          return;
-        }
-        nwbSegments.push(...json.segments);
-        if (json.done) break;
-        cursor = json.nextCursor;
-      } catch (err) {
-        setLog((prev) => [...prev, `⚠️ ${err instanceof Error ? err.message : String(err)}`]);
+    let nwbSegments: SlimNwbSegment[] = [];
+    try {
+      const params = new URLSearchParams();
+      if (key) params.set("key", key);
+      const res = await fetch(`/api/admin/read-active-nwb-segments?${params.toString()}`, { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) {
+        setLog((prev) => [...prev, `⚠️ ${json.details ?? json.error}`]);
         setRunning(false);
         return;
       }
+      nwbSegments = json.segments; // rechtstreeks toewijzen, GEEN spread-operator (stack-overflow-risico bij ~144k elementen)
+    } catch (err) {
+      setLog((prev) => [...prev, `⚠️ ${err instanceof Error ? err.message : String(err)}`]);
+      setRunning(false);
+      return;
     }
     setLog((prev) => [...prev, `${nwbSegments.length} NWB-segmenten geladen.`]);
 

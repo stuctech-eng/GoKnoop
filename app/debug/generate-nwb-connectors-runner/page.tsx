@@ -43,32 +43,26 @@ export default function GenerateNwbConnectorsRunnerPage() {
       return;
     }
 
-    setLog((prev) => [...prev, "Actieve NWB-productiedata gepagineerd lezen..."]);
-    const nwbSegments: NwbSegmentInput[] = [];
+    setLog((prev) => [...prev, "Actieve NWB-productiedata lezen..."]);
+    let nwbSegments: NwbSegmentInput[] = [];
     let nwbDatasetVersionId: string | null = null;
-    let cursor: string | null = null;
-    for (;;) {
-      try {
-        const params = new URLSearchParams();
-        if (cursor) params.set("cursor", cursor);
-        if (key) params.set("key", key);
-        const res = await fetch(`/api/admin/read-active-nwb-segments?${params.toString()}`, { cache: "no-store" });
-        const json = await res.json();
-        if (!res.ok) {
-          setLog((prev) => [...prev, `⚠️ ${json.details ?? json.error}`]);
-          setRunning(false);
-          return;
-        }
-        nwbDatasetVersionId = json.nwbDatasetVersionId;
-        nwbSegments.push(...json.segments);
-        setLog((prev) => [...prev, `${nwbSegments.length} NWB-segmenten gelezen zover...`]);
-        if (json.done) break;
-        cursor = json.nextCursor;
-      } catch (err) {
-        setLog((prev) => [...prev, `⚠️ ${err instanceof Error ? err.message : String(err)}`]);
+    try {
+      const params = new URLSearchParams();
+      if (key) params.set("key", key);
+      const res = await fetch(`/api/admin/read-active-nwb-segments?${params.toString()}`, { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) {
+        setLog((prev) => [...prev, `⚠️ ${json.details ?? json.error}`]);
         setRunning(false);
         return;
       }
+      nwbDatasetVersionId = json.nwbDatasetVersionId;
+      nwbSegments = json.segments; // rechtstreeks toewijzen, GEEN spread-operator -- bij ~144k elementen overschrijdt push(...groteArray) JavaScript's eigen argumentenlimiet ("Maximum call stack size exceeded", live bevestigd 10-9-2026)
+      setLog((prev) => [...prev, `${nwbSegments.length} NWB-segmenten gelezen.`]);
+    } catch (err) {
+      setLog((prev) => [...prev, `⚠️ ${err instanceof Error ? err.message : String(err)}`]);
+      setRunning(false);
+      return;
     }
     setLog((prev) => [...prev, `Klaar: ${nwbSegments.length} NWB-segmenten totaal (versie ${nwbDatasetVersionId}).`]);
 
