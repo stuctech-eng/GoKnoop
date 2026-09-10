@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
+import { loadCachedCombinedGraph } from "@/lib/route-engine/cached-nwb-provider";
 import { computeRouteBetweenCandidatesWithFallback } from "@/lib/route-engine/route-between-candidates";
 import { resolveNearestNodes } from "@/lib/route-engine/location-resolver";
 import { combineRouteLegs } from "@/lib/route-engine/combine-route-legs";
@@ -26,6 +27,14 @@ export const dynamic = "force-dynamic";
  * ongeveer die extra afstand toevoegt (herkomst -> tussenpunt -> bestemming, i.p.v. de
  * kortste directe route). Puur additief -- zonder `extraM` (of als er geen bruikbare
  * omweg-kandidaat gevonden wordt) blijft het gedrag exact zoals voorheen: de kortste route.
+ *
+ * FASE M5, 10-9-2026: de netwerk-routing ("knot-leg") gebruikt nu de gecombineerde
+ * engine (GoKnoop+NWB+connectors+kostenmodel+validatie) i.p.v. plain-GoKnoop.
+ * BELANGRIJK, NIET STILZWIJGEND GENEGEERD: bij een KOUDE cache (eerste aanvraag na
+ * deploy/idle) kan het bouwen van de gecombineerde graaf (~5s, bevestigd in Fase K)
+ * plus live NWB-geometrie ophalen bij PDOK plus last-mile-ORS-routing realistisch
+ * tegen de 10s-limiet aanlopen. Dit is NIET geverifieerd tegen een levende, koude
+ * aanvraag -- vereist een echte productietest.
  *
  * Rekenkundig licht gehouden (op verzoek, ná de eerdere Vercel-Hobby-10s-lessen, sectie
  * 9.43-9.48): maximaal 3 kandidaat-tussenpunten per kant (links/rechts), dus maximaal 6
@@ -91,9 +100,10 @@ export async function POST(req: NextRequest) {
 
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
+    const { graph } = await loadCachedCombinedGraph(provider, datasetVersionId);
 
     // Been 1 (Layer A, beide kanten met fallback): herkomst-knooppunt -> bestemmings-knooppunt.
-    let knotResult = computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, fromCandidates, toCandidates);
+    let knotResult = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidates);
     if ("ok" in knotResult) {
       return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot" }, { status: 404 });
     }
@@ -116,14 +126,15 @@ export async function POST(req: NextRequest) {
           const waypointCandidates = resolveNearestNodes(provider, offsetPoint, 3);
 
           for (const wp of waypointCandidates) {
-            const leg1 = computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, fromCandidates, [
+            const leg1 = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, [
               { logicalNodeId: wp.logicalNodeId, distanceM: wp.distanceM },
             ]);
             if ("ok" in leg1) continue;
 
-            const leg2 = computeRouteBetweenCandidatesWithFallback(
+            const leg2 = await computeRouteBetweenCandidatesWithFallback(
               provider,
               datasetVersionId,
+              graph,
               [{ logicalNodeId: leg1.selectedDestinationNodeId, distanceM: 0 }],
               toCandidates
             );

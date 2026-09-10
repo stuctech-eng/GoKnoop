@@ -869,3 +869,36 @@ Geometry Integration Audit (punt 1-6):
 **PRODUCTIE GEWIJZIGD:** NEE — nieuwe, nog niet gekoppelde module.
 
 **VOLGENDE STAP:** deze functie tegen een échte, berekende route testen (end-to-end, niet alleen unit-tests met nepdata) — vóór de daadwerkelijke M5-koppeling aan `computeRouteWithFallback`.
+
+---
+
+### FASE: M5 — Daadwerkelijke UI-koppeling
+**DATUM:** 10 september 2026
+**STATUS:** PASS (code + tests + build) — **live productiemeting nog niet gedaan, met name de 10s-koudecache-vraag.**
+
+**GEWIJZIGD, precies het M3-integratiepunt, niets meer:**
+- `combined-route-engine.ts`: nieuwe `computeCombinedRouteAsRoute()` — bouwt een ECHTE, volledige `Route` (identieke vorm als de bestaande `buildRoute()`) via de gecombineerde engine, inclusief gestikte geometrie en al-opgeloste `GraphEdge[]`. Bewust ASYNC (live PDOK-geometrie-ophalen).
+- `types.ts`: `Route.source` en `Route.metadata.algorithm` licht uitgebreid met nieuwe, herkenbare waarden (`"combined-route-engine-v1"`, `"combined-cost-aware-dijkstra"`) — minimale, precieze type-uitbreiding, zelfde patroon als eerder bij `segmentId`.
+- `route-to-point-fallback.ts`: `computeRouteWithFallback` nu async, gebruikt de gecombineerde engine i.p.v. plain-GoKnoop `computeRoute()` + `resolveRouteEdges()` (die toch niet zou werken voor NWB-edges). **De kandidaat-fallback-STRUCTUUR zelf is volledig ongewijzigd** (Te's expliciete eis) — alleen de onderliggende berekening per kandidaat veranderde.
+- `route-between-candidates.ts`: zelfde soort wijziging, async-propagatie, kandidaat-vergelijkingslogica ongewijzigd.
+- `to-destination/route.ts`, `back-to-start/route.ts`: de gecombineerde graaf wordt nu ÉÉN KEER per aanvraag geladen (niet per kandidaat opnieuw) en doorgegeven — efficiënter dan telkens opnieuw opzoeken in de fallback-loop.
+
+**BEWUST NIET GEWIJZIGD, en waarom:**
+- Last-mile-routing (ORS/`LocalBikeRouter`) — volledig los van het GoKnoop/NWB-netwerk, geen wijziging nodig.
+- `combineRouteLegs()` — pure stik-functie, werkt op elke `Route`-vorm, geen wijziging nodig.
+- `loop-route-generator.ts` (voedt de "loop"-functie) — gebruikt `computeRoute()` DIRECT, niet via de fallback-wrapper; dit is een **apart, nog niet gemigreerd stuk**, expliciet als open punt hieronder.
+- Kaal `/api/route`, `route-planner.ts`/`/api/route/alternatives`, `reroute-executor.ts` — bevestigd niet actief gebruikt door de echte UI (M1), bewust ongemoeid gelaten.
+
+**VEILIGHEIDSEIGENSCHAPPEN:**
+- 631/631 tests (13 nieuw/bijgewerkt: 3 nieuw in `combined-route-engine.test.ts`, 4 bijgewerkt in `route-to-point-fallback.test.ts`, 5 bijgewerkt in `route-between-candidates.test.ts`), tsc exit 0, build geslaagd (`to-destination`/`back-to-start` correct gecompileerd als serverless functions).
+- `git status` bevestigt: exact de verwachte 8 substantiële bestanden gewijzigd, niets onverwachts geraakt.
+- Alle bestaande testscenario's (inclusief de twee met-naam-genoemde regressietests "sectie 9.50", "Hilversum via Zwolle") blijven slagen met de NIEUWE, gecombineerde engine eronder — bevestigt dat de kandidaat-fallback-logica intact bleef.
+
+**NOG NIET GEVERIFIEERD, EXPLICIET OPEN, NIET STILZWIJGEND GENEGEERD:**
+1. **10s-koudecache-risico**: bij de EERSTE aanvraag na deploy/idle moet de volledige keten (graaf bouwen ~5s + live PDOK-geometrie + last-mile-ORS) binnen de Vercel Hobby-10s-limiet blijven. Dit is NIET live getest.
+2. **`loop-route-generator.ts`** gebruikt nog steeds plain-GoKnoop — de "loop"-functie in de UI is dus nog NIET gemigreerd. Apart, volgend stuk werk.
+3. Geen enkele echte gebruikersinteractie is nog getest — alleen code, unit-tests, en build.
+
+**PRODUCTIE GEWIJZIGD:** JA — dit is de eerste keer dat de daadwerkelijke, actief gebruikte UI-flow (to-destination, back-to-start) verandert.
+
+**VOLGENDE STAP:** pushen, dan een ECHTE, live test via de daadwerkelijke UI (Amsterdam→Hilversum, adres-naar-adres, niet de losse debug-eindpunten) — dit is de eerste keer vandaag dat we specifiek de UI zelf testen, niet een API-eindpunt erachter.

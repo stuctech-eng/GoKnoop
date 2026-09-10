@@ -1,5 +1,6 @@
 import { GraphProvider, RouteConstraints } from "./types";
 import { computeRouteWithFallback, RouteToPointWithFallbackResult } from "./route-to-point-fallback";
+import type { CombinedGraph } from "../nwb-analysis/combined-graph";
 import type { LoopStartCandidate } from "./loop-route-generator";
 
 /**
@@ -29,13 +30,14 @@ export type RouteBetweenCandidatesFailure = {
   destinationCandidatesAttempted: number;
 };
 
-export function computeRouteBetweenCandidatesWithFallback(
+export async function computeRouteBetweenCandidatesWithFallback(
   provider: GraphProvider,
   datasetVersionId: string,
+  graph: CombinedGraph,
   fromCandidates: readonly LoopStartCandidate[],
   toCandidates: readonly LoopStartCandidate[],
   constraints: RouteConstraints = {}
-): RouteBetweenCandidatesResult | RouteBetweenCandidatesFailure {
+): Promise<RouteBetweenCandidatesResult | RouteBetweenCandidatesFailure> {
   // BUGFIX (30-8-2026, echte, bevestigde regressie: "snelste route" naar Hilversum bleek een
   // gigantische omweg via Zwolle): eerder werd hier gestopt bij de EERSTE werkende combinatie
   // (bestemmingskandidaat + de bijbehorende herkomst-fallback) -- dat is prima voor Back to
@@ -45,13 +47,16 @@ export function computeRouteBetweenCandidatesWithFallback(
   // werd die gewoon geaccepteerd zonder te checken of een andere combinatie korter was. Nu
   // ALLE bestemmingskandidaten geprobeerd, de KORTSTE (laagste `route.distanceM`) van alle
   // succesvolle combinaties gekozen.
+  //
+  // Fase M5, 10-9-2026: ONGEWIJZIGDE logica, nu async omdat computeRouteWithFallback dat is
+  // (gecombineerde engine haalt live NWB-geometrie op).
   let best: RouteBetweenCandidatesResult | null = null;
 
   for (let i = 0; i < toCandidates.length; i++) {
     const toCandidate = toCandidates[i];
     if (!provider.getNode(toCandidate.logicalNodeId)) continue; // onbekend knooppunt -- volgende bestemmingskandidaat
 
-    const result = computeRouteWithFallback(provider, datasetVersionId, fromCandidates, toCandidate.logicalNodeId, constraints);
+    const result = await computeRouteWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidate.logicalNodeId, constraints);
     if ("ok" in result) continue; // deze bestemmingskandidaat leverde niets op -- volgende proberen
 
     const success = result as RouteToPointWithFallbackResult;

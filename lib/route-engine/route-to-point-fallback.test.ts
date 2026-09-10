@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeRouteWithFallback } from "./route-to-point-fallback";
 import { InMemoryGraphProvider } from "./fixtures/in-memory-graph-provider";
+import { buildValidatedCombinedGraph } from "../nwb-analysis/combined-graph";
 import type { GraphEdge, GraphNode } from "./types";
 
 /**
@@ -8,6 +9,11 @@ import type { GraphEdge, GraphNode } from "./types";
  * kandidaat die volledig geïsoleerd is qua bereikbaarheid naar het doel
  * (geen edge, dus zelfs de Route Engine kan er niets mee), een andere die
  * wel werkt.
+ *
+ * FASE M5, 10-9-2026: computeRouteWithFallback gebruikt nu de gecombineerde
+ * engine en verwacht een `CombinedGraph`-parameter -- hier GoKnoop-only
+ * gebouwd (geen NWB-segmenten, geen connectors), zodat deze tests exact
+ * hetzelfde, ongewijzigde GoKnoop-only gedrag blijven verifiëren.
  */
 async function buildFixtureProvider(): Promise<InMemoryGraphProvider> {
   const nodes: GraphNode[] = [
@@ -26,12 +32,13 @@ async function buildFixtureProvider(): Promise<InMemoryGraphProvider> {
 describe("computeRouteWithFallback", () => {
   it("valt terug van een niet-bereikbare kandidaat naar een werkende, en rapporteert dat transparant", async () => {
     const provider = await buildFixtureProvider();
+    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
     const candidates = [
       { logicalNodeId: "isolated", distanceM: 200 }, // geen enkele edge, geen route mogelijk
       { logicalNodeId: "hub", distanceM: 800 },
     ];
 
-    const result = computeRouteWithFallback(provider, "v-test", candidates, "target");
+    const result = await computeRouteWithFallback(provider, "v-test", graph, candidates, "target");
 
     expect("ok" in result).toBe(false);
     if ("selectedStartNodeId" in result) {
@@ -45,11 +52,12 @@ describe("computeRouteWithFallback", () => {
 
   it("gebruikt kandidaat 1 direct als die al werkt", async () => {
     const provider = await buildFixtureProvider();
+    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
     const candidates = [
       { logicalNodeId: "hub", distanceM: 100 },
       { logicalNodeId: "isolated", distanceM: 900 },
     ];
-    const result = computeRouteWithFallback(provider, "v-test", candidates, "target");
+    const result = await computeRouteWithFallback(provider, "v-test", graph, candidates, "target");
     if ("selectedStartNodeId" in result) {
       expect(result.selectedCandidateRank).toBe(1);
     } else {
@@ -59,8 +67,9 @@ describe("computeRouteWithFallback", () => {
 
   it("geeft een duidelijke faal-uitkomst als geen enkele kandidaat werkt", async () => {
     const provider = await buildFixtureProvider();
+    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
     const candidates = [{ logicalNodeId: "isolated", distanceM: 100 }];
-    const result = computeRouteWithFallback(provider, "v-test", candidates, "target");
+    const result = await computeRouteWithFallback(provider, "v-test", graph, candidates, "target");
     expect("ok" in result && result.ok === false).toBe(true);
     if ("ok" in result && result.ok === false) {
       expect(result.reason).toBe("no_usable_candidate");
@@ -69,14 +78,11 @@ describe("computeRouteWithFallback", () => {
   });
 
   it("[VERPLICHTE REGRESSIETEST, vervolg op sectie 9.50] kiest de daadwerkelijk KORTSTE herkomstkandidaat, niet zomaar de eerst-geprobeerde die werkt", async () => {
-    // Herkomstkandidaat A wordt EERST geprobeerd en werkt -- maar levert een lange omweg op
-    // (10.000m). Kandidaat B (tweede geprobeerd) is veel korter (100m). De oude, foute logica
-    // koos A; de fix moet B kiezen.
     const nodes: GraphNode[] = [
-      { id: "originA", x: 0, y: 10000, displayNumber: "1" }, // eerst geprobeerd, maar ver via een omweg
+      { id: "originA", x: 0, y: 10000, displayNumber: "1" },
       { id: "detourMid", x: 0, y: 5000, displayNumber: "2" },
       { id: "target", x: 0, y: 0, displayNumber: "3" },
-      { id: "originB", x: 100, y: 0, displayNumber: "4" }, // tweede geprobeerd, maar dichtbij
+      { id: "originB", x: 100, y: 0, displayNumber: "4" },
     ];
     const edges: GraphEdge[] = [
       { id: "e1", fromLogicalNodeId: "originA", toLogicalNodeId: "detourMid", distanceM: 5000, directionality: "unknown", geometry: [{ x: 0, y: 10000 }, { x: 0, y: 5000 }] },
@@ -85,16 +91,17 @@ describe("computeRouteWithFallback", () => {
     ];
     const provider = new InMemoryGraphProvider(nodes, edges);
     await provider.load();
+    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
 
     const fromCandidates = [
-      { logicalNodeId: "originA", distanceM: 50 }, // hemelsbreed dichterbij, maar EERST geprobeerd, echte route lang
-      { logicalNodeId: "originB", distanceM: 300 }, // hemelsbreed verder, maar de ECHTE route is korter
+      { logicalNodeId: "originA", distanceM: 50 },
+      { logicalNodeId: "originB", distanceM: 300 },
     ];
 
-    const result = computeRouteWithFallback(provider, "v-test", fromCandidates, "target");
+    const result = await computeRouteWithFallback(provider, "v-test", graph, fromCandidates, "target");
     expect("selectedStartNodeId" in result).toBe(true);
     if ("selectedStartNodeId" in result) {
-      expect(result.selectedStartNodeId).toBe("originB"); // de daadwerkelijk kortere, niet de eerst-geprobeerde
+      expect(result.selectedStartNodeId).toBe("originB");
       expect(result.route.distanceM).toBe(100);
     }
   });

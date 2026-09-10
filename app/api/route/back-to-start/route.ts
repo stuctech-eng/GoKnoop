@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
+import { loadCachedCombinedGraph } from "@/lib/route-engine/cached-nwb-provider";
 import { computeRouteWithFallback } from "@/lib/route-engine/route-to-point-fallback";
 import { rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
 import { LocalBikeRouter } from "@/lib/local-bike-router/local-bike-router";
@@ -16,6 +17,11 @@ export const dynamic = "force-dynamic";
  *         routeStartNodeId: string, physicalStart: {lat, lon} }
  * Response bij succes: { knotLeg: {...}, lastMileLeg: {...} }
  * Response bij falen: { error, reason, leg: "knot" | "lastMile" }
+ *
+ * FASE M5, 10-9-2026: de netwerk-routing ("knot-leg") gebruikt nu de
+ * gecombineerde engine (GoKnoop+NWB+connectors+kostenmodel+validatie)
+ * i.p.v. plain-GoKnoop. Zelfde 10s-koudecache-kanttekening als
+ * to-destination/route.ts -- nog niet live geverifieerd.
  *
  * FASE 5 (GOKNOOP-MASTER.md sectie 9.18, 30-8-2026): "Back to Start" vanuit
  * het MIDDEN van de route (sectie 9.5's vereenvoudiging, al eerder
@@ -68,13 +74,14 @@ export async function POST(req: NextRequest) {
 
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
+    const { graph } = await loadCachedCombinedGraph(provider, datasetVersionId);
 
     if (!provider.getNode(routeStartNodeId)) {
       return NextResponse.json({ error: `routeStartNodeId '${routeStartNodeId}' bestaat niet.` }, { status: 404 });
     }
 
     // Been 1 (Layer A): huidige positie -> startknooppunt, via het knooppuntennetwerk zelf.
-    const knotResult = computeRouteWithFallback(provider, datasetVersionId, candidates, routeStartNodeId);
+    const knotResult = await computeRouteWithFallback(provider, datasetVersionId, graph, candidates, routeStartNodeId);
     if ("ok" in knotResult) {
       return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot" }, { status: 404 });
     }

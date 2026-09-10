@@ -61,7 +61,7 @@ export type DijkstraResult = {
 export type Route = {
   id: string;
   datasetVersionId: string;
-  source: "route-engine-v1";
+  source: "route-engine-v1" | "combined-route-engine-v1";
   network: "fiets";
   mode: "bicycle";
   nodes: string[];
@@ -76,7 +76,7 @@ export type Route = {
   alternatives: Route[]; // MVP: bevat alleen zichzelf niet — leeg, structuur wel aanwezig
   navigation: null;
   metadata: {
-    algorithm: "dijkstra";
+    algorithm: "dijkstra" | "combined-cost-aware-dijkstra";
     computedAt: string;
     computeTimeMs: number;
     edgesConsidered: number;

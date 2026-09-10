@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeCombinedRoute, F_NWB_PRODUCTION, F_CONNECTOR_PRODUCTION } from "./combined-route-engine";
+import { computeCombinedRoute, computeCombinedRouteAsRoute, F_NWB_PRODUCTION, F_CONNECTOR_PRODUCTION } from "./combined-route-engine";
 import type { GraphProvider, GraphNode, GraphEdge } from "./types";
 import { buildValidatedCombinedGraph, type SlimNwbSegment, type ValidatedConnectorInput } from "../nwb-analysis/combined-graph";
 
@@ -28,6 +28,43 @@ function makeNode(id: string, x: number, y: number): GraphNode {
 function buildTestGraph(provider: GraphProvider, nwbSegments: SlimNwbSegment[] = [], connectors: ValidatedConnectorInput[] = []) {
   return buildValidatedCombinedGraph(provider, nwbSegments, 20, connectors);
 }
+
+describe("computeCombinedRouteAsRoute (Fase M5, 10-9-2026) -- bouwt een ECHTE Route via de gecombineerde engine", () => {
+  it("bouwt een geldige Route met correcte metadata en source-markering", async () => {
+    const goknoopEdge: GraphEdge = { id: "g1", fromLogicalNodeId: "1", toLogicalNodeId: "2", distanceM: 100, directionality: "bidirectional", geometry: [{ x: 0, y: 0 }, { x: 100, y: 0 }] };
+    const provider = new FakeGraphProvider(new Map([["1", makeNode("1", 0, 0)], ["2", makeNode("2", 100, 0)]]), new Map([["1", [goknoopEdge]], ["2", [goknoopEdge]]]));
+    const graph = buildTestGraph(provider);
+
+    const result = await computeCombinedRouteAsRoute(graph, provider, "test-dataset", "1", "2");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.route.source).toBe("combined-route-engine-v1");
+      expect(result.route.metadata.algorithm).toBe("combined-cost-aware-dijkstra");
+      expect(result.route.distanceM).toBe(100);
+      expect(result.route.edges).toHaveLength(1);
+      expect(result.route.nodes).toEqual(["1", "2"]);
+      expect(result.resolvedEdges).toHaveLength(1);
+      expect(result.nodeDisplayNumbers).toEqual(["1", "2"]);
+    }
+  });
+
+  it("geeft node_not_found terug voor een onbekend knooppunt", async () => {
+    const provider = new FakeGraphProvider(new Map(), new Map());
+    const graph = buildTestGraph(provider);
+    const result = await computeCombinedRouteAsRoute(graph, provider, "test-dataset", "x", "y");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("node_not_found");
+  });
+
+  it("geeft disconnected terug als er geen pad bestaat", async () => {
+    const nodes = new Map([["1", makeNode("1", 0, 0)], ["2", makeNode("2", 1000, 0)]]);
+    const provider = new FakeGraphProvider(nodes, new Map());
+    const graph = buildTestGraph(provider);
+    const result = await computeCombinedRouteAsRoute(graph, provider, "test-dataset", "1", "2");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("disconnected");
+  });
+});
 
 describe("computeCombinedRoute (productie-module, Fase G/H/I, HERZIEN Fase K)", () => {
   it("bevestigt de definitieve, Fase-C-gekozen productiewaarden", () => {
