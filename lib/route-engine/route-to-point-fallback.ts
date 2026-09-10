@@ -1,5 +1,5 @@
 import { GraphProvider, RouteConstraints, Route } from "./types";
-import { computeCombinedRouteAsRoute } from "./combined-route-engine";
+import { computeCombinedRoute, computeCombinedRouteAsRoute } from "./combined-route-engine";
 import type { CombinedGraph } from "../nwb-analysis/combined-graph";
 import type { LoopStartCandidate } from "./loop-route-generator";
 import type { GraphEdge } from "./types";
@@ -21,14 +21,21 @@ import type { GraphEdge } from "./types";
  * plain-GoKnoop `computeRoute()`. Dit is het ENIGE, bewust gekozen
  * integratiepunt (Fase M3) -- de kandidaat-fallback-structuur eromheen
  * blijft ONGEWIJZIGD, die lost een ander probleem op (zie Fase M2).
- * BEWUST ASYNC geworden (was synchroon) -- de gecombineerde engine haalt
- * live NWB-geometrie op bij PDOK.
+ *
+ * HERZIEN, Fase M5 (performance-fix), 10-9-2026: EERSTE versie bouwde
+ * volledige geometrie (met een LIVE PDOK-aanroep) voor ELKE kandidaat in de
+ * loop, ook de uiteindelijk weggegooide -- live gemeten: 10.656ms, tegen de
+ * Vercel Hobby-10s-limiet aan (bevestigde timeout, "The string did not
+ * match the expected pattern" -- Vercel's platform sneed de functie af en
+ * gaf een niet-JSON foutpagina terug). NU TWEE FASEN: eerst een GOEDKOPE
+ * vergelijking (`computeCombinedRoute`, geen geometrie, geen PDOK-aanroep)
+ * voor ALLE kandidaten, dan de dure geometrie-opbouw PRECIES ÉÉN KEER, voor
+ * de uiteindelijke winnaar. Bespaart een volledige PDOK-aanroep per
+ * weggegooide kandidaat.
  *
  * `graph` is een EXPLICIETE parameter (niet zelf geladen): de aanroeper
  * (API-route) laadt 'm één keer via `loadCachedCombinedGraph` en geeft 'm
- * door -- efficiënter dan opnieuw opzoeken per kandidaat in de loop
- * hieronder, en schoner testbaar (geen verborgen Firestore-afhankelijkheid
- * in deze functie zelf).
+ * door.
  */
 export type RouteToPointWithFallbackResult = {
   route: Route;
@@ -65,38 +72,53 @@ export async function computeRouteWithFallback(
   // Bewust risicoarm voor de bestaande gebruikers van deze functie (Fase 4 "navigeer naar
   // startpunt", Back to Start): "kortste van alle geprobeerde kandidaten" kan nooit slechter
   // zijn dan "eerste die toevallig werkt" -- in het slechtste geval identiek, typisch beter.
-  //
-  // Fase M5: dit blijft ONGEWIJZIGDE logica -- alleen de onderliggende route-berekening
-  // per kandidaat is nu de gecombineerde engine i.p.v. plain-GoKnoop.
-  let best: RouteToPointWithFallbackResult | null = null;
+
+  // FASE 1 (goedkoop): elke kandidaat vergelijken op afstand, GEEN geometrie, GEEN PDOK-aanroep.
+  let bestIndex = -1;
+  let bestDistanceM = Infinity;
 
   for (let i = 0; i < fromCandidates.length; i++) {
     const candidate = fromCandidates[i];
     if (!provider.getNode(candidate.logicalNodeId)) continue; // onbekend knooppunt -- volgende proberen
 
-    const result = await computeCombinedRouteAsRoute(graph, provider, datasetVersionId, candidate.logicalNodeId, toLogicalNodeId, constraints);
-    if (!result.ok) continue; // deze kandidaat leverde geen (of geen gevalideerde) route op -- volgende proberen
+    const cheapResult = computeCombinedRoute(graph, candidate.logicalNodeId, toLogicalNodeId);
+    if (!cheapResult.ok) continue; // deze kandidaat leverde geen (of geen gevalideerde) route op -- volgende proberen
 
-    const candidateResult: RouteToPointWithFallbackResult = {
-      route: result.route,
-      resolvedEdges: result.resolvedEdges,
-      nodeDisplayNumbers: result.nodeDisplayNumbers,
-      selectedStartNodeId: candidate.logicalNodeId,
-      selectedStartNodeDisplayNumber: provider.getNode(candidate.logicalNodeId)?.displayNumber ?? candidate.logicalNodeId,
-      selectedCandidateRank: i + 1,
-    };
-
-    if (!best || candidateResult.route.distanceM < best.route.distanceM) {
-      best = candidateResult;
+    if (cheapResult.distanceM < bestDistanceM) {
+      bestDistanceM = cheapResult.distanceM;
+      bestIndex = i;
     }
   }
 
-  if (best) return best;
+  if (bestIndex === -1) {
+    return {
+      ok: false,
+      reason: "no_usable_candidate",
+      message: `Geen van de ${fromCandidates.length} kandidaat-knooppunten leverde een route naar het startpunt op.`,
+      candidatesAttempted: fromCandidates.length,
+    };
+  }
+
+  // FASE 2 (duur, PRECIES ÉÉN KEER): volledige geometrie opbouwen voor de winnaar.
+  const winner = fromCandidates[bestIndex];
+  const fullResult = await computeCombinedRouteAsRoute(graph, provider, datasetVersionId, winner.logicalNodeId, toLogicalNodeId, constraints);
+
+  if (!fullResult.ok) {
+    // Zou niet moeten gebeuren (fase 1 zei al ok) -- maar geen aanname, expliciet als faal behandelen.
+    return {
+      ok: false,
+      reason: "no_usable_candidate",
+      message: `Winnende kandidaat leverde bij geometrie-opbouw alsnog geen route op: ${fullResult.message}`,
+      candidatesAttempted: fromCandidates.length,
+    };
+  }
 
   return {
-    ok: false,
-    reason: "no_usable_candidate",
-    message: `Geen van de ${fromCandidates.length} kandidaat-knooppunten leverde een route naar het startpunt op.`,
-    candidatesAttempted: fromCandidates.length,
+    route: fullResult.route,
+    resolvedEdges: fullResult.resolvedEdges,
+    nodeDisplayNumbers: fullResult.nodeDisplayNumbers,
+    selectedStartNodeId: winner.logicalNodeId,
+    selectedStartNodeDisplayNumber: provider.getNode(winner.logicalNodeId)?.displayNumber ?? winner.logicalNodeId,
+    selectedCandidateRank: bestIndex + 1,
   };
 }
