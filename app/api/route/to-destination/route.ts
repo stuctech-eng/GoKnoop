@@ -42,6 +42,12 @@ export const dynamic = "force-dynamic";
  * ingeladen, gecachte graaf.
  */
 export async function POST(req: NextRequest) {
+  const timings: Record<string, number> = {};
+  const tStart = Date.now();
+  function mark(label: string) {
+    timings[label] = Date.now() - tStart;
+  }
+
   let body: {
     originCandidateNodeIds?: string[];
     originCandidateDistancesM?: number[];
@@ -93,19 +99,23 @@ export async function POST(req: NextRequest) {
   try {
     const db = getDb();
     const activeDatasetSnap = await db.collection("config").doc("activeDataset").get();
+    mark("activeDatasetLookup");
     if (!activeDatasetSnap.exists) {
-      return NextResponse.json({ error: "Geen actieve dataset geconfigureerd." }, { status: 500 });
+      return NextResponse.json({ error: "Geen actieve dataset geconfigureerd.", timings }, { status: 500 });
     }
     const datasetVersionId = activeDatasetSnap.data()!.datasetVersionId as string;
 
     const provider = new CachedGraphProvider(datasetVersionId);
     await provider.load();
-    const { graph } = await loadCachedCombinedGraph(provider, datasetVersionId);
+    mark("goknoopProviderLoad");
+    const { graph, cacheHit: graphCacheHit } = await loadCachedCombinedGraph(provider, datasetVersionId);
+    mark("combinedGraphLoad");
 
     // Been 1 (Layer A, beide kanten met fallback): herkomst-knooppunt -> bestemmings-knooppunt.
     let knotResult = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidates);
+    mark("knotLeg");
     if ("ok" in knotResult) {
-      return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot" }, { status: 404 });
+      return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot", timings, graphCacheHit }, { status: 404 });
     }
 
     let actualExtraM: number | undefined;
@@ -164,6 +174,7 @@ export async function POST(req: NextRequest) {
           actualExtraM = bestKnotResult.route.distanceM - (targetTotalM - extraM);
         }
       }
+      mark("plusLusje");
     }
 
     // Been 2 (Layer B): bestemmings-knooppunt -> exact adres.
@@ -171,15 +182,16 @@ export async function POST(req: NextRequest) {
     const destinationNodeWgs84 = rdToWgs84(destinationNode.x, destinationNode.y);
     const router = new LocalBikeRouter(new OpenRouteServiceAdapter());
     const lastMileResult = await router.route(destinationNodeWgs84, { lat: destinationLat, lon: destinationLon }, "cycling");
+    mark("lastMile");
 
     if ("reason" in lastMileResult) {
-      return NextResponse.json({ error: lastMileResult.message, reason: lastMileResult.reason, leg: "lastMile" }, { status: 502 });
+      return NextResponse.json({ error: lastMileResult.message, reason: lastMileResult.reason, leg: "lastMile", timings, graphCacheHit }, { status: 502 });
     }
 
-    return NextResponse.json({ knotLeg: knotResult, lastMileLeg: lastMileResult, actualExtraM });
+    return NextResponse.json({ knotLeg: knotResult, lastMileLeg: lastMileResult, actualExtraM, timings, graphCacheHit });
   } catch (err) {
     return NextResponse.json(
-      { error: "Route-naar-bestemming-berekening mislukt.", details: err instanceof Error ? err.message : String(err) },
+      { error: "Route-naar-bestemming-berekening mislukt.", details: err instanceof Error ? err.message : String(err), timings },
       { status: 500 }
     );
   }
