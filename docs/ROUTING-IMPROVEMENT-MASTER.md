@@ -585,3 +585,58 @@ STATUS: verklaard, niet apart op te lossen -- geen actie vereist
 **PRODUCTIE GEWIJZIGD:** JA — herziening van de Fase K-wijziging van eerder vandaag, zelf nog niet gepusht.
 
 **VOLGENDE STAP:** pushen, dan Fase J's runner-pagina nogmaals draaien om de daadwerkelijke verbetering te bevestigen (`graphCacheHit: true` zou nu een merkbaar lagere `computeTimeMs` moeten geven dan bij `false`).
+
+---
+
+### FASE: K — BEWEZEN (niet langer theoretisch)
+**DATUM:** 9 september 2026
+**STATUS:** PASS, met daadwerkelijke productiemeting.
+
+**RESULTAAT, gemeten in echte productie, alle 6 met `graphCacheHit: true`:**
+
+| Testgeval | Vóór | Ná | Factor |
+|---|---|---|---|
+| Amsterdam → Hilversum | 5.564ms | 205ms | 27× |
+| Volendam → Amsterdam | 5.032ms | 25ms | 201× |
+| v1 (337km-anomalie) | 5.720ms | 153ms | 37× |
+| v7 (337km-anomalie) | 5.206ms | 178ms | 29× |
+| Lochem l1 | 5.369ms | 3ms | 1.790× |
+| Lochem l3 | 4.887ms | 14ms | 349× |
+
+**Statusonderscheid:**
+```
+Performance-fix (graafcaching):
+  RESEARCH: n.v.t. (productieprobleem, geen onderzoeksvraag)
+  DESIGNED: PASS
+  IMPLEMENTED: PASS
+  TESTED: PASS (613/613 unit tests + bewezen productiemeting)
+  DEPLOYED: PASS
+```
+
+**PRODUCTIE GEWIJZIGD:** JA, bevestigd effectief.
+
+**VOLGENDE STAP:** automatisch door naar Fase L — failure/rollback.
+
+---
+
+### FASE: L — Failure/Rollback
+**DATUM:** 9 september 2026
+**STATUS:** PASS
+**DOEL:** controleren dat een routingprobleem nooit tot crash/corrupte state/extreme route/onverklaarde lege route/gedeeltelijke migratie leidt, en het enige gevonden gat dichten.
+
+**REEDS AANWEZIG, bevestigd bij controle (geen nieuwe code nodig):**
+- Crash: `/api/route/combined` heeft een try/catch om de hele handler, geeft 502 met details.
+- Extreme route: route-kwaliteitsvalidatie (Fase I).
+- Onverklaarde lege route: expliciete `node_not_found`/`disconnected`-redenen, nooit stilzwijgend leeg.
+- Gedeeltelijke migratie: migreren en activeren zijn bewust gescheiden stappen (Fase G) — een onderbroken migratie kan nooit per ongeluk live gaan.
+- Data-rollback: `activate-nwb-dataset` opnieuw aanroepen met een eerdere versie-ID (geen data ooit verwijderd).
+
+**GEVONDEN GAT, nu gedicht:** de Fase K-graafcache kon alleen via een herdeploy geleegd worden. Als ooit foute data wordt gemigreerd en later gecorrigeerd, zou de oude, foute graaf onnodig lang blijven hangen.
+
+**GEBOUWD:** `POST /api/admin/clear-nwb-graph-cache` — leegt de in-memory graafcache. **Eerlijk gedocumenteerd als best-effort**: raakt alleen de specifieke serverless-instance die de aanvraag toevallig afhandelt, geen gegarandeerde landelijke invalidatie bij meerdere warme instances. Bij twijfel blijft een herdeploy de zekere weg.
+
+**VEILIGHEIDSEIGENSCHAPPEN:** 613/613 tests, tsc exit 0, build geslaagd, `git status` bevestigt alleen de verwachte, kleine wijziging.
+
+**PRODUCTIE GEWIJZIGD:** JA — kleine, additieve toevoeging.
+
+**VOLGENDE STAP:** automatisch door naar Fase M — deployment (grotendeels al impliciet gebeurd via de incrementele pushes vandaag; dit wordt een consolidatie-controle, geen nieuwe stap) en Fase N — post-productie.

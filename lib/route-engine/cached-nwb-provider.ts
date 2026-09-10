@@ -33,6 +33,12 @@ const CONNECTOR_SEARCH_TOLERANCE_M = 20;
 
 export type CachedCombinedGraphResult = { graph: CombinedGraph; nwbDatasetVersionId: string | null; cacheHit: boolean };
 
+export function clearGraphCache(): number {
+  const size = moduleCache.size;
+  moduleCache.clear();
+  return size;
+}
+
 export async function loadCachedCombinedGraph(provider: GraphProvider, datasetVersionId: string): Promise<CachedCombinedGraphResult> {
   const db = getDb();
 
