@@ -779,3 +779,65 @@ Geometry Integration Audit (punt 1-6):
 **PRODUCTIE GEWIJZIGD:** NEE bij deze specifieke stap (alleen bevestiging).
 
 **VOLGENDE STAP (punt 7 uit Te's opdracht): `/api/route` → gecombineerde engine migreren.** Dit is een wezenlijk andere stap dan alles in Fase M — het raakt de daadwerkelijke UI/navigatie-ervaring van echte gebruikers, niet alleen backend-infrastructuur. Conform dezelfde discipline als bij Fase E (eerst de bestaande productiecode lezen vóór wijzigen): vóór enige wijziging aan `/api/route` of de client-aanroep ervan, eerst de daadwerkelijke UI-integratiepunten in kaart brengen (welke component roept `/api/route` aan, hoe wordt de respons gebruikt voor kaartweergave/navigatie) — nog niet gedaan.
+
+---
+
+### FASE: M1 — Complete UI-routing-audit (met AUDIT-CORRECTIE)
+**DATUM:** 10 september 2026
+**STATUS:** PASS
+
+**AUDIT-CORRECTIE, expliciet:** een eerdere, te grove conclusie in dit document ("de echte UI gebruikt nog `/api/route`, het oude eindpunt") was **onjuist**. De daadwerkelijke productie-UI (`app/page.tsx`) roept dat kale eindpunt nergens aan. In plaats daarvan gebruikt het een reeks gespecialiseerde subroutes.
+
+**Volledige, daadwerkelijke UI-flow (gelezen, niet aangenomen):**
+
+1. **Adresresolutie** (`lib/route-engine/location-resolver.ts`, functie `resolveNearestNodes`): een RD/WGS84-coördinaat of plaatsnaam wordt vertaald naar tot 5 kandidaat-GoKnoop-knopen, met bewuste uitsluiting van volledig geïsoleerde (0-edge) knopen (bugfix 28-8-2026).
+2. **Kandidaatselectie**: elke kandidaat krijgt een `LoopStartCandidate` (`logicalNodeId`, optionele `distanceM`).
+3. **Netwerk-routing ("knot-leg")**: `computeRouteBetweenCandidatesWithFallback()` (`route-between-candidates.ts`) → roept per bestemmingskandidaat `computeRouteWithFallback()` (`route-to-point-fallback.ts`) aan → die roept op zijn beurt, per herkomstkandidaat, de kale `computeRoute()` (`route-engine.ts`, **plain GoKnoop-Dijkstra, exact wat Fase E al vond**) aan, en kiest over ALLE geslaagde combinaties de KORTSTE.
+4. **Last-mile-routing ("Layer B")**: van het gekozen bestemmings-knooppunt naar het exacte adres, via `LocalBikeRouter` + `OpenRouteServiceAdapter` (externe ORS-dienst) — volledig los van het GoKnoop/NWB-netwerk.
+5. **Route-combinatie**: bij een normale "route naar adres" worden knot-leg en last-mile-leg NIET server-side samengevoegd — beide apart teruggegeven (`{knotLeg, lastMileLeg}`), de client rendert ze naast elkaar. Bij de "plus lusje"-functie (omweg via een tussenpunt) worden twee knot-leg-segmenten WEL server-side aan elkaar geplakt via `combineRouteLegs()` (pure functie, plakt `geometry`/`edges`/`nodes`/`distanceM` van twee `Route`-objecten aaneen).
+6. **Geometrie-opbouw**: `Route.geometry: Point[]` is een platte, vooraf-berekende puntenreeks (RD-coördinaten) — de kaart-previewcomponent (`RoutePreview`) leest dit rechtstreeks, roept zelf geen resolutielogica aan.
+7. **Navigatie**: `NavigationScreen` krijgt een `GraphEdge[]` (niet alleen platte punten) via `resolveRouteEdges()` (`resolve-route-edges.ts`) — die vertaalt `Route.edges[]` (ID's) 1-op-1 terug naar volledige `GraphEdge`-objecten via `GraphProvider.getEdgesFrom()`, en **gooit een harde fout als een edge niet zo resolveerbaar is**. Deze `GraphEdge[]` voedt `buildRouteProgressModel()` (GPS-voortgang-matching tijdens het fietsen) — die heeft per edge `.geometry`, `.fromLogicalNodeId`, `.toLogicalNodeId` nodig, niet alleen een afstand.
+8. **Route-opslag/delen**: routes worden licht opgeslagen (`edgeIds`/`nodeIds`/`datasetVersionId`, GEEN volledige geometrie — zelfde reden als de NWB-413-fix), en bij hervatten via `/api/route/resolve` teruggehaald.
+
+**BELANGRIJKSTE ARCHITECTURALE CONSEQUENTIE, gevonden bij het lezen:** `resolveRouteEdges()` en `buildRouteProgressModel()` verwachten ECHTE `GraphEdge`-objecten, oplosbaar via de plain-GoKnoop `GraphProvider`. Een gecombineerde (GoKnoop+NWB) route kan dit contract NIET direct vervullen — NWB-segmenten bestaan niet in de GoKnoop-`GraphProvider`. Dit bevestigt waarom Te M4 (geometrie) vóór M5 (UI-migratie) plaatste: zonder een oplossing hiervoor zou navigatie op het NWB-deel van een route hard falen, niet gewoon een lege kaart tonen.
+
+**PRODUCTIE GEWIJZIGD:** NEE — uitsluitend gelezen.
+
+---
+
+### FASE: M2 — Bestaande kandidaat-fallback, functioneel gedocumenteerd
+**DATUM:** 10 september 2026
+**STATUS:** PASS
+
+**Waarom hij bestaat:** twee, apart gevonden en gefixte regressies (30-8-2026): (1) de dichtstbijzijnde kandidaat-bestemming kan toevallig een omweg opleveren terwijl een andere kandidaat-bestemming beter is; (2) zelfs als bestemmingskandidaten correct vergeleken worden, kan de dichtstbijzijnde HERKOMST-kandidaat zelf al slecht verbonden zijn (bijv. verkeerde kant van een gracht), wat elke bestemmingskeuze evenveel schaadt.
+
+**Welke foutconditie hij opvangt:** een lokaal, aan één specifiek knooppunt gebonden verbindingsprobleem — NIET per se een structureel netwerkgat tussen hele regio's (zoals Amsterdam-Hilversum, dat we vandaag onderzochten). Het probeert 3-5 nabije alternatieven en kiest de kortste geslaagde combinatie.
+
+**Waar hij in de flow zit:** twee geneste lagen — `computeRouteWithFallback` (herkomstkant) binnen `computeRouteBetweenCandidatesWithFallback` (bestemmingskant), beide bovenop de kale, plain-GoKnoop `computeRoute()`.
+
+**Welke functionaliteit behouden moet blijven:** de kandidaat-fallback-STRUCTUUR zelf (proberen meerdere nabije knopen, kortste kiezen) — dat is waardevolle, orthogonale productlogica, los van welk onderliggend netwerk (plain-GoKnoop of Combined Engine) de daadwerkelijke route tussen twee knopen berekent.
+
+**Of hij na migratie nog nodig is:** JA — hij lost een ANDER probleem op dan de Combined Engine. De Combined Engine repareert structurele netwerkgaten tussen regio's; de kandidaat-fallback repareert lokale, knooppunt-specifieke verbindingsproblemen. Beide zijn nodig, niet elkaars vervanging. **Expliciet, conform Te's besluit: dit is GEEN argument om de Combined Engine optioneel te maken — het is complementaire logica die blijft bestaan.**
+
+**PRODUCTIE GEWIJZIGD:** NEE.
+
+---
+
+### FASE: M3 — Integratiepunt bepaald
+**DATUM:** 10 september 2026
+**STATUS:** PASS
+
+**Het exacte, enige juiste integratiepunt:** de kale `computeRoute()`-aanroep DIEP BINNEN `computeRouteWithFallback()` (`route-to-point-fallback.ts`, regel met `computeRoute(provider, datasetVersionId, candidate.logicalNodeId, toLogicalNodeId, constraints)`). Dat is de plek waar plain-GoKnoop-Dijkstra vandaag daadwerkelijk de netwerkroute tussen twee knopen bepaalt.
+
+**Waarom hier en nergens anders:**
+- De kandidaat-fallback-STRUCTUUR eromheen (meerdere kandidaten proberen) blijft **ongewijzigd** — dat is niet het probleem dat de Combined Engine oplost.
+- De last-mile-laag (ORS) blijft **ongewijzigd** — volledig los van het GoKnoop/NWB-netwerk.
+- `combineRouteLegs()` blijft **ongewijzigd** — een pure stik-functie, agnostisch over welke engine de onderliggende benen produceerde, zolang die de `Route`-vorm respecteren.
+
+**Wat WEL moet veranderen:** `computeRoute()` zelf (of een nieuwe functie met identieke `Route`-teruggave-vorm die er direct voor in de plaats komt) moet intern de Combined Engine gebruiken — inclusief een oplossing voor `Route.edges[]`/`Route.geometry[]`, zodat `resolveRouteEdges()` en `buildRouteProgressModel()` niet breken op NWB-segmenten. Dat is exact waar M4 nu voor moet zorgen.
+
+**GEEN tweede, concurrerende route-engine:** bevestigd, geen alternatief pad blijft bestaan naast de Combined Engine voor netwerk-routing — alleen de al-bestaande, orthogonale lagen (kandidaat-fallback, last-mile) blijven zoals ze zijn.
+
+**PRODUCTIE GEWIJZIGD:** NEE — uitsluitend besluit vastgelegd, nog geen code gewijzigd.
+
+**VOLGENDE STAP:** M4 — geometrie. Route.edges[]/geometry[] moeten een gecombineerde (GoKnoop+NWB) route correct kunnen dragen, met het nu-betrouwbare `segmentId`, inclusief het geval waarin een segment tweemaal voorkomt.
