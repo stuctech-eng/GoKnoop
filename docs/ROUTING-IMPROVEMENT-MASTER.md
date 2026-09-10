@@ -735,3 +735,17 @@ Deze sandbox-omgeving blokkeert uitgaand verkeer naar `service.pdok.nl`: bevesti
 **PRODUCTIE GEWIJZIGD:** JA — kleine, precieze datamodel-uitbreiding.
 
 **VOLGENDE STAP:** dezelfde drie routes (Hilversum/Volendam/Lochem) opnieuw testen via het bijgewerkte endpoint — nu zou `verschilPerDoorkruisingM` vrijwel 0 moeten zijn.
+
+---
+
+### FASE: M (bevestiging) — Hilversum: EXACT, 0m verschil
+**DATUM:** 10 september 2026
+**STATUS:** PASS voor Hilversum. Volendam/Lochem nog te bevestigen.
+
+**RESULTAAT:** `{"aantalNwbDoorkruisingen":85,"aantalUniekeNwbSegmenten":85,"geometrieOpgelost":85,"verschilPerDoorkruisingM":0}` — perfecte overeenkomst, geen enkele mislukking.
+
+**GECORRIGEERDE OORZAAK-ANALYSE:** `aantalNwbDoorkruisingen` (85) = `aantalUniekeNwbSegmenten` (85) — er werd in deze route geen enkel segment dubbel doorkruist. De eerdere -1.426m-afwijking kwam dus NIET van dubbele doorkruisingen (die hypothese was onjuist), maar uitsluitend van het inmiddels gerepareerde segmentId-probleem: het oude cluster-knoop-ID miste/verwarde 6 van de 85 segmenten. Met het betrouwbare veld zijn alle 85 correct en exact teruggevonden.
+
+**PRODUCTIE GEWIJZIGD:** NEE.
+
+**VOLGENDE STAP:** Volendam en Lochem nog bevestigen (`?route=volendam` en `?route=lochem`) voordat punt 5-6 van de audit volledig wordt afgesloten.
