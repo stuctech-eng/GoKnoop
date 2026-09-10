@@ -498,3 +498,39 @@ Lochem:                 RESEARCH: PASS   PRODUCTION: PASS
 **PRODUCTIE GEWIJZIGD:** NEE.
 
 **VOLGENDE STAP:** zodra Te de trace-pagina draait en de uitkomst terugstuurt: hypothese bevestigen of expliciet als ONBEWEZEN markeren en stoppen met dit specifieke spoor — daarna automatisch door naar de eerstvolgende onvoltooide fase.
+
+---
+
+### GERICHTE TRACE — RESULTAAT (bevestigd)
+**DATUM:** 9 september 2026
+**STATUS:** PASS — hypothese bevestigd, hard bewijs, geen aanname.
+
+**BEVINDING:** voor zowel v1 als v7 gebruikt de productie-route een GoKnoop-connectorknoop die daadwerkelijk BUITEN de oude Volendam-onderzoeksgrens ligt:
+- v1: knoop `609ZZjTtmvsbsONm8At1` (RD y=481.670) — **6.361 m** ten zuiden van de oude grens (minY=488.031).
+- v7: knoop `As36HbY9doHxbRF8oztt` (RD y=483.438) — **4.594 m** ten zuiden van de oude grens.
+
+**Antwoord op de zes onderzoeksvragen:**
+1. Connectoren: v1 → `609ZZjTtmvsbsONm8At1` ↔ NWB `c77ea6a6-...`; v7 → `As36HbY9doHxbRF8oztt` ↔ NWB `cc13c2f7-...`.
+2. GoKnoop-nodes aan beide kanten: geïdentificeerd, exacte coördinaten in de ruwe trace-data.
+3. **NWB-componenten: NIET apart geverifieerd in deze trace — expliciet open gelaten, geen aanname ingevuld.**
+4. Aanwezig in de oude regionale set: **structureel onmogelijk** — de oude `generateConnectorCandidates`-aanroep kreeg uitsluitend bbox-gefilterde GoKnoop-nodes als input; een node buiten die grens kon nooit als kandidaat ontstaan (een scope-beperking, geen afwijzing op basis van kwaliteit).
+5. Levert een node buiten de oude bbox de ontbrekende verbinding: **JA, bevestigd voor beide gevallen.**
+6. Padverkorting: v1 336.719m → 37.579m; v7 336.284m → 39.013m.
+
+**CONCLUSIE:** de landelijke (productie) connector-generatie vond een echte, structureel niet eerder overwogen verbinding — een positief, verklaard neveneffect van landelijk i.p.v. regionaal genereren. Geen datafout, geen architectuurprobleem, geen fix nodig.
+
+**BESLUIT (Decision Log-waardig):** de 337km-anomalie wordt beschouwd als **verklaard en niet-reproduceerbaar in de huidige productieconfiguratie**, met een bekende, bewezen oorzaak (scope-verschil regionaal vs. landelijk). Dit is een ANDERE uitspraak dan "opgelost door de validatielaag" — dat onderscheid blijft in de documentatie behouden.
+
+**ANOMALY REGISTER-UPDATE:**
+```
+ANOMALIE: 337km-omweg (v1/v7, Volendam-regio)
+ONTDEKT: 9-9-2026, Fase 5B-kalibratie
+REPRODUCEERBAARHEID: RESEARCH: ja (regionale connectorset) / PRODUCTION: nee (landelijke connectorset)
+OORZAAK: bevestigd -- ontbrekende connector lag buiten de regionale onderzoeksgrens, landelijke generatie loste dit vanzelf op
+VALIDATIELAAG GETRIGGERD IN PRODUCTIE: nee (niets om af te wijzen)
+STATUS: verklaard, niet apart op te lossen -- geen actie vereist
+```
+
+**PRODUCTIE GEWIJZIGD:** NEE — uitsluitend documentatie.
+
+**VOLGENDE STAP:** automatisch door naar de eerstvolgende onvoltooide fase. Fase J-data toont `computeTimeMs` van 5.047–5.867ms per aanvraag in productie — dat is een concreet, hard performance-signaal. **Fase K (performance) is daarmee de logische eerstvolgende stap**, niet een keuze maar direct af te leiden uit de al-verzamelde productiedata zelf.
