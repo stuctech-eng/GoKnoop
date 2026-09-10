@@ -8,7 +8,7 @@ const MIGRATE_CHUNK_SIZE = 400;
 
 export default function MigrateNwbRunnerPage() {
   const [datasetVersionId, setDatasetVersionId] = useState("uINZ3y2QsgBdEyky3duq");
-  const [nwbDatasetVersionId, setNwbDatasetVersionId] = useState(`nwb-${new Date().toISOString().slice(0, 10)}-v1`);
+  const [nwbDatasetVersionId, setNwbDatasetVersionId] = useState(`nwb-${new Date().toISOString().slice(0, 10)}-v2-gebatcht`);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [migrationDone, setMigrationDone] = useState(false);
@@ -59,6 +59,7 @@ export default function MigrateNwbRunnerPage() {
     for (let i = 0; i < allSegments.length; i += MIGRATE_CHUNK_SIZE) {
       const chunk = allSegments.slice(i, i + MIGRATE_CHUNK_SIZE);
       const isFirstChunk = i === 0;
+      const batchIndex = i / MIGRATE_CHUNK_SIZE;
       try {
         const params = new URLSearchParams();
         if (key) params.set("key", key);
@@ -68,6 +69,7 @@ export default function MigrateNwbRunnerPage() {
           body: JSON.stringify({
             nwbDatasetVersionId,
             segments: chunk,
+            batchIndex,
             isFirstChunk,
             metadata: isFirstChunk
               ? {

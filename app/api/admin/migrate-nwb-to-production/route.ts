@@ -5,8 +5,6 @@ import type { SlimNwbSegment } from "@/lib/nwb-analysis/combined-graph";
 export const maxDuration = 10;
 export const dynamic = "force-dynamic";
 
-const FIRESTORE_BATCH_LIMIT = 450; // ruim onder de harde 500-limiet van Firestore
-
 /**
  * POST /api/admin/migrate-nwb-to-production
  *
@@ -20,9 +18,18 @@ const FIRESTORE_BATCH_LIMIT = 450; // ruim onder de harde 500-limiet van Firesto
  * stap (zie /api/admin/activate-nwb-dataset) -- "data schrijven" en "data
  * live zetten" blijven bewust gescheiden acties.
  *
+ * FASE M6/M7 (opslagformaat-fix), 10-9-2026: live productiemeting toonde dat
+ * ~144k LOSSE segment-documenten alleen al ~29s zouden kosten om terug te
+ * lezen (ruim boven de 10s-productielimiet, bevestigd met een echte 504
+ * FUNCTION_INVOCATION_TIMEOUT). Elke binnenkomende chunk wordt nu als ÉÉN
+ * GEBATCHT document weggeschreven (`batches/{batchIndex}`, bevat een array
+ * van alle segmenten in die chunk), niet als N losse documenten -- bij een
+ * chunkgrootte van 400 betekent dit ~360 documenten i.p.v. 144.000 voor de
+ * volledige dataset.
+ *
  * Body per aanroep (herhaald aangeroepen door de client, zelfde gepagineerde
  * patroon als de onderzoeksfase):
- *   { nwbDatasetVersionId, segments: SlimNwbSegment[], isFirstChunk, metadata? }
+ *   { nwbDatasetVersionId, segments: SlimNwbSegment[], batchIndex, isFirstChunk, metadata? }
  */
 export async function POST(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -36,6 +43,7 @@ export async function POST(req: NextRequest) {
   let body: {
     nwbDatasetVersionId?: string;
     segments?: SlimNwbSegment[];
+    batchIndex?: number;
     isFirstChunk?: boolean;
     metadata?: { bron: string; licentie: string; regios: string[]; opgehaaldOp: string };
   };
@@ -45,9 +53,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
   }
 
-  const { nwbDatasetVersionId, segments, isFirstChunk, metadata } = body;
-  if (!nwbDatasetVersionId || !segments) {
-    return NextResponse.json({ error: "nwbDatasetVersionId en segments zijn verplicht." }, { status: 400 });
+  const { nwbDatasetVersionId, segments, batchIndex, isFirstChunk, metadata } = body;
+  if (!nwbDatasetVersionId || !segments || batchIndex === undefined) {
+    return NextResponse.json({ error: "nwbDatasetVersionId, segments en batchIndex zijn verplicht." }, { status: 400 });
   }
 
   try {
@@ -66,21 +74,14 @@ export async function POST(req: NextRequest) {
           reproduceerbaar: true,
           migratedAt: new Date().toISOString(),
           status: "migrating",
+          opslagformaat: "gebatcht (batches/{n}, ~400-500 segmenten per document) -- Fase M6/M7-fix, 10-9-2026",
         });
     }
 
-    // Segmenten wegschrijven in batches (Firestore: max 500 writes/batch).
-    for (let i = 0; i < segments.length; i += FIRESTORE_BATCH_LIMIT) {
-      const chunk = segments.slice(i, i + FIRESTORE_BATCH_LIMIT);
-      const batch = db.batch();
-      for (const seg of chunk) {
-        const ref = db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("segments").doc(seg.id);
-        batch.set(ref, seg);
-      }
-      await batch.commit();
-    }
+    // ÉÉN document voor deze hele chunk, geen losse documenten per segment.
+    await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").doc(String(batchIndex)).set({ segments });
 
-    return NextResponse.json({ ok: true, nwbDatasetVersionId, segmentsGeschreven: segments.length });
+    return NextResponse.json({ ok: true, nwbDatasetVersionId, batchIndex, segmentsGeschreven: segments.length });
   } catch (err) {
     return NextResponse.json(
       { error: "Migratie-chunk mislukt.", details: err instanceof Error ? err.message : String(err) },

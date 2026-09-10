@@ -19,6 +19,17 @@ import type { GraphProvider } from "./types";
  * nodePosition -- de daadwerkelijk dure output), niet de ruwe invoer. Een
  * warme aanvraag hoeft nu alleen nog Dijkstra te draaien, geen enkele
  * hernieuwde clustering.
+ *
+ * FASE M6/M7 (opslagformaat-fix), 10-9-2026: live productiemeting toonde
+ * dat het Firestore-uitlezen van de ~144k LOSSE NWB-segment-documenten zelf
+ * al ~29s zou kosten (lineair geëxtrapoleerd uit een 2000-documenten-steek-
+ * proef, 401ms) -- ruim boven de 10s-limiet, los van alles daarna
+ * (bevestigd: een geïsoleerde test van alleen graafopbouw gaf een harde
+ * 504 FUNCTION_INVOCATION_TIMEOUT). NWB-segmenten worden nu in GEBATCHTE
+ * documenten gelezen (`nwbSegments/{id}/batches/{n}`, ~500 segmenten per
+ * document) i.p.v. één document per segment -- ~288 documenten i.p.v.
+ * 144.000, dezelfde totale databytes maar drastisch minder per-document-
+ * overhead.
  */
 
 type CachedGraphEntry = {
@@ -54,8 +65,13 @@ export async function loadCachedCombinedGraph(provider: GraphProvider, datasetVe
   let nwbSegments: SlimNwbSegment[] = [];
   let validatedConnectors: ValidatedConnectorInput[] = [];
   if (nwbDatasetVersionId) {
-    const segmentsSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("segments").get();
-    nwbSegments = segmentsSnap.docs.map((d) => d.data() as SlimNwbSegment);
+    // Gebatchte documenten: elk document bevat een ARRAY van ~500 segmenten,
+    // niet één document per segment (zie module-commentaar hierboven).
+    const batchesSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").get();
+    for (const doc of batchesSnap.docs) {
+      const data = doc.data() as { segments: SlimNwbSegment[] };
+      nwbSegments.push(...data.segments);
+    }
 
     const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
     const connectorsSnap = await db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get();

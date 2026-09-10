@@ -5,15 +5,17 @@ import type { SlimNwbSegment } from "@/lib/nwb-analysis/combined-graph";
 export const maxDuration = 10;
 export const dynamic = "force-dynamic";
 
-const PAGE_SIZE = 2000;
-
 /**
- * GET /api/admin/read-active-nwb-segments?cursor=<laatste-doc-id>
+ * GET /api/admin/read-active-nwb-segments
  *
  * Fase G (connector-generatie), 9-9-2026. Leest de ACTIEVE NWB-
- * productiedata (via config/activeNwbDataset) gepagineerd uit.
- * Cursor-gebaseerd (documentId, niet offset) -- bij ~144k documenten is
- * offset-paginering merkbaar trager naarmate de offset groeit.
+ * productiedata (via config/activeNwbDataset) volledig uit.
+ *
+ * FASE M6/M7 (opslagformaat-fix), 10-9-2026: sinds het gebatchte formaat
+ * (~360 documenten i.p.v. 144.000 losse) is paginering niet meer nodig --
+ * alles past ruimschoots in één aanvraag (zie de meting: 2000 losse
+ * documenten in 401ms, dus ~360 gebatchte documenten in een fractie
+ * daarvan). Cursor-paginering (voorheen hier aanwezig) is daarom verwijderd.
  */
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -32,24 +34,14 @@ export async function GET(req: NextRequest) {
     }
     const nwbDatasetVersionId = activeSnap.data()!.nwbDatasetVersionId as string;
 
-    const cursor = req.nextUrl.searchParams.get("cursor");
-    let query = db
-      .collection("nwbSegments")
-      .doc(nwbDatasetVersionId)
-      .collection("segments")
-      .orderBy("__name__")
-      .limit(PAGE_SIZE);
-
-    if (cursor) {
-      const cursorDoc = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("segments").doc(cursor).get();
-      if (cursorDoc.exists) query = query.startAfter(cursorDoc);
+    const batchesSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").get();
+    const segments: SlimNwbSegment[] = [];
+    for (const doc of batchesSnap.docs) {
+      const data = doc.data() as { segments: SlimNwbSegment[] };
+      segments.push(...data.segments);
     }
 
-    const snap = await query.get();
-    const segments = snap.docs.map((d) => d.data() as SlimNwbSegment);
-    const nextCursor = snap.docs.length === PAGE_SIZE ? snap.docs[snap.docs.length - 1].id : null;
-
-    return NextResponse.json({ nwbDatasetVersionId, segments, nextCursor, done: nextCursor === null });
+    return NextResponse.json({ nwbDatasetVersionId, segments, nextCursor: null, done: true });
   } catch (err) {
     return NextResponse.json(
       { error: "Actieve NWB-segmenten lezen mislukt.", details: err instanceof Error ? err.message : String(err) },
