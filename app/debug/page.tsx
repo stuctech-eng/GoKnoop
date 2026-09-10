@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/generate-nwb-connectors-runner", label: "NWB-connectoren genereren (productie)", description: "Genereert en slaat gevalideerde connectoren op. Vereist actieve NWB-dataset." },
       { href: "/debug/migrate-nwb-runner", label: "NWB → Productie migreren", description: "Migreert de al-verzamelde onderzoeksdata naar het productieschema. Schrijft naar echte productie-Firestore." },
       { href: "/debug/fase5c-nwb-component-check", label: "Fase 5C: NWB-component-check", description: "Zitten de twee connector-clusters in dezelfde NWB-only-component? Laatste, gerichte test." },
       { href: "/debug/fase5c-vqd-interaction", label: "Fase 5C: GoKnoop\u2194NWB-interactie bij VQd...", description: "Component-analyse, padtrace, connector-cluster-spreidingscheck, vergelijking met normale route." },

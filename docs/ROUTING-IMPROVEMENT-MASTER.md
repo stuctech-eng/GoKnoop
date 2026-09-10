@@ -409,3 +409,27 @@ nwbSegments/{nwbDatasetVersionId}/segments/{segmentId}  (subcollectie, SLIM form
 **PRODUCTIE GEWIJZIGD:** NEE (nog niet — de tooling bestaat, is niet uitgevoerd).
 
 **VOLGENDE STAP:** zodra de migratie + activatie daadwerkelijk zijn uitgevoerd, kan Fase G (connector-generatie) en daarna Fase J (productieregressies) tegen echte productie-NWB-data worden getest.
+
+---
+
+### FASE: G (afronding) — Connector-generator productieklaar
+**DATUM:** 9 september 2026
+**STATUS:** PASS (tooling gebouwd en geverifieerd) — UITVOERING WACHT OP de migratie+activatie hierboven.
+**DOEL:** het tweede open punt uit Fase G/H/I oplossen: connectoren daadwerkelijk kunnen genereren en opslaan tegen productie-NWB-data, zodra die er is.
+
+**GEBOUWD:**
+- `app/api/admin/goknoop-bearings-national/route.ts` — landelijke variant (geen regio-beperking) van het onderzoeks-eindpunt.
+- `app/api/admin/read-active-nwb-segments/route.ts` — cursor-gebaseerde paginering (niet offset — bij ~144k documenten blijft dit snel, waar offset-paginering zou vertragen naarmate de offset groeit).
+- `app/api/admin/save-nwb-connectors/route.ts` — slaat alleen niet-afgewezen connectoren op, gebatched.
+- `app/debug/generate-nwb-connectors-runner/page.tsx` — brengt alles samen: landelijke GoKnoop-richtingen + actieve NWB-data ophalen, `generateConnectorCandidates` (dezelfde, al-geteste onderzoeksfunctie) client-side draaien, resultaat opslaan.
+
+**Consistent hergebruik, geen nieuwe kernlogica:** deze fase voegt uitsluitend haal/schrijf-eindpunten toe; de daadwerkelijke connector-validatielogica is letterlijk dezelfde, vandaag al 10x geteste `generateConnectorCandidates`-functie uit `lib/nwb-analysis/connector-candidates.ts`.
+
+**VEILIGHEIDSEIGENSCHAPPEN:**
+- 612/612 tests, tsc exit 0, build geslaagd.
+- `git status`: alleen nieuwe bestanden + twee documentatie-updates — niets bestaands gewijzigd.
+- Als `config/activeNwbDataset` nog niet bestaat, geeft `read-active-nwb-segments` een duidelijke 404 ("eerst migreren + activeren") — geen crash, geen stille lege data.
+
+**PRODUCTIE GEWIJZIGD:** NEE (tooling klaar, nog niet uitgevoerd — wacht op de migratie).
+
+**VOLGENDE STAP:** zodra Te de migratie + activatie + connector-generatie daadwerkelijk heeft uitgevoerd (drie handelingen, elk bewust apart), is Fase J (productieregressies tegen echte data) mogelijk.
