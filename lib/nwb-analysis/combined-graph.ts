@@ -87,6 +87,15 @@ function buildBaseGraph(
   findNwbClusterNodeId: (segId: string, end: "from" | "to") => string;
   clusterList: { id: string; x: number; y: number }[];
 } {
+  // TOEGEVOEGD 10-9-2026, Fase M6/M7-diagnose: console.log-timing per stap --
+  // zichtbaar in Vercel's functielogs ONGEACHT of de functie als geheel op
+  // tijd terugkomt. Nodig omdat de eerdere HTTP-respons-gebaseerde timing
+  // (timings-object in de JSON-respons) niets teruggeeft bij een harde
+  // platform-timeout (de synchrone berekening bereikt dan nooit de
+  // return-statement waar dat object gebouwd wordt).
+  const tBase = Date.now();
+  const log = (label: string) => console.log(`[buildBaseGraph] ${label}: ${Date.now() - tBase}ms`);
+
   const adjacency = new Map<string, CombinedEdge[]>();
   const nodePosition = new Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>();
 
@@ -105,8 +114,11 @@ function buildBaseGraph(
       addEdge(id, otherEnd, { to: otherEnd, distanceM: e.distanceM, source: "goknoop" });
     }
   }
+  log(`GoKnoop-basisgraaf klaar (${allNodeIds.length} nodes)`);
 
   const setBSegments = nwbSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded");
+  log(`Set B-classificatie klaar (${setBSegments.length}/${nwbSegments.length} segmenten)`);
+
   const uf = new UnionFind();
   const pointKey = (segId: string, end: "from" | "to") => `${segId}:${end}`;
   const rawPoints: { key: string; x: number; y: number }[] = [];
@@ -116,6 +128,8 @@ function buildBaseGraph(
     rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y });
     rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y });
   }
+  log(`Punten verzameld (${rawPoints.length} punten)`);
+
   const grid = new Map<string, typeof rawPoints>();
   const cellOf = (x: number, y: number) => `${Math.floor(x / toleranceM)}:${Math.floor(y / toleranceM)}`;
   for (const p of rawPoints) {
@@ -123,6 +137,8 @@ function buildBaseGraph(
     if (!grid.has(cell)) grid.set(cell, []);
     grid.get(cell)!.push(p);
   }
+  log(`Grid gebouwd (${grid.size} cellen)`);
+
   for (const p of rawPoints) {
     const [cx, cy] = cellOf(p.x, p.y).split(":").map(Number);
     for (let dx = -1; dx <= 1; dx++) {
@@ -136,6 +152,7 @@ function buildBaseGraph(
       }
     }
   }
+  log("Union-find-clustering klaar");
 
   const clusterRepresentative = new Map<string, { x: number; y: number }>();
   for (const p of rawPoints) {
@@ -145,6 +162,7 @@ function buildBaseGraph(
       nodePosition.set(`nwb:${root}`, { x: p.x, y: p.y, source: "nwb" });
     }
   }
+  log(`Clusterrepresentanten bepaald (${clusterRepresentative.size} clusters)`);
 
   for (const seg of setBSegments) {
     const fromRoot = `nwb:${uf.find(pointKey(seg.id, "from"))}`;
@@ -155,6 +173,7 @@ function buildBaseGraph(
     addEdge(fromRoot, toRoot, { to: toRoot, distanceM: len, source: "nwb", nwbInfo: info });
     addEdge(toRoot, fromRoot, { to: fromRoot, distanceM: len, source: "nwb", nwbInfo: info });
   }
+  log("NWB-edges toegevoegd -- buildBaseGraph volledig klaar");
 
   return {
     adjacency,
