@@ -433,3 +433,68 @@ nwbSegments/{nwbDatasetVersionId}/segments/{segmentId}  (subcollectie, SLIM form
 **PRODUCTIE GEWIJZIGD:** NEE (tooling klaar, nog niet uitgevoerd — wacht op de migratie).
 
 **VOLGENDE STAP:** zodra Te de migratie + activatie + connector-generatie daadwerkelijk heeft uitgevoerd (drie handelingen, elk bewust apart), is Fase J (productieregressies tegen echte data) mogelijk.
+
+---
+
+### FASE: J — Productieregressies (echte /api/route/combined)
+**DATUM:** 9 september 2026
+**STATUS:** PASS
+**DOEL:** de bekende testgevallen draaien tegen het ECHTE, live productie-eindpunt — geen onderzoekstool meer.
+
+**INPUT:** productie-migratie (144k NWB-segmenten) + activatie + connector-generatie (1.178 opgeslagen) waren op dit moment al door Te uitgevoerd.
+
+**RESULTATEN — bewezen in echte productie, niet meer onderzoek:**
+
+| Testgeval | Oorspronkelijk | Productie (`/api/route/combined`) | deviationFactor | Status |
+|---|---|---|---|---|
+| Amsterdam → Hilversum | 366,9 km | **29.978 m** | 1,18 | ACCEPTED |
+| Volendam → Amsterdam | ~25,2 km (gezond) | 19.927 m | 1,13 | ACCEPTED |
+| Lochem l1 | (netwerkgat) | 10.502 m | 1,16 | ACCEPTED |
+| Lochem l3 | (netwerkgat) | 12.719 m | 1,12 | ACCEPTED |
+
+**Statusonderscheid, expliciet:**
+
+```
+Amsterdam → Hilversum:  RESEARCH: PASS   PRODUCTION: PASS
+Volendam → Amsterdam:   RESEARCH: PASS   PRODUCTION: PASS
+Lochem:                 RESEARCH: PASS   PRODUCTION: PASS
+```
+
+**BELANGRIJKE NUANCE — 337km-anomalie, exact zo gedocumenteerd, geen overclaiming:**
+
+| Testgeval | Onderzoek (eerder vandaag) | Productie (nu) |
+|---|---|---|
+| v1 (3Sx24A→AG9myG) | 336.719–337.390 m, deviationFactor ~20 | **37.733 m, deviationFactor ~2,25, ACCEPTED** |
+| v7 (AG9myG→nKfPyX) | 336.284 m, deviationFactor ~18 | **40.172 m, deviationFactor ~2,17, ACCEPTED** |
+
+```
+337-km anomaly:
+  RESEARCH: REPRODUCED
+  PRODUCTION: NOT REPRODUCED
+  VALIDATION REJECTION IN PRODUCTION: NOT OBSERVED
+```
+
+**Correcte formulering (letterlijk vastgelegd, zodat dit niet later verkeerd wordt samengevat):** de oorspronkelijke 337-km-anomalie reproduceerde niet in de huidige productieconfiguratie. De validatielaag is afzonderlijk, geïsoleerd getest op afwijzing van extreme routes (`combined-route-engine.test.ts`, een nagebouwd anomalie-scenario) — maar die afwijzingsroute is tijdens deze productie-run **niet daadwerkelijk getriggerd**, omdat er niets was om af te wijzen. Niet schrijven: "validatie heeft de 337km-route opgelost." Dat is niet wat er is aangetoond.
+
+**PRODUCTIE GEWIJZIGD:** NEE tijdens deze documentatiestap (de eerdere migratie/activatie/generatie was al gebeurd vóór dit moment).
+
+**VOLGENDE STAP:** gerichte trace naar de oorzaak van het niet-reproduceren (hieronder) — geen brede heranalyse, exact afgebakend.
+
+---
+
+### GERICHTE TRACE — waarom reproduceerde de 337km-anomalie niet in productie?
+**DATUM:** 9 september 2026
+**STATUS:** tooling gebouwd, uitvoering wacht op Te (geen netwerktoegang tot productie vanuit deze omgeving).
+**AFBAKENING, EXPLICIET:** uitsluitend het verschil tussen regionaal-begrensde (onderzoek) en landelijke (productie) connector-generatie voor v1/v7. Geen bredere heranalyse, geen architectuurwijziging, geen fix.
+
+**GEBOUWD:**
+- `app/api/admin/read-nwb-connectors/route.ts` — leest de daadwerkelijk OPGESLAGEN productie-connectoren (niet opnieuw gegenereerd).
+- `app/debug/trace-337km-cause/page.tsx` — bouwt de echte gecombineerde graaf (landelijke GoKnoop + actieve NWB + echte, opgeslagen connectoren), traceert het pad voor v1/v7, en checkt voor elke gebruikte connector-knoop of die BINNEN of BUITEN de oude Volendam-onderzoeksgrens (`latMin 52.38, latMax 52.58, lonMin 4.85, lonMax 5.2`) ligt.
+
+**HYPOTHESE (nog niet bevestigd, expliciet zo behandeld):** de landelijke connector-generatie heeft mogelijk een GoKnoop-knoop gebruikt die buiten de oude, regionaal-begrensde onderzoeksgrens lag — in het onderzoek van vanmiddag dus onzichtbaar, in productie wel gevonden.
+
+**VEILIGHEIDSEIGENSCHAPPEN:** 612/612 tests, tsc exit 0, build geslaagd, alleen nieuwe bestanden (`git status` bevestigd). Geen productiegedrag aangepast — uitsluitend leesoperaties.
+
+**PRODUCTIE GEWIJZIGD:** NEE.
+
+**VOLGENDE STAP:** zodra Te de trace-pagina draait en de uitkomst terugstuurt: hypothese bevestigen of expliciet als ONBEWEZEN markeren en stoppen met dit specifieke spoor — daarna automatisch door naar de eerstvolgende onvoltooide fase.

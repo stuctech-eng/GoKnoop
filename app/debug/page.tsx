@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/trace-337km-cause", label: "Gerichte trace: 337km-anomalie", description: "Waarom reproduceerde de anomalie niet in productie? Echte productie-connectoren, geen nieuwe generatie." },
       { href: "/debug/production-regression-runner", label: "Fase J: Productieregressies (echte /api/route/combined)", description: "Draait bekende testgevallen tegen het echte, live productie-eindpunt." },
       { href: "/debug/generate-nwb-connectors-runner", label: "NWB-connectoren genereren (productie)", description: "Genereert en slaat gevalideerde connectoren op. Vereist actieve NWB-dataset." },
       { href: "/debug/migrate-nwb-runner", label: "NWB → Productie migreren", description: "Migreert de al-verzamelde onderzoeksdata naar het productieschema. Schrijft naar echte productie-Firestore." },
