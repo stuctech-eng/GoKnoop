@@ -79,7 +79,8 @@ class UnionFind {
 function buildBaseGraph(
   provider: GraphProvider,
   nwbSegments: SlimNwbSegment[],
-  toleranceM: number
+  toleranceM: number,
+  onProgress?: (label: string, extra?: Record<string, unknown>) => void
 ): {
   adjacency: Map<string, CombinedEdge[]>;
   nodePosition: Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>;
@@ -87,14 +88,22 @@ function buildBaseGraph(
   findNwbClusterNodeId: (segId: string, end: "from" | "to") => string;
   clusterList: { id: string; x: number; y: number }[];
 } {
-  // TOEGEVOEGD 10-9-2026, Fase M6/M7-diagnose: console.log-timing per stap --
-  // zichtbaar in Vercel's functielogs ONGEACHT of de functie als geheel op
-  // tijd terugkomt. Nodig omdat de eerdere HTTP-respons-gebaseerde timing
-  // (timings-object in de JSON-respons) niets teruggeeft bij een harde
-  // platform-timeout (de synchrone berekening bereikt dan nooit de
-  // return-statement waar dat object gebouwd wordt).
+  // TOEGEVOEGD 10-9-2026, Fase M6/M7-diagnose: voortgang per stap, via een
+  // OPTIONELE, GEÏNJECTEERDE callback -- NIET via een directe Firestore-
+  // afhankelijkheid hier. `combined-graph.ts` wordt ook door client-side
+  // debugpagina's gebruikt (bijv. app/debug/fase4-combined-topology) -- een
+  // (zelfs dynamische) import van `firebase-admin` hier brak de client-
+  // build (webpack: "Module not found: Can't resolve 'net'", via
+  // @grpc/grpc-js, een Node-only afhankelijkheid van firebase-admin).
+  // De server-only aanroeper (cached-nwb-provider.ts) injecteert desgewenst
+  // een Firestore-schrijvende callback; hier blijft dit bestand volledig
+  // omgevingsagnostisch.
   const tBase = Date.now();
-  const log = (label: string) => console.log(`[buildBaseGraph] ${label}: ${Date.now() - tBase}ms`);
+  const log = (label: string, extra?: Record<string, unknown>) => {
+    console.log(`[buildBaseGraph] ${label}: ${Date.now() - tBase}ms`);
+    onProgress?.(`buildBaseGraph: ${label}`, { elapsedMs: Date.now() - tBase, ...extra });
+  };
+  log("start");
 
   const adjacency = new Map<string, CombinedEdge[]>();
   const nodePosition = new Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>();
@@ -114,10 +123,10 @@ function buildBaseGraph(
       addEdge(id, otherEnd, { to: otherEnd, distanceM: e.distanceM, source: "goknoop" });
     }
   }
-  log(`GoKnoop-basisgraaf klaar (${allNodeIds.length} nodes)`);
+  log("GoKnoop-basisgraaf klaar", { nodeCount: allNodeIds.length });
 
   const setBSegments = nwbSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded");
-  log(`Set B-classificatie klaar (${setBSegments.length}/${nwbSegments.length} segmenten)`);
+  log("Set B-classificatie klaar", { setBSegments: setBSegments.length, totaal: nwbSegments.length });
 
   const uf = new UnionFind();
   const pointKey = (segId: string, end: "from" | "to") => `${segId}:${end}`;
@@ -128,7 +137,7 @@ function buildBaseGraph(
     rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y });
     rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y });
   }
-  log(`Punten verzameld (${rawPoints.length} punten)`);
+  log("Punten verzameld", { puntenAantal: rawPoints.length });
 
   const grid = new Map<string, typeof rawPoints>();
   const cellOf = (x: number, y: number) => `${Math.floor(x / toleranceM)}:${Math.floor(y / toleranceM)}`;
@@ -137,7 +146,7 @@ function buildBaseGraph(
     if (!grid.has(cell)) grid.set(cell, []);
     grid.get(cell)!.push(p);
   }
-  log(`Grid gebouwd (${grid.size} cellen)`);
+  log("Grid gebouwd", { celAantal: grid.size });
 
   for (const p of rawPoints) {
     const [cx, cy] = cellOf(p.x, p.y).split(":").map(Number);
@@ -162,7 +171,7 @@ function buildBaseGraph(
       nodePosition.set(`nwb:${root}`, { x: p.x, y: p.y, source: "nwb" });
     }
   }
-  log(`Clusterrepresentanten bepaald (${clusterRepresentative.size} clusters)`);
+  log("Clusterrepresentanten bepaald", { clusterAantal: clusterRepresentative.size });
 
   for (const seg of setBSegments) {
     const fromRoot = `nwb:${uf.find(pointKey(seg.id, "from"))}`;
@@ -197,9 +206,10 @@ export function buildCombinedGraph(
   provider: GraphProvider,
   nwbSegments: SlimNwbSegment[],
   toleranceM: number,
-  connectorSearchBbox: { minX: number; minY: number; maxX: number; maxY: number }
+  connectorSearchBbox: { minX: number; minY: number; maxX: number; maxY: number },
+  onProgress?: (label: string, extra?: Record<string, unknown>) => void
 ): CombinedGraph {
-  const { adjacency, nodePosition, addEdge, clusterList } = buildBaseGraph(provider, nwbSegments, toleranceM);
+  const { adjacency, nodePosition, addEdge, clusterList } = buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
 
   const allNodeIds = provider.getAllNodeIds();
   let connectorCount = 0;
@@ -243,9 +253,10 @@ export function buildValidatedCombinedGraph(
   provider: GraphProvider,
   nwbSegments: SlimNwbSegment[],
   toleranceM: number,
-  validatedConnectors: ValidatedConnectorInput[]
+  validatedConnectors: ValidatedConnectorInput[],
+  onProgress?: (label: string, extra?: Record<string, unknown>) => void
 ): ValidatedCombinedGraph {
-  const { adjacency, nodePosition, addEdge, findNwbClusterNodeId } = buildBaseGraph(provider, nwbSegments, toleranceM);
+  const { adjacency, nodePosition, addEdge, findNwbClusterNodeId } = buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
 
   let highCount = 0;
   let lowerCount = 0;

@@ -3,6 +3,7 @@ import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { loadCachedCombinedGraph } from "@/lib/route-engine/cached-nwb-provider";
 import { computeRouteBetweenCandidatesWithFallback } from "@/lib/route-engine/route-between-candidates";
+import { reportProgress } from "@/lib/diagnostics/report-progress";
 import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
 export const maxDuration = 10;
@@ -17,7 +18,9 @@ const DESTINATION_CANDIDATES = ["ZYuO6ZfzSa2iim0HcUbn"];
  *
  * Fase M6/M7-diagnose, 10-9-2026. Test UITSLUITEND graafopbouw + knot-leg
  * (geen last-mile, geen ORS) -- isoleert of de ~10s-vertraging hier zit.
- * Elke stap wordt apart getimed, ook als de aanvraag als geheel faalt.
+ * Elke stap wordt apart getimed EN naar Firestore geschreven (niet-
+ * afgewacht) -- console.log bleek onbetrouwbaar bij een harde
+ * platform-timeout, zie report-progress.ts voor de volledige toelichting.
  */
 export async function GET(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -30,9 +33,11 @@ export async function GET(req: NextRequest) {
 
   const timings: Record<string, number> = {};
   const t0 = Date.now();
-  function mark(label: string) {
+  function mark(label: string, extra?: Record<string, unknown>) {
     timings[label] = Date.now() - t0;
+    reportProgress("latest", label, { elapsedMs: Date.now() - t0, ...extra });
   }
+  reportProgress("latest", "test-knot-leg-isolated: START", { elapsedMs: 0 });
 
   try {
     const db = getDb();
@@ -48,7 +53,7 @@ export async function GET(req: NextRequest) {
     mark("goknoopProviderLoad");
 
     const { graph, cacheHit: graphCacheHit } = await loadCachedCombinedGraph(provider, datasetVersionId);
-    mark("combinedGraphLoad");
+    mark("combinedGraphLoad", { graphCacheHit });
 
     const fromCandidates: LoopStartCandidate[] = ORIGIN_CANDIDATES.map((logicalNodeId) => ({ logicalNodeId }));
     const toCandidates: LoopStartCandidate[] = DESTINATION_CANDIDATES.map((logicalNodeId) => ({ logicalNodeId }));
@@ -68,6 +73,7 @@ export async function GET(req: NextRequest) {
       graphCacheHit,
     });
   } catch (err) {
+    reportProgress("latest", "EXCEPTION", { error: err instanceof Error ? err.message : String(err) });
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : String(err), timings }, { status: 500 });
   }
 }
