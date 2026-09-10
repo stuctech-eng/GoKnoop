@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/test-to-destination-live", label: "Live test: /api/route/to-destination", description: "Reproduceert de foutmelding uit de app direct, met exacte fout + timing." },
       { href: "/debug/test-nwb-geometry-resolver", label: "Geometrie-resolver debuggen", description: "Probeert drie resourceId-varianten, toont de ruwe PDOK-respons per variant." },
       { href: "/debug/trace-337km-cause", label: "Gerichte trace: 337km-anomalie", description: "Waarom reproduceerde de anomalie niet in productie? Echte productie-connectoren, geen nieuwe generatie." },
       { href: "/debug/production-regression-runner", label: "Fase J: Productieregressies (echte /api/route/combined)", description: "Draait bekende testgevallen tegen het echte, live productie-eindpunt." },
