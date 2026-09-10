@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/test-nwb-geometry-resolver", label: "Geometrie-resolver debuggen", description: "Probeert drie resourceId-varianten, toont de ruwe PDOK-respons per variant." },
       { href: "/debug/trace-337km-cause", label: "Gerichte trace: 337km-anomalie", description: "Waarom reproduceerde de anomalie niet in productie? Echte productie-connectoren, geen nieuwe generatie." },
       { href: "/debug/production-regression-runner", label: "Fase J: Productieregressies (echte /api/route/combined)", description: "Draait bekende testgevallen tegen het echte, live productie-eindpunt." },
       { href: "/debug/generate-nwb-connectors-runner", label: "NWB-connectoren genereren (productie)", description: "Genereert en slaat gevalideerde connectoren op. Vereist actieve NWB-dataset." },
