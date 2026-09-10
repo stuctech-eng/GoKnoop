@@ -345,3 +345,43 @@ nwbSegments/{nwbDatasetVersionId}/segments/{segmentId}  (subcollectie, SLIM form
 **BESLUIT:** dit wordt expliciet als open punt vastgelegd, niet stilzwijgend genegeerd. Fase G-I worden nu gebouwd met dit scope-onderscheid expliciet zichtbaar in de API-respons (`geometryAvailable: boolean` per route-segment-type), zodat niemand — inclusief een toekomstige Claude-sessie — kan aannemen dat dit al opgelost is.
 
 **STATUS:** open, apart te plannen na Fase I.
+
+---
+
+### FASE: G/H/I — Connectors + cost routing + validatie, productiecode (samengevoegd, praktische reden)
+**DATUM:** 9 september 2026
+**STATUS:** PASS
+**DOEL:** de bewezen architectuur (Fase B) daadwerkelijk als productiecode implementeren — additief, zonder de bestaande `/api/route` te wijzigen.
+
+**WAAROM SAMENGEVOEGD:** connectors, kostenmodel en validatie worden in één route-berekening gebruikt; drie aparte, halfwerkende deploys zou geen zelfstandig bruikbare functionaliteit opleveren. Elk sub-besluit is wel apart gelogd (zie hieronder).
+
+**GEBOUWD (nieuw, niets bestaands gewijzigd):**
+- `lib/route-engine/combined-route-engine.ts` — nieuwe, aparte module. Gebruikt de al-bewezen `buildValidatedCombinedGraph`, `dijkstraWithCostModel`, `makeCostFn`, `evaluateRouteQuality` (allemaal vandaag eerder al gebouwd en getest in `lib/nwb-analysis/`) — geen nieuwe kernlogica, uitsluitend samengevoegd tot één productie-entrypoint.
+- `app/api/route/combined/route.ts` — nieuw, apart API-eindpunt (`POST /api/route/combined`).
+
+**VEILIGHEIDSEIGENSCHAPPEN, EXPLICIET GEVERIFIEERD:**
+- `git status` bevestigt: uitsluitend nieuwe bestanden, **`app/api/route/route.ts` (bestaand) is geen byte gewijzigd**.
+- **Veilige degradatie**: als `config/activeNwbDataset` nog niet bestaat (het huidige geval — Fase F is ontwerp, nog geen data gevuld), gebruikt het nieuwe eindpunt gewoon lege NWB/connector-lijsten en gedraagt zich als GoKnoop-only. Geen crash, geen onverwacht gedrag.
+- Bestaande volledige testsuite: **612/612 slaagt** (was 606 vóór deze fase, +6 nieuw) — bevestigt dat niets bestaands brak.
+- `tsc --noEmit`: exit 0.
+- Productie-build: geslaagd, nieuw eindpunt correct gecompileerd als serverless function (bevestigd in de build-output).
+
+**Fase G — connectors (sub-besluit):** productie-opslagschema ontworpen (Fase F), maar de daadwerkelijke connector-generatie-batchjob (analoog aan de bestaande `generate-bridges`-generator) is nog NIET gebouwd — de nieuwe API leest een lege lijst als de `nwbConnectors`-collectie niet bestaat. **Open deelpunt.**
+
+**Fase H — cost routing (sub-besluit):** `F_nwb = 1,20`, `F_connector = 1,0` toegepast (Fase C-besluit), geverifieerd via een expliciete test (`bevestigt de definitieve, Fase-C-gekozen productiewaarden`).
+
+**Fase I — validatie (sub-besluit):** `evaluateRouteQuality` rechtstreeks geïntegreerd — een afgewezen route geeft HTTP 422 met de reden, nooit een stilzwijgend geaccepteerde slechte route. Getest met een nagebouwd 337km-achtig scenario (synthetisch, zelfde deviationFactor-orde-grootte) dat daadwerkelijk wordt afgewezen door de productie-module zelf.
+
+**TESTS:** 6 nieuwe tests (`combined-route-engine.test.ts`): productiewaarden-check, node-not-found, disconnected, normale-route-geaccepteerd, anomalie-afgewezen, computeTimeMs-aanwezig.
+
+**BEVESTIGDE HYPOTHESES:** "de architectuur kan additief, zonder regressie, als productiecode geïmplementeerd worden" — bevestigd, met bewijs (git status + volledige testsuite + build).
+
+**PRODUCTIE GEWIJZIGD:** **JA, voor het eerst vandaag** — maar uitsluitend nieuwe, ongebruikte code totdat (a) deze zip daadwerkelijk gepusht wordt, EN (b) `config/activeNwbDataset` daadwerkelijk wordt aangemaakt met echte data. Tot die tijd is dit nieuwe eindpunt aanwezig maar functioneel identiek aan GoKnoop-only.
+
+**OPEN PUNTEN VOOR VERVOLG:**
+1. Connector-generatie-batchjob (Fase G, technische implementatie) nog te bouwen.
+2. NWB-data daadwerkelijk in productie-Firestore krijgen (Fase F, technische uitvoering van het ontwerp).
+3. Geometrie-beperking (zie eerder) nog niet opgelost.
+4. Dit nieuwe eindpunt is nog nergens door de UI aangeroepen — dat is bewust, en een aparte, latere beslissing.
+
+**VOLGENDE STAP:** Fase J — productieregressies (dezelfde bekende testgevallen via de ECHTE `/api/route/combined` draaien, zodra er NWB-data beschikbaar is om tegen te testen).
