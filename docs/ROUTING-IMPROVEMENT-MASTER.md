@@ -841,3 +841,31 @@ Geometry Integration Audit (punt 1-6):
 **PRODUCTIE GEWIJZIGD:** NEE — uitsluitend besluit vastgelegd, nog geen code gewijzigd.
 
 **VOLGENDE STAP:** M4 — geometrie. Route.edges[]/geometry[] moeten een gecombineerde (GoKnoop+NWB) route correct kunnen dragen, met het nu-betrouwbare `segmentId`, inclusief het geval waarin een segment tweemaal voorkomt.
+
+---
+
+### FASE: M4 — Geometrie-oplossing: `buildCombinedRouteGeometry`
+**DATUM:** 10 september 2026
+**STATUS:** PASS
+
+**GEBOUWD:** `lib/route-engine/combined-route-geometry.ts` — zet een `CostAwareStep[]`-pad (met betrouwbare `nwbSegmentId` per stap) om naar echte, navigeerbare `GraphEdge[]` + platte `geometry: Point[]`, geschikt voor zowel `resolveRouteEdges()`/`buildRouteProgressModel()` (navigatie) als directe kaartweergave.
+
+**Ontwerpbeslissingen, precies zoals gespecificeerd:**
+- **Geen deduplicatie.** Elke doorkruising krijgt een eigen, uniek edge-ID (`nwb-edge:<segmentId>:<pad-index>`) — een tweemaal doorkruist segment verschijnt tweemaal, elk met zijn eigen, voor die specifieke doorkruising correcte rijrichting.
+- **Volgorde exact behouden**, identiek aan het Dijkstra-pad.
+- **GoKnoop-hops**: hergebruiken de echte, al-bestaande `GraphEdge` (geen nieuwe geometrie nodig).
+- **NWB-hops**: live opgehaalde, correct-georiënteerde geometrie via de al-geverifieerde resolver.
+- **Connector-hops**: rechte lijn (geen bronroute-geometrie bestaat hiervoor — eerlijke representatie, geen verzonnen kromming).
+- **Veilige degradatie**: als geometrie voor een specifiek NWB-segment onverwacht niet op te halen is, valt alleen dát ene stukje terug op een rechte lijn (`unresolvedNwbSegments` meldt dit expliciet) — de hele route faalt niet.
+
+**TESTS:** 6, inclusief het door Te expliciet gevraagde kerngeval (een segment dat het pad tweemaal doorkruist, verifieert dat beide doorkruisingen behouden blijven met elk hun eigen, correcte richting). **Eerlijke kanttekening**: geen van de drie vandaag geteste échte routes (Hilversum/Volendam/Lochem) bevatte een natuurlijk dubbel-doorkruist segment (bevestigd: `aantalNwbDoorkruisingen == aantalUniekeNwbSegmenten` in alle drie) — dit kerngeval is daarom getest met een bewust geconstrueerd, synthetisch scenario, niet met bestaande productiedata. Zodra een echt dubbel-doorkruist geval ooit optreedt, is dit al gedekt.
+
+**BUG GEVONDEN EN GEREPAREERD TIJDENS HET BOUWEN:** de eerste versie lekte het interne `source`-veld van `graph.nodePosition` mee in de geretourneerde `Point`-geometrie (`{x,y,source}` i.p.v. het schone `{x,y}`) — gevonden door de eigen tests, niet door toeval. Gerepareerd door expliciet te normaliseren naar `{x, y}` vóór gebruik als geometrie.
+
+**VEILIGHEIDSEIGENSCHAPPEN:** 628/628 tests (6 nieuw), tsc exit 0, build geslaagd. `git status` bevestigt: uitsluitend nieuwe bestanden.
+
+**HERBEVESTIGING van de eerder gemeten -1.426m-discrepantie (Te's expliciete verzoek: niet aannemen, opnieuw vaststellen):** reeds gedaan (zie eerdere Fase M-secties hierboven) met het betrouwbare `segmentId` — alle drie routes gaven exact 0m verschil. Geen dubbele-doorkruising-oorzaak nodig gebleken voor de geteste routes; de oorspronkelijke afwijking kwam volledig van het inmiddels gerepareerde segmentId-probleem.
+
+**PRODUCTIE GEWIJZIGD:** NEE — nieuwe, nog niet gekoppelde module.
+
+**VOLGENDE STAP:** deze functie tegen een échte, berekende route testen (end-to-end, niet alleen unit-tests met nepdata) — vóór de daadwerkelijke M5-koppeling aan `computeRouteWithFallback`.
