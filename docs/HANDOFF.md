@@ -120,6 +120,8 @@ GoKnoop wordt daarmee geen geïsoleerde knooppuntenrouter, maar een knooppunten-
 
 De onderzoeksinfrastructuur die dit heeft aangetoond (NWB-client, quad-tree-verzamelaar, component-analyse, gecombineerde-graaf-Dijkstra-test) staat in `lib/nwb-analysis/` en de bijbehorende `/api/debug/nwb-*`-eindpunten — puur onderzoek, geen productiecode, nooit geactiveerd in de daadwerkelijke route-engine.
 
+**VERVOLG, 9 september 2026 (later op de dag):** het volledige routingverbetering-traject (Fase 1 t/m N, architectuur, F-factor-kalibratie, route-validatie, Valhalla-onderzoek, en straks productie-integratie) wordt nu bijgehouden in een apart, doorlopend document: **[`docs/ROUTING-IMPROVEMENT-MASTER.md`](ROUTING-IMPROVEMENT-MASTER.md)**. Dat document bevat de Phase Log, Decision Log, Regression Catalog, Anomaly Register en Dataset Register voor dit hele traject. Begin daar, niet hier, voor de actuele status van dit traject.
+
 ---
 
 ## 2. KERNGEGEVENS
