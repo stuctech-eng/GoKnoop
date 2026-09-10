@@ -706,3 +706,32 @@ Deze sandbox-omgeving blokkeert uitgaand verkeer naar `service.pdok.nl`: bevesti
 **PRODUCTIE GEWIJZIGD:** NEE.
 
 **VOLGENDE STAP:** punt 5-6 van de oorspronkelijke opdracht — koppelen aan een volledig berekende route, regel-voor-regel controleren dat de resulterende lijn overeenkomt met de berekende route.
+
+---
+
+### FASE: M (technische correctie) — CombinedEdge.nwbInfo.segmentId toegevoegd
+**DATUM:** 10 september 2026
+**STATUS:** PASS
+**DOEL:** de bij het testen ontdekte onbetrouwbaarheid van segment-ID-extractie oplossen — niet cosmetisch, maar noodzakelijk om exact te kunnen bewijzen dat gestikte geometrie overeenkomt met de daadwerkelijk gekozen route.
+
+**HET PROBLEEM, gevonden tijdens punt 5-6 van de audit:** de eerste volledige-route-geometrietest (Hilversum) gaf een verschil van -1.426m (~14%) tussen de opgehaalde NWB-geometrie en de door het kostenmodel berekende NWB-afstand. Onderzoek wees twee oorzaken aan: (1) een segment dat het pad meerdere keren doorkruist, maar in de test maar één keer werd meegeteld; (2) fundamenteler: `CombinedEdge.nwbInfo` bevatte geen `segmentId` — het cluster-knoop-ID (`nwb:<union-find-wortel>`) is bij clusters van meerdere samengevoegde punten NIET betrouwbaar naar het originele segment te herleiden (de wortel is een willekeurig gekozen lid van het cluster).
+
+**BESLUIT (Te):** dit oplossen op de juiste manier — `segmentId` vastleggen bij edge-creatie (wanneer het origineel nog bekend is), niet achteraf reconstrueren. Expliciet begrensd: geen andere wijzigingen aan kostenmodel, connectors, Dijkstra, of UI.
+
+**WIJZIGING, minimaal en precies:**
+- `CombinedEdge.nwbInfo` uitgebreid met `segmentId: string`, ingevuld op de exacte plek in `buildBaseGraph()` waar `seg.id` nog bekend is (twee regels).
+- `CostAwareStep` (de door productie gebruikte Dijkstra-stap-type) uitgebreid met `nwbSegmentId?: string`, ingevuld in `dijkstraWithCostModel()`.
+- **Geen enkele andere regel in `combined-graph.ts` gewijzigd** — kostenmodel, connectorlogica, en de oudere `dijkstraOnCombinedGraph` (die al `nwbInfo` volledig doorgaf) ongemoeid.
+
+**TESTS:** 3 nieuwe, gericht op de kern van het probleem:
+1. Een enkele NWB-edge draagt het originele `segment.id`.
+2. **Kerngeval**: drie segmenten die in één punt samenkomen (cluster van 3+ leden) — bevestigt dat alle drie de originele ID's correct terugkomen, ook al is de cluster-wortel willekeurig.
+3. `dijkstraWithCostModel` geeft het correcte `nwbSegmentId` per stap terug (niet alleen de oudere Dijkstra-variant).
+
+**VEILIGHEIDSEIGENSCHAPPEN:** 622/622 tests (18 in `combined-graph.test.ts`, +3), tsc exit 0, build geslaagd. `git status` bevestigt: uitsluitend `combined-graph.ts`/`.test.ts` + de geometrietest-endpoint gewijzigd — exact de afgebakende scope, niets aan kostenmodel/connectors/Dijkstra/UI.
+
+**BIJKOMENDE WIJZIGING:** `test-full-route-geometry`-endpoint aangepast om het nieuwe, betrouwbare `step.nwbSegmentId` te gebruiken i.p.v. de oude, onbetrouwbare knoop-ID-parsing — en rapporteert nu zowel de unieke-segmenten-som als de per-doorkruising-som, om de dubbeltelling-hypothese direct empirisch te bevestigen of te weerleggen bij de volgende test.
+
+**PRODUCTIE GEWIJZIGD:** JA — kleine, precieze datamodel-uitbreiding.
+
+**VOLGENDE STAP:** dezelfde drie routes (Hilversum/Volendam/Lochem) opnieuw testen via het bijgewerkte endpoint — nu zou `verschilPerDoorkruisingM` vrijwel 0 moeten zijn.

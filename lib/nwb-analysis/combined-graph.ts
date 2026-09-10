@@ -35,7 +35,7 @@ export type CombinedEdge = {
   distanceM: number;
   source: CombinedEdgeSource;
   /** Voor sanity-checks: NWB bstCode/straatnaam indien van toepassing. */
-  nwbInfo?: { bstCode: string | null; straatnaam: string | null; wegnummer: string | null };
+  nwbInfo?: { bstCode: string | null; straatnaam: string | null; wegnummer: string | null; segmentId: string };
 };
 
 export type CombinedGraph = {
@@ -151,7 +151,7 @@ function buildBaseGraph(
     const toRoot = `nwb:${uf.find(pointKey(seg.id, "to"))}`;
     if (fromRoot === toRoot) continue;
     const len = seg.lengthM;
-    const info = { bstCode: seg.bstCode, straatnaam: seg.straatnaam, wegnummer: seg.wegnummer };
+    const info = { bstCode: seg.bstCode, straatnaam: seg.straatnaam, wegnummer: seg.wegnummer, segmentId: seg.id };
     addEdge(fromRoot, toRoot, { to: toRoot, distanceM: len, source: "nwb", nwbInfo: info });
     addEdge(toRoot, fromRoot, { to: fromRoot, distanceM: len, source: "nwb", nwbInfo: info });
   }
@@ -419,7 +419,7 @@ export function makeCostFn(fNwb: number, fConnector: number): CostFn {
   };
 }
 
-export type CostAwareStep = { nodeId: string; edgeSource: CombinedEdgeSource | "start" };
+export type CostAwareStep = { nodeId: string; edgeSource: CombinedEdgeSource | "start"; nwbSegmentId?: string };
 
 export type CostAwareDijkstraResult =
   | {
@@ -482,7 +482,7 @@ export function dijkstraWithCostModel(graph: CombinedGraph, startId: string, end
   let cur: string | undefined = endId;
   while (cur !== undefined) {
     const edge = prevEdge.get(cur);
-    steps.unshift({ nodeId: cur, edgeSource: edge?.source ?? "start" });
+    steps.unshift({ nodeId: cur, edgeSource: edge?.source ?? "start", nwbSegmentId: edge?.nwbInfo?.segmentId });
     cur = prevNode.get(cur);
   }
 

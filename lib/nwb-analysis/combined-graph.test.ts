@@ -381,3 +381,69 @@ describe("dijkstraWithCostModel + makeCostFn (Fase 5 -- empirisch kostenmodel)",
     }
   });
 });
+
+describe("CombinedEdge.nwbInfo.segmentId (10-9-2026, Geometry Integration Audit) -- betrouwbare segment-ID door de hele keten, geen reconstructie uit het cluster-knoop-ID", () => {
+  it("een NWB-edge draagt het originele segment.id, niet het (mogelijk afwijkende) cluster-wortel-ID", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["1", makeNode("1", 0, 0)],
+      ["2", makeNode("2", 1000, 0)],
+    ]);
+    const provider = new FakeGraphProvider(nodes, new Map());
+    const nwbSegments: SlimNwbSegment[] = [{ id: "wegvakken.origineel-id-123", bstCode: "FP", wegnummer: null, straatnaam: "Teststraat", from: { x: 0, y: 0 }, to: { x: 1000, y: 0 }, lengthM: 1000 }];
+    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, []);
+
+    // Zoek de NWB-edge op in de adjacency-lijst en controleer het segmentId direct.
+    let foundSegmentId: string | undefined;
+    for (const edges of graph.adjacency.values()) {
+      for (const e of edges) {
+        if (e.source === "nwb") foundSegmentId = e.nwbInfo?.segmentId;
+      }
+    }
+    expect(foundSegmentId).toBe("wegvakken.origineel-id-123");
+  });
+
+  it("KERNGEVAL: bij een cluster van MEERDERE samengevoegde punten is het segmentId nog steeds correct -- dit was precies de situatie waarin het oude, parseer-gebaseerde cluster-knoop-ID onbetrouwbaar bleek", () => {
+    // Drie NWB-segmenten die allemaal in hetzelfde ene punt samenkomen (een
+    // kruising) -- hun from/to-clusters smelten samen tot één cluster met
+    // 3+ leden, dus de cluster-wortel is NIET meer gelijk aan slechts één
+    // van de drie segment-ID's (union-find kiest een willekeurige wortel).
+    const nodes = new Map<string, GraphNode>();
+    const provider = new FakeGraphProvider(nodes, new Map());
+    const nwbSegments: SlimNwbSegment[] = [
+      { id: "wegvakken.noord", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: 100 }, to: { x: 0, y: 0 }, lengthM: 100 },
+      { id: "wegvakken.oost", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 100, y: 0 }, to: { x: 1, y: 0 }, lengthM: 100 }, // eindigt vlak bij (0,0) -- binnen tolerantie
+      { id: "wegvakken.zuid", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: -100 }, to: { x: 0, y: 1 }, lengthM: 100 }, // eindigt vlak bij (0,0)
+    ];
+    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, []);
+
+    const foundSegmentIds = new Set<string>();
+    for (const edges of graph.adjacency.values()) {
+      for (const e of edges) {
+        if (e.source === "nwb" && e.nwbInfo) foundSegmentIds.add(e.nwbInfo.segmentId);
+      }
+    }
+    // Alle drie de originele segment-ID's moeten terug te vinden zijn, exact zoals opgeslagen.
+    expect(foundSegmentIds).toEqual(new Set(["wegvakken.noord", "wegvakken.oost", "wegvakken.zuid"]));
+  });
+
+  it("dijkstraWithCostModel geeft het correcte nwbSegmentId per stap terug in CostAwareStep (de productie-Dijkstra, niet alleen de oudere variant)", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["1", makeNode("1", 0, 0)],
+      ["2", makeNode("2", 1000, 0)],
+    ]);
+    const provider = new FakeGraphProvider(nodes, new Map());
+    const nwbSegments: SlimNwbSegment[] = [{ id: "wegvakken.stap-test", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: 0 }, to: { x: 1000, y: 0 }, lengthM: 1000 }];
+    const validatedConnectors: ValidatedConnectorInput[] = [
+      { goknoopNodeId: "1", nwbSegmentId: "wegvakken.stap-test", nwbEndpoint: "from", distanceM: 0, confidence: "high" },
+      { goknoopNodeId: "2", nwbSegmentId: "wegvakken.stap-test", nwbEndpoint: "to", distanceM: 0, confidence: "high" },
+    ];
+    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
+    const result = dijkstraWithCostModel(graph, "1", "2", makeCostFn(1.0, 1.0));
+
+    expect(result.found).toBe(true);
+    if (result.found) {
+      const nwbStep = result.steps.find((s) => s.edgeSource === "nwb");
+      expect(nwbStep?.nwbSegmentId).toBe("wegvakken.stap-test");
+    }
+  });
+});

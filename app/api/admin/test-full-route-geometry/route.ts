@@ -15,15 +15,6 @@ const TEST_ROUTES: Record<string, { from: string; to: string }> = {
   lochem: { from: "0pgYw2kgDphP2IT1RAi7", to: "61aNR7RWLxQhHTOfMHtm" },
 };
 
-function parseNwbNodeId(nodeId: string): { segmentId: string; end: "from" | "to" } | null {
-  if (!nodeId.startsWith("nwb:")) return null;
-  const rest = nodeId.slice(4);
-  const lastColon = rest.lastIndexOf(":");
-  if (lastColon === -1) return null;
-  const end = rest.slice(lastColon + 1);
-  if (end !== "from" && end !== "to") return null;
-  return { segmentId: rest.slice(0, lastColon), end };
-}
 
 /**
  * GET /api/admin/test-full-route-geometry?route=hilversum|volendam|lochem&datasetVersionId=...
@@ -60,37 +51,48 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Route niet gevonden." }, { status: 404 });
     }
 
-    // Unieke NWB-segment-ID's langs het pad verzamelen.
+    // Betrouwbare segment-ID's rechtstreeks uit elke stap (Geometry Integration
+    // Audit-fix, 10-9-2026) -- niet langer uit het cluster-knoop-ID geraden.
     const usedSegmentIds = new Set<string>();
+    const segmentIdPerTraversal: string[] = []; // behoudt duplicaten, voor de per-doorkruising-som
     for (const step of result.steps) {
-      const parsed = parseNwbNodeId(step.nodeId);
-      if (parsed) usedSegmentIds.add(parsed.segmentId);
+      if (step.edgeSource === "nwb" && step.nwbSegmentId) {
+        usedSegmentIds.add(step.nwbSegmentId);
+        segmentIdPerTraversal.push(step.nwbSegmentId);
+      }
     }
 
     const geometryResult = await resolveNwbGeometry(Array.from(usedSegmentIds));
 
-    // Sanity-check: som van de puntafstanden binnen elk opgehaald NWB-segment
-    // (niet de volledige gestikte lijn inclusief GoKnoop -- dat vereist een
-    // aparte geometrie-stiklaag die nog gebouwd moet worden; dit bevestigt
-    // wel dat de opgehaalde NWB-geometrie zelf klopt met de lengte die het
-    // kostenmodel er al die tijd voor gebruikte).
+    // Twee sommen: uniek (oude methode, kan te laag uitvallen bij hergebruikte
+    // segmenten) en per-doorkruising (nieuw, telt een dubbel gebruikt segment ook dubbel).
+    function segmentLengthM(coords: { x: number; y: number }[]): number {
+      let len = 0;
+      for (let i = 1; i < coords.length; i++) len += Math.hypot(coords[i].x - coords[i - 1].x, coords[i].y - coords[i - 1].y);
+      return len;
+    }
     let resolvedNwbLengthSumM = 0;
-    for (const coords of geometryResult.resolved.values()) {
-      for (let i = 1; i < coords.length; i++) {
-        resolvedNwbLengthSumM += Math.hypot(coords[i].x - coords[i - 1].x, coords[i].y - coords[i - 1].y);
-      }
+    for (const coords of geometryResult.resolved.values()) resolvedNwbLengthSumM += segmentLengthM(coords);
+
+    let perTraversalSumM = 0;
+    for (const segId of segmentIdPerTraversal) {
+      const coords = geometryResult.resolved.get(segId);
+      if (coords) perTraversalSumM += segmentLengthM(coords);
     }
 
     return NextResponse.json({
       route: routeKey,
       berekendeRouteAfstandM: Math.round(result.distanceM),
       berekendeNwbAfstandM: Math.round(result.nwbDistanceM),
-      aantalGebruikteNwbSegmenten: usedSegmentIds.size,
+      aantalNwbDoorkruisingen: segmentIdPerTraversal.length,
+      aantalUniekeNwbSegmenten: usedSegmentIds.size,
       geometrieOpgelost: geometryResult.resolved.size,
       geometrieMislukt: geometryResult.failed,
-      somOpgehaaldeNwbGeometrieM: Math.round(resolvedNwbLengthSumM),
-      verschilMetBerekendeNwbAfstandM: Math.round(resolvedNwbLengthSumM - result.nwbDistanceM),
-      LET_OP: "Dit vergelijkt de opgehaalde NWB-geometrie-lengte met de al-berekende NWB-afstand (die zelf uit lengthM in SlimNwbSegment komt, apart vooraf berekend uit dezelfde brongeometrie) -- een klein verschil is normaal (afrondingen), een groot verschil zou duiden op een mismatch.",
+      somUniekeNwbGeometrieM: Math.round(resolvedNwbLengthSumM),
+      somPerDoorkruisingM: Math.round(perTraversalSumM),
+      verschilUniekM: Math.round(resolvedNwbLengthSumM - result.nwbDistanceM),
+      verschilPerDoorkruisingM: Math.round(perTraversalSumM - result.nwbDistanceM),
+      LET_OP: "verschilPerDoorkruisingM zou nu vrijwel 0 moeten zijn (kleine afronding) als de eerdere -1426m-afwijking inderdaad kwam door segmenten die het pad meer dan één keer doorkruist. Een resterend groot verschil zou op een andere oorzaak wijzen.",
     });
   } catch (err) {
     return NextResponse.json(
