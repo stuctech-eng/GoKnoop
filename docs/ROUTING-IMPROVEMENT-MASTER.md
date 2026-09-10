@@ -239,3 +239,46 @@ gebruiker   interne fallback
 **PRODUCTIE GEWIJZIGD:** NEE
 
 **VOLGENDE STAP:** Fase E — productie-audit. **Dit is de eerste fase waarin daadwerkelijk de bestaande productiecode gelezen wordt** (nog niet gewijzigd) — een kwalitatief andere stap dan alles hiervoor, expliciet als zodanig gemarkeerd conform sectie 30/31 van de opdracht.
+
+---
+
+### FASE: E — Productie-audit (kerndataflow bevestigd)
+**DATUM:** 9 september 2026
+**STATUS:** PASS (kerndataflow) — bredere audit (caching-gedrag in de praktijk, client-side consumptie, deployment-specifics) nog niet uitgeput, zie "volgende stap".
+**DOEL:** de daadwerkelijke productiecode lezen, niet aannemen.
+
+**UITGEVOERD:** `app/api/route/route.ts`, `lib/route-engine/route-engine.ts`, `lib/route-engine/cached-graph-provider.ts` gelezen (letterlijke code, niet uit documentatie afgeleid).
+
+**RESULTATEN — bevestigde, echte productie-dataflow:**
+
+```
+POST /api/route
+  { fromLogicalNodeId, toLogicalNodeId, constraints? }
+        │
+        ▼
+config/activeDataset (Firestore) → datasetVersionId opzoeken
+        │
+        ▼
+CachedGraphProvider(datasetVersionId).load()
+  -- module-niveau in-memory cache, warme aanvraag snel,
+     cold start laadt opnieuw (bevestigd, geen aanname)
+        │
+        ▼
+computeRoute() → findShortestPath() (lib/route-engine/dijkstra.ts)
+  -- PLAIN Dijkstra, edge.distanceM rechtstreeks als kosten
+        │
+        ▼
+buildRoute() → Route-object → 200 OK
+```
+
+**Bevestigd, niet aangenomen:**
+- **Geen NWB** in deze dataflow. Geen enkele import van `lib/nwb-analysis/*` in `app/api/route/route.ts` of `route-engine.ts`.
+- **Geen `BridgeAugmentedGraphProvider`, geen `ENABLE_NETWORK_BRIDGES`** in de productie-API — de eerder (vóór dit NWB-traject) gebouwde Bridge Layer is dus, net als NWB, niet actief. Bevestigt de eerdere documentatie hierover.
+- **Geen kostenmodel, geen route-validatie** — `findShortestPath` gebruikt uitsluitend `edge.distanceM`, identiek aan de "F=1,0-baseline" uit het onderzoek.
+- Dit betekent: de productie-app geeft op dit moment voor Amsterdam→Hilversum letterlijk de bekende 366,9km-omweg, ongefilterd, aan de gebruiker.
+
+**BESLUIT:** de kerndataflow is voldoende in kaart gebracht om Fase F (productie-data-infrastructuur) technisch te kunnen ontwerpen. De bredere audit-punten (exacte client-side routeconsumptie, caching-gedrag onder productiebelasting, deployment-pipeline-details) zijn nog niet uitgeput.
+
+**PRODUCTIE GEWIJZIGD:** NEE — uitsluitend gelezen, niets aangepast.
+
+**VOLGENDE STAP:** Fase F — NWB productie-data-infrastructuur (dataset-versionering, reproduceerbaarheid) ontwerpen; daarna pas daadwerkelijke productiecode-wijzigingen (Fase G-I), telkens met volledige test/typecheck/build-verificatie zoals de rest van vandaag.
