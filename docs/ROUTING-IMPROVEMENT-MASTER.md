@@ -694,3 +694,15 @@ Deze sandbox-omgeving blokkeert uitgaand verkeer naar `service.pdok.nl`: bevesti
 **PRODUCTIE GEWIJZIGD:** NEE — nog steeds uitsluitend geïsoleerde test-/resolver-code, nog niet gekoppeld aan `/api/route/combined` of enige UI.
 
 **VOLGENDE STAP:** de resolver koppelen aan een volledige, al-berekende route (bijv. Amsterdam-Hilversum) en de opgehaalde NWB-segment-ID's uit dat pad gebruiken als test — dit toetst punt 5-6 met echte, representatieve schaal (tientallen segmenten, niet 2).
+
+---
+
+### FASE: M (bevestiging) — live geverifieerd op productie, 4/4
+**DATUM:** 10 september 2026
+**STATUS:** PASS, definitief bevestigd via `GET /api/admin/test-nwb-geometry-resolver` (het echte eindpunt, niet de diagnose-pagina).
+
+**RESULTAAT:** `{"gevraagd":4,"opgelost":4,"mislukt":[]}` — alle vier bekende segmenten correct opgelost, inclusief één met 573 punten (een lang/gedetailleerd wegvak) — bevestigt dat de fix ook bij grotere, complexere segmenten werkt, niet alleen bij de eerdere kleine voorbeelden.
+
+**PRODUCTIE GEWIJZIGD:** NEE.
+
+**VOLGENDE STAP:** punt 5-6 van de oorspronkelijke opdracht — koppelen aan een volledig berekende route, regel-voor-regel controleren dat de resulterende lijn overeenkomt met de berekende route.
