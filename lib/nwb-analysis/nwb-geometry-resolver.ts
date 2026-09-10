@@ -8,22 +8,18 @@
  * route te BEREKENEN (afstand, topologie), niet om 'm op een kaart te
  * TEKENEN.
  *
- * AANPAK: in plaats van alsnog alle ~144k segmenten met volledige geometrie
- * op te slaan (zelfde opslagprobleem terug), wordt geometrie LIVE bij PDOK
- * opgehaald -- alleen voor de paar tientallen segmenten die een specifieke,
- * AL BEREKENDE route daadwerkelijk gebruikt. WFS 2.0 ondersteunt hiervoor
- * de standaard `resourceId`-parameter (meerdere features in één aanroep).
+ * AANPAK: geometrie LIVE bij PDOK opvragen -- alleen voor de paar tientallen
+ * segmenten die een specifieke, AL BEREKENDE route daadwerkelijk gebruikt.
+ * WFS 2.0's `resourceId`-parameter (meerdere features in één aanroep).
  *
- * *** BELANGRIJKE, EERLIJKE STATUS ***
- * Deze module is NIET geverifieerd tegen een levende PDOK-aanroep. De
- * sandbox-omgeving waarin dit is gebouwd blokkeert uitgaand verkeer naar
- * service.pdok.nl (bevestigd: HTTP 403, x-deny-reason: host_not_allowed --
- * een beperking van de ontwikkelomgeving, geen aanname over PDOK zelf).
- * De `resourceId`-parameter is onderdeel van de officiële WFS 2.0-standaard
- * (in tegenstelling tot CQL_FILTER, dat eerder in dit project een
- * vendor-extensie bleek te zijn die deze dienst stilzwijgend negeerde) --
- * maar dat is een redelijke verwachting, GEEN bevestigd feit voor deze
- * specifieke dienst. Test dit expliciet vóór integratie in de route-flow.
+ * *** STATUS: LIVE GEVERIFIEERD, 10-9-2026 ***
+ * Bevestigd via de debug-pagina (app/debug/test-nwb-geometry-resolver):
+ * `resourceId` werkt correct, met de ID EXACT zoals opgeslagen (bv.
+ * "wegvakken.c77ea6a6-...", GEEN "nwbwegen:"-prefix -- die prefix geeft juist
+ * een InvalidParameterValue-fout). HTTP 200, volledige MultiLineString-
+ * geometrie met alle tussenpunten correct terugontvangen voor 2/2
+ * testsegmenten. Zie Decision Log voor de volledige, geverifieerde
+ * bevindingen.
  */
 
 const NWB_WFS_BASE = "https://service.pdok.nl/rws/nwbwegen/wfs/v1_0";
@@ -61,10 +57,12 @@ function extractCoordinates(geometry: { type: string; coordinates: number[][] | 
 }
 
 /**
- * Haalt volledige geometrie op voor specifieke NWB-segment-ID's, via de WFS
- * 2.0 `resourceId`-parameter. Batcht in groepen van MAX_IDS_PER_REQUEST.
- *
- * ONGETEST tegen een levende dienst -- zie module-commentaar hierboven.
+ * *** GECORRIGEERD 10-9-2026, na live verificatie via de debug-pagina ***
+ * Eerdere versie voegde onterecht een `nwbwegen:wegvakken.`-prefix toe aan
+ * ID's die al het formaat `wegvakken.xxx` hadden -- dat gaf een
+ * `InvalidParameterValue`-fout (`msWFSGetFeature()... Invalid typename
+ * given with FeatureId`). Live bevestigd: de dienst verwacht de ID EXACT
+ * zoals opgeslagen, zonder enige prefix. Geen transformatie meer nodig.
  */
 export async function resolveNwbGeometry(segmentIds: string[]): Promise<NwbGeometryResult> {
   const resolved = new Map<string, { x: number; y: number }[]>();
@@ -72,7 +70,7 @@ export async function resolveNwbGeometry(segmentIds: string[]): Promise<NwbGeome
 
   for (let i = 0; i < segmentIds.length; i += MAX_IDS_PER_REQUEST) {
     const batch = segmentIds.slice(i, i + MAX_IDS_PER_REQUEST);
-    const resourceIds = batch.map((id) => (id.includes(":") ? id : `${NWB_TYPE_NAME}.${id}`)).join(",");
+    const resourceIds = batch.join(",");
 
     const params = new URLSearchParams({
       service: "WFS",
@@ -89,7 +87,7 @@ export async function resolveNwbGeometry(segmentIds: string[]): Promise<NwbGeome
 
     try {
       const res = await fetch(`${NWB_WFS_BASE}?${params.toString()}`, {
-        headers: { "User-Agent": "GoKnoop-geometry-resolver/1.0 (Fase M, ongetest tegen levende dienst)" },
+        headers: { "User-Agent": "GoKnoop-geometry-resolver/1.0" },
         cache: "no-store",
         signal: controller.signal,
       });
@@ -112,8 +110,7 @@ export async function resolveNwbGeometry(segmentIds: string[]): Promise<NwbGeome
       }
 
       for (const id of batch) {
-        const normalizedId = id.includes(":") ? id : `${NWB_TYPE_NAME}.${id}`;
-        if (!foundIds.has(normalizedId) && !foundIds.has(id)) failed.push(id);
+        if (!foundIds.has(id)) failed.push(id);
       }
     } catch {
       clearTimeout(timeoutId);

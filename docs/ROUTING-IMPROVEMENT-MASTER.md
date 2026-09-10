@@ -671,3 +671,26 @@ Deze sandbox-omgeving blokkeert uitgaand verkeer naar `service.pdok.nl`: bevesti
 **VOLGENDE, CONCRETE STAP (voor Te, vereist netwerktoegang die ik niet heb):** push deze code, draai `GET /api/admin/test-nwb-geometry-resolver`, en stuur het resultaat terug. Als `opgelost` overeenkomt met de 4 gevraagde segmenten en de coördinaten er plausibel uitzien, kan de resolver in de route-flow geïntegreerd worden (punt 7). Als het mislukt, is dat de basis voor een concreet, tweede ontwerp (bijvoorbeeld: alsnog compacte, gecomprimeerde geometrie opslaan per gebruikt segment, on-demand vanuit een aparte collectie).
 
 **PRODUCTIE GEWIJZIGD:** NEE — uitsluitend nieuwe, geïsoleerde testcode, nergens aan gekoppeld.
+
+---
+
+### FASE: M (vervolg) — BLOCKED opgeheven: resolver live geverifieerd, bug gevonden en gerepareerd
+**DATUM:** 10 september 2026
+**STATUS:** PASS (punt 4 grotendeels voltooid; punt 5-6 nog te doen met een volledige route).
+
+**WAT DE LIVE TEST LIET ZIEN:** drie varianten van de `resourceId`-parameter getest via een nieuwe debug-pagina (`app/debug/test-nwb-geometry-resolver`, met een server-side proxy `api/debug/proxy-fetch` om CORS te omzeilen):
+- **ID exact zoals opgeslagen** (`wegvakken.c77ea6a6-...`, geen prefix): **HTTP 200, 2/2 features, volledige MultiLineString-geometrie correct terugontvangen.**
+- ID met `nwbwegen:`-prefix: HTTP 400, `InvalidParameterValue` — deze dienst accepteert die vorm niet.
+- `featureID` i.p.v. `resourceId`: werkt ook (oudere WFS-conventie), maar niet nodig.
+
+**BUG GEVONDEN EN GEREPAREERD:** de oorspronkelijke `resolveNwbGeometry`-implementatie voegde onterecht een `nwbwegen:wegvakken.`-prefix toe aan ID's — precies de vorm die hierboven een 400-fout bleek te geven. Dit verklaart waarom de eerste test (vóór dit debug-onderzoek) 0/4 in 87ms opleverde: een direct mislukkende aanvraag door de verkeerde parametervorm, geen netwerkprobleem.
+
+**FIX:** `resolveNwbGeometry` gebruikt nu de ID exact zoals opgeslagen, zonder enige transformatie. **Regressietest toegevoegd** (`nwb-geometry-resolver.test.ts`, 6 tests, gemockte fetch) die expliciet controleert dat de aanvraag-URL nooit meer een `nwbwegen:`-prefix bevat — deze specifieke fout kan niet meer sluipenderwijs terugkomen.
+
+**VEILIGHEIDSEIGENSCHAPPEN:** 619/619 tests (6 nieuw), tsc exit 0, build geslaagd.
+
+**NOG TE DOEN (punt 5-6 uit de opdracht):** dit was een test met 2 losse, bekende segmenten — nog niet met een volledige, berekende route (Amsterdam-Hilversum/Volendam-Amsterdam/Lochem) waarbij de resulterende lijn regel-voor-regel tegen de berekende route wordt gecontroleerd. Dat is de volgende, concrete stap vóór punt 7 (daadwerkelijke integratie in de route-flow).
+
+**PRODUCTIE GEWIJZIGD:** NEE — nog steeds uitsluitend geïsoleerde test-/resolver-code, nog niet gekoppeld aan `/api/route/combined` of enige UI.
+
+**VOLGENDE STAP:** de resolver koppelen aan een volledige, al-berekende route (bijv. Amsterdam-Hilversum) en de opgehaalde NWB-segment-ID's uit dat pad gebruiken als test — dit toetst punt 5-6 met echte, representatieve schaal (tientallen segmenten, niet 2).
