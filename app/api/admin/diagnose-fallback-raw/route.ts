@@ -3,8 +3,6 @@ import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { loadCachedCombinedGraph } from "@/lib/route-engine/cached-nwb-provider";
 import { computeCombinedRoute } from "@/lib/route-engine/combined-route-engine";
-import { computeRouteWithFallback } from "@/lib/route-engine/route-to-point-fallback";
-import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
 export const maxDuration = 10;
 export const dynamic = "force-dynamic";
@@ -46,14 +44,26 @@ export async function GET(req: NextRequest) {
     // Kandidaat 2 apart, direct testen (nooit eerder gedaan -- alleen kandidaat 1 is bewezen).
     const candidate2Direct = computeCombinedRoute(graph, ORIGIN_CANDIDATES[1], DESTINATION);
 
-    // De fallback-laag zelf, met beide kandidaten.
-    const fromCandidates: LoopStartCandidate[] = ORIGIN_CANDIDATES.map((logicalNodeId) => ({ logicalNodeId }));
-    const fallbackResult = await computeRouteWithFallback(provider, datasetVersionId, graph, fromCandidates, DESTINATION);
+    // ALLEEN Fase 1 van computeRouteWithFallback repliceren (de goedkope lus) --
+    // NIET de volledige functie aanroepen, die roept ook Fase 2 aan (dure PDOK-
+    // geometrie-opbouw voor de winnaar), wat de vorige poging deed timeouten.
+    let bestIndex = -1;
+    let bestDistanceM = Infinity;
+    const perCandidateResults: unknown[] = [];
+    for (let i = 0; i < ORIGIN_CANDIDATES.length; i++) {
+      const nodeExists = !!provider.getNode(ORIGIN_CANDIDATES[i]);
+      const cheapResult = nodeExists ? computeCombinedRoute(graph, ORIGIN_CANDIDATES[i], DESTINATION) : null;
+      perCandidateResults.push({ candidateId: ORIGIN_CANDIDATES[i], nodeExists, cheapResult });
+      if (cheapResult?.ok && cheapResult.distanceM < bestDistanceM) {
+        bestDistanceM = cheapResult.distanceM;
+        bestIndex = i;
+      }
+    }
 
     return NextResponse.json({
       datasetVersionId,
       candidate2DirectResult: candidate2Direct,
-      fallbackResult: "ok" in fallbackResult ? fallbackResult : { succeeded: true, distanceM: fallbackResult.route.distanceM, selectedCandidateRank: fallbackResult.selectedCandidateRank, selectedStartNodeId: fallbackResult.selectedStartNodeId },
+      fase1LusResultaat: { bestIndex, bestDistanceM: bestIndex === -1 ? null : bestDistanceM, perCandidateResults },
     });
   } catch (err) {
     return NextResponse.json(
