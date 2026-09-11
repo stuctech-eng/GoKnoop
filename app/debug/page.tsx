@@ -27,6 +27,7 @@ const CATEGORIES: DebugCategory[] = [
   {
     title: "Netwerkgat-onderzoek",
     links: [
+      { href: "/debug/precompute-clustering-runner", label: "NWB-clustering vooraf berekenen", description: "Structurele fix voor de laatste 10s-bottleneck -- eenmalig draaien na elke migratie." },
       { href: "/debug/migrate-goknoop-batched-runner", label: "GoKnoop → gebatcht formaat migreren", description: "Fixt de 11,2s-trage GoKnoop-basisgraaf-lading." },
       { href: "/debug/instellingen", label: "Debug-instellingen (sleutel invullen)", description: "Vul hier de DEBUG_SECRET in, zonder browserconsole." },
       { href: "/debug/test-to-destination-live", label: "Live test: /api/route/to-destination", description: "Reproduceert de foutmelding uit de app direct, met exacte fout + timing." },

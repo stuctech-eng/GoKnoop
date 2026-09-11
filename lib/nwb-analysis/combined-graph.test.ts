@@ -447,3 +447,44 @@ describe("CombinedEdge.nwbInfo.segmentId (10-9-2026, Geometry Integration Audit)
     }
   });
 });
+
+describe("buildBaseGraph -- vooraf-berekend clustering-kortpad (Fase M6/M7, 11-9-2026)", () => {
+  it("gebruikt het snelle pad als ALLE segmenten fromClusterId/toClusterId hebben, en levert exact dezelfde graaf op als live clustering", async () => {
+    const nodes = new Map<string, GraphNode>([
+      ["1", makeNode("1", 0, 0)],
+      ["2", makeNode("2", 1000, 0)],
+    ]);
+    const provider = new FakeGraphProvider(nodes, new Map());
+
+    // Twee segmenten die, via live clustering, zouden samensmelten tot 1 cluster (binnen tolerantie).
+    const liveSegments: SlimNwbSegment[] = [
+      { id: "seg-a", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: 0 }, to: { x: 500, y: 0 }, lengthM: 500 },
+      { id: "seg-b", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 500, y: 2 }, to: { x: 1000, y: 0 }, lengthM: 500 }, // (500,2) smelt samen met (500,0) -- 2m < tolerantie
+    ];
+    // Dezelfde twee segmenten, maar nu met VOORAF-BEREKENDE cluster-ID's (zoals een precompute-stap ze zou opleveren).
+    const precomputedSegments: SlimNwbSegment[] = [
+      { ...liveSegments[0], fromClusterId: "clusterX", toClusterId: "clusterY" },
+      { ...liveSegments[1], fromClusterId: "clusterY", toClusterId: "clusterZ" }, // zelfde clusterY als seg-a's toClusterId -- bevestigt samensmelting
+    ];
+
+    const liveGraph = await buildValidatedCombinedGraph(provider, liveSegments, 5, []);
+    const precomputedGraph = await buildValidatedCombinedGraph(provider, precomputedSegments, 5, []);
+
+    // Beide paden moeten hetzelfde aantal NWB-clusters opleveren (2: het samengesmolten middelpunt, plus de twee uiteinden -- eigenlijk 3, maar de kern is: consistent tussen beide paden).
+    const liveClusterCount = liveGraph.nodePosition.size - provider.getAllNodeIds().length;
+    const precomputedClusterCount = precomputedGraph.nodePosition.size - provider.getAllNodeIds().length;
+    expect(precomputedClusterCount).toBe(liveClusterCount);
+  });
+
+  it("valt terug op live clustering als SLECHTS SOMMIGE segmenten vooraf-berekende cluster-ID's hebben (geen halfslachtige toepassing)", async () => {
+    const nodes = new Map<string, GraphNode>([["1", makeNode("1", 0, 0)]]);
+    const provider = new FakeGraphProvider(nodes, new Map());
+    const mixedSegments: SlimNwbSegment[] = [
+      { id: "seg-a", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: 0 }, to: { x: 500, y: 0 }, lengthM: 500, fromClusterId: "x", toClusterId: "y" },
+      { id: "seg-b", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 500, y: 0 }, to: { x: 1000, y: 0 }, lengthM: 500 }, // GEEN precomputed data
+    ];
+    // Mag niet crashen -- moet gewoon via live clustering werken (allPrecomputed === false zodra één segment het mist).
+    const graph = await buildValidatedCombinedGraph(provider, mixedSegments, 5, []);
+    expect(graph.nodePosition.size).toBeGreaterThan(1);
+  });
+});

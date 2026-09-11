@@ -26,6 +26,14 @@ export type SlimNwbSegment = {
   from: { x: number; y: number };
   to: { x: number; y: number };
   lengthM: number;
+  /** TOEGEVOEGD 11-9-2026, Fase M6/M7 (vooraf-berekende clustering): als
+   * beide gevuld zijn, slaat buildBaseGraph de dure union-find-clustering
+   * voor dit punt over en gebruikt deze waarden direct. Optioneel -- data
+   * zonder deze velden werkt nog steeds, via de bestaande, langzamere
+   * live-clustering (onderzoeks-/testpagina's, of nog niet gemigreerde
+   * datasets). */
+  fromClusterId?: string;
+  toClusterId?: string;
 };
 
 export type CombinedEdgeSource = "goknoop" | "nwb" | "connector";
@@ -49,7 +57,7 @@ export type CombinedGraph = {
   totalConnectorsCreated: number;
 };
 
-class UnionFind {
+export class UnionFind {
   private parent = new Map<string, string>();
   add(id: string) {
     if (!this.parent.has(id)) this.parent.set(id, id);
@@ -67,6 +75,86 @@ class UnionFind {
     const rb = this.find(b);
     if (ra !== rb) this.parent.set(ra, rb);
   }
+}
+
+/**
+ * TOEGEVOEGD 11-9-2026, Fase M6/M7 (vooraf-berekende clustering, structurele
+ * fix voor de resterende 10s-bottleneck). Losstaande versie van precies de
+ * clustering-logica uit `buildBaseGraph` -- puur voor het EENMALIG,
+ * vooraf berekenen van cluster-toewijzingen per segment, bedoeld om te
+ * draaien als aparte admin-actie ná migratie (niet bij elke aanvraag).
+ * Retourneert een Map<segmentId, {fromClusterId, toClusterId}> die daarna
+ * direct in de NWB-segmentopslag geschreven kan worden.
+ */
+export async function computeNwbClusterAssignments(
+  segments: SlimNwbSegment[],
+  toleranceM: number,
+  onProgress?: (label: string, extra?: Record<string, unknown>) => void
+): Promise<Map<string, { fromClusterId: string; toClusterId: string }>> {
+  const tBase = Date.now();
+  const log = (label: string, extra?: Record<string, unknown>) => {
+    onProgress?.(label, { elapsedMs: Date.now() - tBase, ...extra });
+  };
+
+  const setBSegments = segments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded");
+  log("Set B-classificatie klaar", { setBSegments: setBSegments.length, totaal: segments.length });
+
+  const uf = new UnionFind();
+  const pointKey = (segId: string, end: "from" | "to") => `${segId}:${end}`;
+  type RawPoint = { key: string; x: number; y: number; cx: number; cy: number };
+  const rawPoints: RawPoint[] = [];
+  for (const seg of setBSegments) {
+    uf.add(pointKey(seg.id, "from"));
+    uf.add(pointKey(seg.id, "to"));
+    rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y, cx: Math.floor(seg.from.x / toleranceM), cy: Math.floor(seg.from.y / toleranceM) });
+    rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y, cx: Math.floor(seg.to.x / toleranceM), cy: Math.floor(seg.to.y / toleranceM) });
+  }
+  log("Punten verzameld", { puntenAantal: rawPoints.length });
+
+  const grid = new Map<string, RawPoint[]>();
+  const cellKey = (cx: number, cy: number) => cx * 1000003 + cy;
+  for (const p of rawPoints) {
+    const cell = cellKey(p.cx, p.cy);
+    let bucket = grid.get(String(cell));
+    if (!bucket) {
+      bucket = [];
+      grid.set(String(cell), bucket);
+    }
+    bucket.push(p);
+  }
+  log("Grid gebouwd", { celAantal: grid.size });
+
+  const YIELD_EVERY_N_POINTS = 5000;
+  for (let idx = 0; idx < rawPoints.length; idx++) {
+    const p = rawPoints[idx];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const candidates = grid.get(String(cellKey(p.cx + dx, p.cy + dy)));
+        if (!candidates) continue;
+        for (const q of candidates) {
+          if (p === q) continue;
+          if (uf.find(p.key) === uf.find(q.key)) continue;
+          if (Math.hypot(p.x - q.x, p.y - q.y) <= toleranceM) uf.union(p.key, q.key);
+        }
+      }
+    }
+    if (idx > 0 && idx % YIELD_EVERY_N_POINTS === 0) {
+      log("clustering voortgang", { verwerkt: idx, totaal: rawPoints.length });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  log("Union-find-clustering klaar");
+
+  const result = new Map<string, { fromClusterId: string; toClusterId: string }>();
+  for (const seg of setBSegments) {
+    result.set(seg.id, {
+      fromClusterId: uf.find(pointKey(seg.id, "from")),
+      toClusterId: uf.find(pointKey(seg.id, "to")),
+    });
+  }
+  log("Clustertoewijzingen klaar", { aantalSegmenten: result.size });
+
+  return result;
 }
 
 /**
@@ -128,82 +216,96 @@ async function buildBaseGraph(
   const setBSegments = nwbSegments.filter((s) => classifySegment(s.bstCode, s.wegnummer) !== "excluded");
   log("Set B-classificatie klaar", { setBSegments: setBSegments.length, totaal: nwbSegments.length });
 
-  const uf = new UnionFind();
   const pointKey = (segId: string, end: "from" | "to") => `${segId}:${end}`;
-  type RawPoint = { key: string; x: number; y: number; cx: number; cy: number };
-  const rawPoints: RawPoint[] = [];
-  for (const seg of setBSegments) {
-    uf.add(pointKey(seg.id, "from"));
-    uf.add(pointKey(seg.id, "to"));
-    rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y, cx: Math.floor(seg.from.x / toleranceM), cy: Math.floor(seg.from.y / toleranceM) });
-    rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y, cx: Math.floor(seg.to.x / toleranceM), cy: Math.floor(seg.to.y / toleranceM) });
-  }
-  log("Punten verzameld", { puntenAantal: rawPoints.length });
 
-  // TOEGEVOEGD 10-9-2026, Fase M6/M7 (laatste bottleneck, live bevestigd via
-  // reportProgress-diagnose: buildBaseGraph is volledig synchroon, dus geen
-  // enkele voortgangsmelding komt ooit door zolang deze functie loopt --
-  // de clustering zelf bleek de resterende, niet eerder gemeten kostenpost).
-  // cx/cy nu vooraf berekend i.p.v. per punt een string te bouwen/parsen
-  // (`cellOf(...).split(":").map(Number)`), en de grid-sleutel als simpel
-  // getallenpaar i.p.v. stringconcatenatie.
-  const grid = new Map<string, RawPoint[]>();
-  const cellKey = (cx: number, cy: number) => cx * 1000003 + cy; // eenvoudige, snelle numerieke sleutel i.p.v. stringconcatenatie
-  for (const p of rawPoints) {
-    const cell = cellKey(p.cx, p.cy);
-    let bucket = grid.get(String(cell));
-    if (!bucket) {
-      bucket = [];
-      grid.set(String(cell), bucket);
+  // TOEGEVOEGD 11-9-2026, Fase M6/M7 (structurele fix): als ALLE segmenten al
+  // vooraf-berekende cluster-ID's hebben (via de nieuwe precompute-stap,
+  // draait als eenmalige, aparte admin-actie na migratie), slaan we de hele
+  // dure union-find-clustering over -- live gemeten: ~229k punten kostte
+  // ~3,6s puur rekenwerk, DE bottleneck die overbleef na alle I/O-fixes.
+  // Zonder vooraf-berekende data (onderzoekspagina's, testdata, een nog niet
+  // geprecomputede dataset) blijft de bestaande, langzamere live-clustering
+  // gewoon werken -- puur additief, geen bestaand gedrag gewijzigd.
+  const allPrecomputed = setBSegments.length > 0 && setBSegments.every((s) => s.fromClusterId && s.toClusterId);
+  log(allPrecomputed ? "Vooraf-berekende clusters gevonden -- clustering overgeslagen" : "Geen (volledig) vooraf-berekende clusters -- live clustering", {
+    aantalMetPrecomputed: setBSegments.filter((s) => s.fromClusterId && s.toClusterId).length,
+    totaal: setBSegments.length,
+  });
+
+  let resolveCluster: (segId: string, end: "from" | "to") => string;
+  const clusterRepresentative = new Map<string, { x: number; y: number }>();
+
+  if (allPrecomputed) {
+    const clusterIdByPointKey = new Map<string, string>();
+    for (const seg of setBSegments) {
+      clusterIdByPointKey.set(pointKey(seg.id, "from"), seg.fromClusterId!);
+      clusterIdByPointKey.set(pointKey(seg.id, "to"), seg.toClusterId!);
+      if (!clusterRepresentative.has(seg.fromClusterId!)) clusterRepresentative.set(seg.fromClusterId!, { x: seg.from.x, y: seg.from.y });
+      if (!clusterRepresentative.has(seg.toClusterId!)) clusterRepresentative.set(seg.toClusterId!, { x: seg.to.x, y: seg.to.y });
     }
-    bucket.push(p);
-  }
-  log("Grid gebouwd", { celAantal: grid.size });
+    resolveCluster = (segId, end) => clusterIdByPointKey.get(pointKey(segId, end))!;
+    for (const [root, pos] of clusterRepresentative) nodePosition.set(`nwb:${root}`, { x: pos.x, y: pos.y, source: "nwb" });
+    log("Vooraf-berekende clusters toegepast", { clusterAantal: clusterRepresentative.size });
+  } else {
+    const uf = new UnionFind();
+    type RawPoint = { key: string; x: number; y: number; cx: number; cy: number };
+    const rawPoints: RawPoint[] = [];
+    for (const seg of setBSegments) {
+      uf.add(pointKey(seg.id, "from"));
+      uf.add(pointKey(seg.id, "to"));
+      rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y, cx: Math.floor(seg.from.x / toleranceM), cy: Math.floor(seg.from.y / toleranceM) });
+      rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y, cx: Math.floor(seg.to.x / toleranceM), cy: Math.floor(seg.to.y / toleranceM) });
+    }
+    log("Punten verzameld", { puntenAantal: rawPoints.length });
 
-  const YIELD_EVERY_N_POINTS = 5000;
-  for (let idx = 0; idx < rawPoints.length; idx++) {
-    const p = rawPoints[idx];
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const candidates = grid.get(String(cellKey(p.cx + dx, p.cy + dy)));
-        if (!candidates) continue;
-        for (const q of candidates) {
-          if (p === q) continue;
-          // Goedkope voorcontrole (bijna O(1) met path compression) vóór de
-          // dure Math.hypot-aanroep -- in dichte gebieden delen veel punten
-          // al hetzelfde cluster, dan is de afstandsberekening overbodig werk.
-          if (uf.find(p.key) === uf.find(q.key)) continue;
-          if (Math.hypot(p.x - q.x, p.y - q.y) <= toleranceM) uf.union(p.key, q.key);
+    const grid = new Map<string, RawPoint[]>();
+    const cellKey = (cx: number, cy: number) => cx * 1000003 + cy;
+    for (const p of rawPoints) {
+      const cell = cellKey(p.cx, p.cy);
+      let bucket = grid.get(String(cell));
+      if (!bucket) {
+        bucket = [];
+        grid.set(String(cell), bucket);
+      }
+      bucket.push(p);
+    }
+    log("Grid gebouwd", { celAantal: grid.size });
+
+    const YIELD_EVERY_N_POINTS = 5000;
+    for (let idx = 0; idx < rawPoints.length; idx++) {
+      const p = rawPoints[idx];
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const candidates = grid.get(String(cellKey(p.cx + dx, p.cy + dy)));
+          if (!candidates) continue;
+          for (const q of candidates) {
+            if (p === q) continue;
+            if (uf.find(p.key) === uf.find(q.key)) continue;
+            if (Math.hypot(p.x - q.x, p.y - q.y) <= toleranceM) uf.union(p.key, q.key);
+          }
         }
       }
+      if (idx > 0 && idx % YIELD_EVERY_N_POINTS === 0) {
+        log("clustering voortgang", { verwerkt: idx, totaal: rawPoints.length });
+        await new Promise((resolve) => setImmediate(resolve));
+      }
     }
-    // TOEGEVOEGD 10-9-2026: periodieke yield. Zonder dit is buildBaseGraph
-    // volledig synchroon -- geen enkele voortgangsmelding komt dan ooit
-    // daadwerkelijk het netwerk op vóór een eventuele platform-timeout
-    // (live bevestigd: 127 checkpoints, geen enkele van bínnen deze functie).
-    // `setImmediate` geeft de event loop precies genoeg ruimte om wachtende
-    // Firestore-writes te versturen, zonder de berekening zelf te vertragen
-    // met een volledige macrotaak-wisseling bij elk punt.
-    if (idx > 0 && idx % YIELD_EVERY_N_POINTS === 0) {
-      log("clustering voortgang", { verwerkt: idx, totaal: rawPoints.length });
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-  }
-  log("Union-find-clustering klaar");
+    log("Union-find-clustering klaar");
 
-  const clusterRepresentative = new Map<string, { x: number; y: number }>();
-  for (const p of rawPoints) {
-    const root = uf.find(p.key);
-    if (!clusterRepresentative.has(root)) {
-      clusterRepresentative.set(root, { x: p.x, y: p.y });
-      nodePosition.set(`nwb:${root}`, { x: p.x, y: p.y, source: "nwb" });
+    resolveCluster = (segId, end) => uf.find(pointKey(segId, end));
+    for (const p of rawPoints) {
+      const root = uf.find(p.key);
+      if (!clusterRepresentative.has(root)) {
+        clusterRepresentative.set(root, { x: p.x, y: p.y });
+        nodePosition.set(`nwb:${root}`, { x: p.x, y: p.y, source: "nwb" });
+      }
     }
+    log("Clusterrepresentanten bepaald", { clusterAantal: clusterRepresentative.size });
   }
-  log("Clusterrepresentanten bepaald", { clusterAantal: clusterRepresentative.size });
 
   for (const seg of setBSegments) {
-    const fromRoot = `nwb:${uf.find(pointKey(seg.id, "from"))}`;
-    const toRoot = `nwb:${uf.find(pointKey(seg.id, "to"))}`;
+    const fromRoot = `nwb:${resolveCluster(seg.id, "from")}`;
+    const toRoot = `nwb:${resolveCluster(seg.id, "to")}`;
     if (fromRoot === toRoot) continue;
     const len = seg.lengthM;
     const info = { bstCode: seg.bstCode, straatnaam: seg.straatnaam, wegnummer: seg.wegnummer, segmentId: seg.id };
@@ -216,7 +318,7 @@ async function buildBaseGraph(
     adjacency,
     nodePosition,
     addEdge,
-    findNwbClusterNodeId: (segId, end) => `nwb:${uf.find(pointKey(segId, end))}`,
+    findNwbClusterNodeId: (segId, end) => `nwb:${resolveCluster(segId, end)}`,
     clusterList: Array.from(clusterRepresentative.entries()).map(([root, pos]) => ({ id: `nwb:${root}`, ...pos })),
   };
 }
