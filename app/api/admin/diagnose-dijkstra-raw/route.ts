@@ -51,13 +51,11 @@ export async function GET(req: NextRequest) {
     await provider.load();
     const { graph } = await loadCachedCombinedGraph(provider, datasetVersionId);
 
-    const results: Record<string, unknown> = {};
-    for (const [label, { from, to }] of Object.entries(ROUTES)) {
-      const result = computeCombinedRoute(graph, from, to);
-      results[label] = result;
-    }
+    const routeKey = req.nextUrl.searchParams.get("route") ?? "hilversum";
+    const selected = ROUTES[routeKey] ?? ROUTES.hilversum;
+    const result = computeCombinedRoute(graph, selected.from, selected.to);
 
-    return NextResponse.json({ datasetVersionId, resultaten: results });
+    return NextResponse.json({ datasetVersionId, route: routeKey, resultaat: result });
   } catch (err) {
     return NextResponse.json(
       { error: "Diagnose mislukt.", details: err instanceof Error ? err.message : String(err) },
