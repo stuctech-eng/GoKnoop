@@ -41,29 +41,16 @@ export async function GET(req: NextRequest) {
     await provider.load();
     const { graph } = await loadCachedCombinedGraph(provider, datasetVersionId);
 
-    // Kandidaat 2 apart, direct testen (nooit eerder gedaan -- alleen kandidaat 1 is bewezen).
+    // Uitsluitend kandidaat 2, ALLEEN -- isoleert of DIE specifieke aanroep traag is
+    // (3x op rij timeout zodra kandidaat 2 in de mix zat, kandidaat 1 alleen was juist snel).
+    const t0 = Date.now();
     const candidate2Direct = computeCombinedRoute(graph, ORIGIN_CANDIDATES[1], DESTINATION);
-
-    // ALLEEN Fase 1 van computeRouteWithFallback repliceren (de goedkope lus) --
-    // NIET de volledige functie aanroepen, die roept ook Fase 2 aan (dure PDOK-
-    // geometrie-opbouw voor de winnaar), wat de vorige poging deed timeouten.
-    let bestIndex = -1;
-    let bestDistanceM = Infinity;
-    const perCandidateResults: unknown[] = [];
-    for (let i = 0; i < ORIGIN_CANDIDATES.length; i++) {
-      const nodeExists = !!provider.getNode(ORIGIN_CANDIDATES[i]);
-      const cheapResult = nodeExists ? computeCombinedRoute(graph, ORIGIN_CANDIDATES[i], DESTINATION) : null;
-      perCandidateResults.push({ candidateId: ORIGIN_CANDIDATES[i], nodeExists, cheapResult });
-      if (cheapResult?.ok && cheapResult.distanceM < bestDistanceM) {
-        bestDistanceM = cheapResult.distanceM;
-        bestIndex = i;
-      }
-    }
+    const candidate2ComputeTimeMs = Date.now() - t0;
 
     return NextResponse.json({
       datasetVersionId,
       candidate2DirectResult: candidate2Direct,
-      fase1LusResultaat: { bestIndex, bestDistanceM: bestIndex === -1 ? null : bestDistanceM, perCandidateResults },
+      candidate2ComputeTimeMs,
     });
   } catch (err) {
     return NextResponse.json(
