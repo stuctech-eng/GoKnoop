@@ -16,8 +16,14 @@ export const dynamic = "force-dynamic";
  * de HELE collectie, dus las alsnog alle 78 oude + nieuwe documenten,
  * inclusief de trage, met-coords exemplaren.
  *
- * Dit endpoint wist ALLE documenten in de betreffende subcollectie vóór
- * een hermigratie, zodat oude batch-indices niet kunnen blijven hangen.
+ * HERZIEN, zelfde dag: de eerste versie las eerst de HELE collectie uit
+ * om te weten wat te verwijderen (`collRef.get()`) -- maar dat betekent
+ * dat het opruimen zelf de trage, oude met-coords-documenten moest lezen
+ * (live bevestigd: "The string did not match the expected pattern" bij
+ * edges, exact dezelfde 10s-platform-timeout-fout als bij de hoofdroute-
+ * berekening). Nu VERWIJDEREN OP INDEX-BEREIK, zonder eerst te lezen --
+ * Firestore's delete() op een niet-bestaand document-ID slaagt
+ * probleemloos, dus een ruim bereik (0-999) dekken is veilig en snel.
  */
 export async function POST(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -40,22 +46,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "datasetVersionId en kind (nodes|edges) zijn verplicht." }, { status: 400 });
   }
 
+  const MAX_BATCH_INDEX = 999; // ruim boven het hoogst mogelijke aantal batches bij elke huidige batchgrootte
+  const FIRESTORE_BATCH_LIMIT = 450;
+
   try {
     const db = getDb();
     const collRef = db.collection("goknoopBatched").doc(datasetVersionId).collection(kind);
-    const snap = await collRef.get();
 
-    const BATCH_LIMIT = 450;
     let deleted = 0;
-    for (let i = 0; i < snap.docs.length; i += BATCH_LIMIT) {
-      const chunk = snap.docs.slice(i, i + BATCH_LIMIT);
+    for (let start = 0; start <= MAX_BATCH_INDEX; start += FIRESTORE_BATCH_LIMIT) {
       const batch = db.batch();
-      for (const doc of chunk) batch.delete(doc.ref);
+      const end = Math.min(start + FIRESTORE_BATCH_LIMIT, MAX_BATCH_INDEX + 1);
+      for (let i = start; i < end; i++) {
+        batch.delete(collRef.doc(String(i)));
+        deleted++;
+      }
       await batch.commit();
-      deleted += chunk.length;
     }
 
-    return NextResponse.json({ ok: true, kind, verwijderd: deleted });
+    return NextResponse.json({ ok: true, kind, verwijderdBereik: `0-${MAX_BATCH_INDEX}`, opmerking: "delete() op niet-bestaande ID's is probleemloos -- dit dekt gewoon het volledige mogelijke bereik." });
   } catch (err) {
     return NextResponse.json(
       { error: "Opruimen mislukt.", details: err instanceof Error ? err.message : String(err) },
