@@ -14,16 +14,16 @@ const CONNECTOR_SEARCH_TOLERANCE_M = 20; // zelfde waarde als cached-nwb-provide
  *
  * Fase M6/M7 (structurele fix), 11-9-2026. Berekent de union-find-clustering
  * ÉÉN KEER, als aparte, eenmalige admin-actie -- niet bij elke aanvraag.
- * Schrijft de resulterende fromClusterId/toClusterId direct terug in de
- * bestaande, gebatchte segmentdocumenten (overschrijft elk batch-document
- * met dezelfde segmenten + de twee nieuwe velden).
  *
- * HERZIEN, 11-9-2026: eerste versie timede live uit (10.475ms, geen JSON-
- * respons). Eerdere schatting (lezen ~3,2s + clustering ~2,9-3,6s = ~6-7s)
- * VERGAT de terugschrijf-stap (330 documenten) mee te rekenen. reportProgress
- * toegevoegd op elke stap, inclusief per schrijfgroep -- zelfde bewezen
- * patroon als test-knot-leg-isolated, om nu precies te zien welke stap
- * de tijd kost i.p.v. te gokken.
+ * HERZIEN (2), 11-9-2026: live gemeten dat lezen (~4s) + clusteren (~4,6-5s,
+ * NIET fully done binnen budget) samen al ~8,7-9,5s kosten -- GEEN ruimte
+ * meer over voor het terugschrijven van 330 documenten in hetzelfde
+ * endpoint. Dit endpoint doet daarom NU ALLEEN lezen + clusteren, en geeft
+ * de toewijzingen terug als JSON. Het daadwerkelijke terugschrijven gebeurt
+ * client-georkestreerd, in een APARTE aanvraag, via de al-bestaande,
+ * bewezen `/api/admin/migrate-nwb-to-production`-schrijflogica (dezelfde
+ * infrastructuur die de oorspronkelijke migratie al succesvol gebruikte) --
+ * geen nieuwe, ongeteste schrijfweg nodig.
  */
 export async function POST(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -60,11 +60,9 @@ export async function POST(req: NextRequest) {
     mark("batchesGelezen");
 
     const allSegments: SlimNwbSegment[] = [];
-    const segmentsByBatchDoc = new Map<string, SlimNwbSegment[]>();
     for (const doc of batchesSnap.docs) {
       const data = doc.data() as { segments: SlimNwbSegment[] };
       allSegments.push(...data.segments);
-      segmentsByBatchDoc.set(doc.id, data.segments);
     }
     mark("segmentenUitgepakt", { aantalSegmenten: allSegments.length });
 
@@ -73,33 +71,18 @@ export async function POST(req: NextRequest) {
     );
     mark("clusteringKlaar", { aantalToewijzingen: assignments.size });
 
-    // Terugschrijven: elk batch-document opnieuw opslaan met de cluster-ID's toegevoegd.
-    // Individuele set()-aanroepen, parallel in groepjes -- GEEN db.batch() (eerdere
-    // live "Transaction too big"-fout bij dat mechanisme, zie clear-goknoop-batched).
-    const PARALLEL_GROUP_SIZE = 20;
-    const batchDocIds = Array.from(segmentsByBatchDoc.keys());
-    for (let i = 0; i < batchDocIds.length; i += PARALLEL_GROUP_SIZE) {
-      const group = batchDocIds.slice(i, i + PARALLEL_GROUP_SIZE);
-      await Promise.all(
-        group.map((docId) => {
-          const segs = segmentsByBatchDoc.get(docId)!;
-          const updatedSegs = segs.map((s) => {
-            const assignment = assignments.get(s.id);
-            return assignment ? { ...s, fromClusterId: assignment.fromClusterId, toClusterId: assignment.toClusterId } : s;
-          });
-          return batchesRef.doc(docId).set({ segments: updatedSegs });
-        })
-      );
-      mark("terugschrijven voortgang", { groepenKlaar: Math.floor(i / PARALLEL_GROUP_SIZE) + 1, totaalGroepen: Math.ceil(batchDocIds.length / PARALLEL_GROUP_SIZE) });
-    }
-    mark("terugschrijvenKlaar");
+    // Compacte vorm: alleen segmentId + de twee cluster-ID's -- niet de volledige
+    // segmenten (die heeft de client al, via read-active-nwb-segments).
+    const compactAssignments: Record<string, { f: string; t: string }> = {};
+    for (const [segId, a] of assignments) compactAssignments[segId] = { f: a.fromClusterId, t: a.toClusterId };
+    mark("compacteVormKlaar");
 
     return NextResponse.json({
       ok: true,
       nwbDatasetVersionId,
       aantalSegmenten: allSegments.length,
-      aantalBatchDocumenten: batchDocIds.length,
       aantalClusterToewijzingen: assignments.size,
+      assignments: compactAssignments,
       timings,
     });
   } catch (err) {
