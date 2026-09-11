@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { computeNwbClusterAssignments, type SlimNwbSegment } from "@/lib/nwb-analysis/combined-graph";
+import { reportProgress } from "@/lib/diagnostics/report-progress";
 
 export const maxDuration = 10;
 export const dynamic = "force-dynamic";
@@ -17,10 +18,12 @@ const CONNECTOR_SEARCH_TOLERANCE_M = 20; // zelfde waarde als cached-nwb-provide
  * bestaande, gebatchte segmentdocumenten (overschrijft elk batch-document
  * met dezelfde segmenten + de twee nieuwe velden).
  *
- * Live gemeten tijdsbudget (10-9-2026, 08:52): lezen ~3,2s + clustering
- * ~2,9-3,6s (229k punten) = ~6-7s. Dit endpoint doet GEEN GoKnoop-graaf-
- * opbouw, GEEN connectorverwerking, GEEN Dijkstra -- puur lezen + clusteren
- * + terugschrijven, dus de volledige 10s-marge is hiervoor beschikbaar.
+ * HERZIEN, 11-9-2026: eerste versie timede live uit (10.475ms, geen JSON-
+ * respons). Eerdere schatting (lezen ~3,2s + clustering ~2,9-3,6s = ~6-7s)
+ * VERGAT de terugschrijf-stap (330 documenten) mee te rekenen. reportProgress
+ * toegevoegd op elke stap, inclusief per schrijfgroep -- zelfde bewezen
+ * patroon als test-knot-leg-isolated, om nu precies te zien welke stap
+ * de tijd kost i.p.v. te gokken.
  */
 export async function POST(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -44,12 +47,17 @@ export async function POST(req: NextRequest) {
 
   const t0 = Date.now();
   const timings: Record<string, number> = {};
+  function mark(label: string, extra?: Record<string, unknown>) {
+    timings[label] = Date.now() - t0;
+    reportProgress("latest", `precompute: ${label}`, { elapsedMs: Date.now() - t0, ...extra });
+  }
+  reportProgress("latest", "precompute: START", { elapsedMs: 0 });
 
   try {
     const db = getDb();
     const batchesRef = db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches");
     const batchesSnap = await batchesRef.get();
-    timings.batchesGelezenMs = Date.now() - t0;
+    mark("batchesGelezen");
 
     const allSegments: SlimNwbSegment[] = [];
     const segmentsByBatchDoc = new Map<string, SlimNwbSegment[]>();
@@ -58,10 +66,12 @@ export async function POST(req: NextRequest) {
       allSegments.push(...data.segments);
       segmentsByBatchDoc.set(doc.id, data.segments);
     }
-    timings.segmentenUitgepaktMs = Date.now() - t0;
+    mark("segmentenUitgepakt", { aantalSegmenten: allSegments.length });
 
-    const assignments = await computeNwbClusterAssignments(allSegments, CONNECTOR_SEARCH_TOLERANCE_M);
-    timings.clusteringKlaarMs = Date.now() - t0;
+    const assignments = await computeNwbClusterAssignments(allSegments, CONNECTOR_SEARCH_TOLERANCE_M, (label, extra) =>
+      reportProgress("latest", `precompute-clustering: ${label}`, extra)
+    );
+    mark("clusteringKlaar", { aantalToewijzingen: assignments.size });
 
     // Terugschrijven: elk batch-document opnieuw opslaan met de cluster-ID's toegevoegd.
     // Individuele set()-aanroepen, parallel in groepjes -- GEEN db.batch() (eerdere
@@ -80,8 +90,9 @@ export async function POST(req: NextRequest) {
           return batchesRef.doc(docId).set({ segments: updatedSegs });
         })
       );
+      mark("terugschrijven voortgang", { groepenKlaar: Math.floor(i / PARALLEL_GROUP_SIZE) + 1, totaalGroepen: Math.ceil(batchDocIds.length / PARALLEL_GROUP_SIZE) });
     }
-    timings.terugschrijvenKlaarMs = Date.now() - t0;
+    mark("terugschrijvenKlaar");
 
     return NextResponse.json({
       ok: true,
@@ -92,6 +103,7 @@ export async function POST(req: NextRequest) {
       timings,
     });
   } catch (err) {
+    reportProgress("latest", "precompute: EXCEPTION", { error: err instanceof Error ? err.message : String(err) });
     return NextResponse.json(
       { error: "Precompute mislukt.", details: err instanceof Error ? err.message : String(err), timings },
       { status: 502 }
