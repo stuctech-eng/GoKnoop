@@ -130,32 +130,47 @@ function buildBaseGraph(
 
   const uf = new UnionFind();
   const pointKey = (segId: string, end: "from" | "to") => `${segId}:${end}`;
-  const rawPoints: { key: string; x: number; y: number }[] = [];
+  type RawPoint = { key: string; x: number; y: number; cx: number; cy: number };
+  const rawPoints: RawPoint[] = [];
   for (const seg of setBSegments) {
     uf.add(pointKey(seg.id, "from"));
     uf.add(pointKey(seg.id, "to"));
-    rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y });
-    rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y });
+    rawPoints.push({ key: pointKey(seg.id, "from"), x: seg.from.x, y: seg.from.y, cx: Math.floor(seg.from.x / toleranceM), cy: Math.floor(seg.from.y / toleranceM) });
+    rawPoints.push({ key: pointKey(seg.id, "to"), x: seg.to.x, y: seg.to.y, cx: Math.floor(seg.to.x / toleranceM), cy: Math.floor(seg.to.y / toleranceM) });
   }
   log("Punten verzameld", { puntenAantal: rawPoints.length });
 
-  const grid = new Map<string, typeof rawPoints>();
-  const cellOf = (x: number, y: number) => `${Math.floor(x / toleranceM)}:${Math.floor(y / toleranceM)}`;
+  // TOEGEVOEGD 10-9-2026, Fase M6/M7 (laatste bottleneck, live bevestigd via
+  // reportProgress-diagnose: buildBaseGraph is volledig synchroon, dus geen
+  // enkele voortgangsmelding komt ooit door zolang deze functie loopt --
+  // de clustering zelf bleek de resterende, niet eerder gemeten kostenpost).
+  // cx/cy nu vooraf berekend i.p.v. per punt een string te bouwen/parsen
+  // (`cellOf(...).split(":").map(Number)`), en de grid-sleutel als simpel
+  // getallenpaar i.p.v. stringconcatenatie.
+  const grid = new Map<string, RawPoint[]>();
+  const cellKey = (cx: number, cy: number) => cx * 1000003 + cy; // eenvoudige, snelle numerieke sleutel i.p.v. stringconcatenatie
   for (const p of rawPoints) {
-    const cell = cellOf(p.x, p.y);
-    if (!grid.has(cell)) grid.set(cell, []);
-    grid.get(cell)!.push(p);
+    const cell = cellKey(p.cx, p.cy);
+    let bucket = grid.get(String(cell));
+    if (!bucket) {
+      bucket = [];
+      grid.set(String(cell), bucket);
+    }
+    bucket.push(p);
   }
   log("Grid gebouwd", { celAantal: grid.size });
 
   for (const p of rawPoints) {
-    const [cx, cy] = cellOf(p.x, p.y).split(":").map(Number);
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
-        const candidates = grid.get(`${cx + dx}:${cy + dy}`);
+        const candidates = grid.get(String(cellKey(p.cx + dx, p.cy + dy)));
         if (!candidates) continue;
         for (const q of candidates) {
           if (p === q) continue;
+          // Goedkope voorcontrole (bijna O(1) met path compression) vóór de
+          // dure Math.hypot-aanroep -- in dichte gebieden delen veel punten
+          // al hetzelfde cluster, dan is de afstandsberekening overbodig werk.
+          if (uf.find(p.key) === uf.find(q.key)) continue;
           if (Math.hypot(p.x - q.x, p.y - q.y) <= toleranceM) uf.union(p.key, q.key);
         }
       }
