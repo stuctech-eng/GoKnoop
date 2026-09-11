@@ -243,7 +243,13 @@ async function buildBaseGraph(
       if (!clusterRepresentative.has(seg.fromClusterId!)) clusterRepresentative.set(seg.fromClusterId!, { x: seg.from.x, y: seg.from.y });
       if (!clusterRepresentative.has(seg.toClusterId!)) clusterRepresentative.set(seg.toClusterId!, { x: seg.to.x, y: seg.to.y });
     }
-    resolveCluster = (segId, end) => clusterIdByPointKey.get(pointKey(segId, end))!;
+    resolveCluster = (segId, end) => {
+      const found = clusterIdByPointKey.get(pointKey(segId, end));
+      if (found === undefined) {
+        throw new Error(`Vooraf-berekende clustering: geen clusterId gevonden voor segment '${segId}' (${end}) -- dit zou niet moeten gebeuren als alle segmenten precomputed zijn. Mogelijk een inconsistentie tussen de gebruikte segmentenset en de eerder berekende toewijzingen.`);
+      }
+      return found;
+    };
     for (const [root, pos] of clusterRepresentative) nodePosition.set(`nwb:${root}`, { x: pos.x, y: pos.y, source: "nwb" });
     log("Vooraf-berekende clusters toegepast", { clusterAantal: clusterRepresentative.size });
   } else {
