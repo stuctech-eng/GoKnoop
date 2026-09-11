@@ -29,6 +29,19 @@ export default function MigrateGoknoopBatchedRunnerPage() {
     return items;
   }
 
+  async function clearExisting(kind: "nodes" | "edges") {
+    const params = new URLSearchParams();
+    if (key) params.set("key", key);
+    const res = await fetch(`/api/admin/clear-goknoop-batched?${params.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ datasetVersionId, kind }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.details ?? json.error);
+    setLog((prev) => [...prev, `${kind}: ${json.verwijderd} oude gebatchte documenten opgeruimd.`]);
+  }
+
   async function writeBatches(kind: "nodes" | "edges", items: Record<string, unknown>[], batchSize: number) {
     for (let i = 0; i < items.length; i += batchSize) {
       const chunk = items.slice(i, i + batchSize);
@@ -52,7 +65,9 @@ export default function MigrateGoknoopBatchedRunnerPage() {
     try {
       setLog((prev) => [...prev, "Nodes lezen..."]);
       const nodes = await readAll("nodes");
-      setLog((prev) => [...prev, `Klaar: ${nodes.length} nodes. Wegschrijven in gebatcht formaat...`]);
+      setLog((prev) => [...prev, `Klaar: ${nodes.length} nodes. Oude batches opruimen...`]);
+      await clearExisting("nodes");
+      setLog((prev) => [...prev, "Wegschrijven in gebatcht formaat..."]);
       await writeBatches("nodes", nodes, NODE_BATCH_SIZE);
 
       setLog((prev) => [...prev, "Edges lezen..."]);
@@ -63,7 +78,9 @@ export default function MigrateGoknoopBatchedRunnerPage() {
       // gemeten: 78 edge-batch-documenten MET coords kostte 6,2s -- veel te traag
       // voor de bulk-graafopbouw die bij elke aanvraag gebeurt).
       const edges = edgesRaw.map(({ coords: _coords, ...topology }) => topology);
-      setLog((prev) => [...prev, `Klaar: ${edges.length} edges (topologie-only, coords gestript). Wegschrijven in gebatcht formaat...`]);
+      setLog((prev) => [...prev, `Klaar: ${edges.length} edges (topologie-only, coords gestript). Oude batches opruimen...`]);
+      await clearExisting("edges");
+      setLog((prev) => [...prev, "Wegschrijven in gebatcht formaat..."]);
       await writeBatches("edges", edges, EDGE_BATCH_SIZE);
 
       setLog((prev) => [...prev, "✅ Volledig klaar. Originele logicalNodes/edges-collecties zijn ongewijzigd."]);
