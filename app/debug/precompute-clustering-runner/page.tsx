@@ -8,7 +8,7 @@ type CompactAssignment = { f: string; t: string };
 type SlimNwbSegment = { id: string; [key: string]: unknown };
 
 export default function PrecomputeClusteringRunnerPage() {
-  const [nwbDatasetVersionId, setNwbDatasetVersionId] = useState("nwb-2026-09-10-v2-gebatcht");
+  const [nwbDatasetVersionId, setNwbDatasetVersionId] = useState(`nwb-${new Date().toISOString().slice(0, 10)}-v2-gebatcht`);
   const [key, setKey] = useState(() => (typeof window !== "undefined" ? window.localStorage.getItem("goknoop_debug_secret") || "" : ""));
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState<string[]>([]);
@@ -18,7 +18,7 @@ export default function PrecomputeClusteringRunnerPage() {
     setLog([]);
     try {
       // STAP 1: clustering berekenen (aparte, kleine aanvraag -- alleen lezen + clusteren).
-      setLog((prev) => [...prev, "Stap 1/3: clustering berekenen..."]);
+      setLog((prev) => [...prev, `Stap 1/3: clustering berekenen voor "${nwbDatasetVersionId}"...`]);
       const params = new URLSearchParams();
       if (key) params.set("key", key);
       const computeRes = await fetch(`/api/admin/precompute-nwb-clustering?${params.toString()}`, {
@@ -34,6 +34,11 @@ export default function PrecomputeClusteringRunnerPage() {
       }
       const assignments: Record<string, CompactAssignment> = computeJson.assignments;
       setLog((prev) => [...prev, `Klaar: ${computeJson.aantalClusterToewijzingen} clustertoewijzingen berekend (${computeJson.timings.clusteringKlaar ?? "?"}ms).`]);
+      if (computeJson.aantalClusterToewijzingen === 0) {
+        setLog((prev) => [...prev, `⚠️ STOP: 0 toewijzingen -- vermoedelijk een verkeerde/lege nwbDatasetVersionId ("${nwbDatasetVersionId}"). Controleer het veld en probeer opnieuw. NIET doorgegaan naar stap 2/3, om te voorkomen dat segmenten zonder cluster-ID's worden teruggeschreven.`]);
+        setRunning(false);
+        return;
+      }
 
       // STAP 2: originele segmenten ophalen (al-bestaand, bewezen snel eindpunt).
       setLog((prev) => [...prev, "Stap 2/3: originele segmenten ophalen..."]);
