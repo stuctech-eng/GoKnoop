@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   }
 
   const MAX_BATCH_INDEX = 999; // ruim boven het hoogst mogelijke aantal batches bij elke huidige batchgrootte
-  const FIRESTORE_BATCH_LIMIT = 450;
+  const FIRESTORE_BATCH_LIMIT = 100; // verkleind van 450 -- live "Transaction too big"-fout, veiligheidsmarge
 
   try {
     const db = getDb();
