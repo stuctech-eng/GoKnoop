@@ -9,9 +9,12 @@ import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator
 export const maxDuration = 10;
 export const dynamic = "force-dynamic";
 
-// Zelfde bekende, echte kandidaten als de eerdere live-test.
-const ORIGIN_CANDIDATES = ["CJSXBPUMG49vOPmYvhJd", "MQAnNb1IMego7dnVPXpS"];
-const DESTINATION_CANDIDATES = ["ZYuO6ZfzSa2iim0HcUbn"];
+// Zelfde bekende, echte kandidaten als de eerdere live-tests, nu selecteerbaar.
+const ROUTES: Record<string, { origin: string[]; destination: string[] }> = {
+  hilversum: { origin: ["CJSXBPUMG49vOPmYvhJd", "MQAnNb1IMego7dnVPXpS"], destination: ["ZYuO6ZfzSa2iim0HcUbn"] },
+  volendam: { origin: ["7fmSWIHYsKu3Wb3yOtM2"], destination: ["CJSXBPUMG49vOPmYvhJd"] },
+  lochem: { origin: ["0pgYw2kgDphP2IT1RAi7"], destination: ["61aNR7RWLxQhHTOfMHtm"] },
+};
 
 /**
  * GET /api/admin/test-knot-leg-isolated
@@ -30,6 +33,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }
+
+  const routeKey = req.nextUrl.searchParams.get("route") ?? "hilversum";
+  const selected = ROUTES[routeKey] ?? ROUTES.hilversum;
 
   const timings: Record<string, number> = {};
   const t0 = Date.now();
@@ -62,18 +68,19 @@ export async function GET(req: NextRequest) {
       goknoopNodeCountInProvider: provider.getAllNodeIds().length,
     };
 
-    const fromCandidates: LoopStartCandidate[] = ORIGIN_CANDIDATES.map((logicalNodeId) => ({ logicalNodeId }));
-    const toCandidates: LoopStartCandidate[] = DESTINATION_CANDIDATES.map((logicalNodeId) => ({ logicalNodeId }));
+    const fromCandidates: LoopStartCandidate[] = selected.origin.map((logicalNodeId) => ({ logicalNodeId }));
+    const toCandidates: LoopStartCandidate[] = selected.destination.map((logicalNodeId) => ({ logicalNodeId }));
 
     const knotResult = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidates);
     mark("knotLeg");
 
     if ("ok" in knotResult) {
-      return NextResponse.json({ ok: false, reason: knotResult.reason, message: knotResult.message, timings, graphCacheHit, graphStats });
+      return NextResponse.json({ ok: false, route: routeKey, reason: knotResult.reason, message: knotResult.message, timings, graphCacheHit, graphStats });
     }
 
     return NextResponse.json({
       ok: true,
+      route: routeKey,
       distanceM: knotResult.route.distanceM,
       edgeCount: knotResult.route.edges.length,
       timings,
