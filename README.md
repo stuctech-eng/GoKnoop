@@ -64,4 +64,4 @@ npm test
 
 ## PRIVACY & DATA
 
-Routedatabank-data mag niet worden doorgeleverd aan derden.
+Routedatabank-data mag niet worden doorgeleverd aan derden. 
