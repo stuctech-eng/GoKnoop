@@ -87,7 +87,7 @@ export default function Fase5cNwbComponentCheckPage() {
 
     await new Promise((r) => setTimeout(r, 20));
     const emptyProvider = new EmptyGraphProvider();
-    const nwbOnlyGraph = buildValidatedCombinedGraph(emptyProvider, nwbSegments, 20, []);
+    const nwbOnlyGraph = await buildValidatedCombinedGraph(emptyProvider, nwbSegments, 20, []);
     const componentStats = computeConnectedComponents(nwbOnlyGraph);
     setLog((prev) => [...prev, `NWB-only-graaf: ${componentStats.totalNodes} clusterknopen, ${componentStats.componentCount} componenten.`]);
 

@@ -35,7 +35,7 @@ async function buildFixtureProvider(): Promise<InMemoryGraphProvider> {
 describe("computeRouteBetweenCandidatesWithFallback", () => {
   it("gebruikt de tweede bestemmingskandidaat als de eerste wel bereikbaar is (dus dit test bewijst vooral het gelukkige pad)", async () => {
     const provider = await buildFixtureProvider();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const fromCandidates = [{ logicalNodeId: "origin", distanceM: 50 }];
     const toCandidates = [
       { logicalNodeId: "destIsolated", distanceM: 100 },
@@ -50,7 +50,7 @@ describe("computeRouteBetweenCandidatesWithFallback", () => {
 
   it("valt terug op de tweede bestemmingskandidaat als de eerste volledig onbekend/ongeldig is", async () => {
     const provider = await buildFixtureProvider();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const fromCandidates = [{ logicalNodeId: "origin", distanceM: 50 }];
     const toCandidates = [
       { logicalNodeId: "bestaat-niet", distanceM: 100 },
@@ -68,7 +68,7 @@ describe("computeRouteBetweenCandidatesWithFallback", () => {
 
   it("gebruikt ook de herkomst-fallback per bestemmingskandidaat (beide kanten samen)", async () => {
     const provider = await buildFixtureProvider();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const fromCandidates = [
       { logicalNodeId: "onbekende-herkomst", distanceM: 10 },
       { logicalNodeId: "origin", distanceM: 500 },
@@ -90,7 +90,7 @@ describe("computeRouteBetweenCandidatesWithFallback", () => {
     ];
     const provider = new InMemoryGraphProvider(nodes, []);
     await provider.load();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const result = await computeRouteBetweenCandidatesWithFallback(
       provider,
       "v-test",
@@ -119,7 +119,7 @@ describe("computeRouteBetweenCandidatesWithFallback", () => {
     ];
     const provider = new InMemoryGraphProvider(nodes, edges);
     await provider.load();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
 
     const fromCandidates = [{ logicalNodeId: "origin", distanceM: 10 }];
     const toCandidates = [

@@ -164,7 +164,7 @@ export default function Fase4CombinedTopologyPage() {
 
       setLog((prev) => [...prev, `${regionKey}: gecombineerde graaf bouwen + topologie meten...`]);
       await new Promise((r) => setTimeout(r, 20));
-      const combined = buildValidatedCombinedGraph(provider, nwbSegments, searchRadiusM, validatedConnectors);
+      const combined = await buildValidatedCombinedGraph(provider, nwbSegments, searchRadiusM, validatedConnectors);
       const componentStats = computeConnectedComponents(combined);
 
       let totalEdges = 0;

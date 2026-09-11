@@ -33,7 +33,7 @@ function makeNode(id: string, x: number, y: number): GraphNode {
 }
 
 describe("combined-graph", () => {
-  it("vindt GEEN route tussen twee volledig gescheiden GoKnoop-clusters zonder NWB (controlegeval)", () => {
+  it("vindt GEEN route tussen twee volledig gescheiden GoKnoop-clusters zonder NWB (controlegeval)", async () => {
     // Cluster A: knoop 1-2 verbonden. Cluster B: knoop 3-4 verbonden. Geen enkele
     // GoKnoop-verbinding tussen de twee clusters -- exact zoals het huidige,
     // echte Amsterdam/Hilversum-probleem.
@@ -51,12 +51,12 @@ describe("combined-graph", () => {
     ]);
     const provider = new FakeGraphProvider(nodes, edges);
 
-    const graph = buildCombinedGraph(provider, [], 5, { minX: -1000, minY: -1000, maxX: 200000, maxY: 1000 });
+    const graph = await buildCombinedGraph(provider, [], 5, { minX: -1000, minY: -1000, maxX: 200000, maxY: 1000 });
     const result = dijkstraOnCombinedGraph(graph, "1", "4");
     expect(result.found).toBe(false);
   });
 
-  it("vindt WEL een route wanneer een NWB-segment de twee clusters verbindt", () => {
+  it("vindt WEL een route wanneer een NWB-segment de twee clusters verbindt", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 100, 0)],
@@ -84,7 +84,7 @@ describe("combined-graph", () => {
       },
     ];
 
-    const graph = buildCombinedGraph(provider, nwbSegments, 5, { minX: -1000, minY: -1000, maxX: 200000, maxY: 1000 });
+    const graph = await buildCombinedGraph(provider, nwbSegments, 5, { minX: -1000, minY: -1000, maxX: 200000, maxY: 1000 });
     const result = dijkstraOnCombinedGraph(graph, "1", "4");
     expect(result.found).toBe(true);
     if (result.found) {
@@ -97,7 +97,7 @@ describe("combined-graph", () => {
     }
   });
 
-  it("maakt GEEN connector als de afstand groter is dan de tolerantie", () => {
+  it("maakt GEEN connector als de afstand groter is dan de tolerantie", async () => {
     const nodes = new Map<string, GraphNode>([["1", makeNode("1", 0, 0)]]);
     const edges = new Map<string, GraphEdge[]>([["1", []]]);
     const provider = new FakeGraphProvider(nodes, edges);
@@ -114,13 +114,13 @@ describe("combined-graph", () => {
       },
     ];
 
-    const graph = buildCombinedGraph(provider, nwbSegments, 5, { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 });
+    const graph = await buildCombinedGraph(provider, nwbSegments, 5, { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 });
     const result = dijkstraOnCombinedGraph(graph, "1", "nwb:nwb1:from");
     // Geen connector binnen 5m -- knoop 1 moet dus geïsoleerd blijven van het NWB-segment.
     expect(result.found).toBe(false);
   });
 
-  it("vindt de correcte kortste route in een grotere keten (schaal-controle voor de heap-gebaseerde Dijkstra)", () => {
+  it("vindt de correcte kortste route in een grotere keten (schaal-controle voor de heap-gebaseerde Dijkstra)", async () => {
     // Keten van 3000 knopen, elk verbonden met de volgende op afstand 10 --
     // geen enorme graaf, maar groot genoeg om te bevestigen dat de
     // heap-gebaseerde Dijkstra (i.p.v. de eerdere, te trage sort-per-stap-
@@ -136,7 +136,7 @@ describe("combined-graph", () => {
       edges.set(String(i), edgeList);
     }
     const provider = new FakeGraphProvider(nodes, edges);
-    const graph = buildCombinedGraph(provider, [], 5, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
+    const graph = await buildCombinedGraph(provider, [], 5, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
     const result = dijkstraOnCombinedGraph(graph, "0", String(CHAIN_LENGTH - 1));
     expect(result.found).toBe(true);
     if (result.found) {
@@ -144,7 +144,7 @@ describe("combined-graph", () => {
     }
   });
 
-  it("navigeert correct vanaf de 'to'-kant van een gedeeld edge-object (regressietest voor de zelf-lus-bug)", () => {
+  it("navigeert correct vanaf de 'to'-kant van een gedeeld edge-object (regressietest voor de zelf-lus-bug)", async () => {
     // TOEGEVOEGD 8-9-2026: de echte FirestoreGraphProvider indexeert ÉÉN
     // edge-object onder ZOWEL fromLogicalNodeId als toLogicalNodeId (voor
     // bidirectionele toegang, zie firestore-graph-provider.ts addEdgeIndex).
@@ -163,7 +163,7 @@ describe("combined-graph", () => {
       ["2", [sharedEdge]], // zelfde object, vanaf de 'to'-kant opgevraagd
     ]);
     const provider2 = new FakeGraphProvider(nodes2, edges2);
-    const graph2 = buildCombinedGraph(provider2, [], 5, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
+    const graph2 = await buildCombinedGraph(provider2, [], 5, { minX: -1, minY: -1, maxX: 1, maxY: 1 });
 
     const edgesFrom2 = graph2.adjacency.get("2") ?? [];
     expect(edgesFrom2.some((e) => e.to === "1")).toBe(true);
@@ -176,7 +176,7 @@ describe("combined-graph", () => {
 });
 
 describe("buildValidatedCombinedGraph (Fase 4 -- gebruikt gevalideerde connectoren, geen blinde nabijheid)", () => {
-  it("maakt GEEN connector als er geen gevalideerde kandidaat voor is, ook al liggen de punten dicht bij elkaar", () => {
+  it("maakt GEEN connector als er geen gevalideerde kandidaat voor is, ook al liggen de punten dicht bij elkaar", async () => {
     const nodes = new Map<string, GraphNode>([["1", makeNode("1", 0, 0)]]);
     const edges = new Map<string, GraphEdge[]>([["1", []]]);
     const provider = new FakeGraphProvider(nodes, edges);
@@ -184,20 +184,20 @@ describe("buildValidatedCombinedGraph (Fase 4 -- gebruikt gevalideerde connector
       { id: "nwb1", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 1, y: 0 }, to: { x: 100, y: 0 }, lengthM: 99 }, // 1m van knoop "1"
     ];
     // Geen validatedConnectors meegegeven -- ook al liggen ze dicht bij elkaar, mag er GEEN connector ontstaan.
-    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, []);
+    const graph = await buildValidatedCombinedGraph(provider, nwbSegments, 5, []);
     expect(graph.totalConnectorsCreated).toBe(0);
     const result = dijkstraOnCombinedGraph(graph, "1", "nwb:nwb1:from");
     expect(result.found).toBe(false);
   });
 
-  it("maakt WEL een connector-edge voor een expliciet gevalideerde, niet-afgewezen kandidaat", () => {
+  it("maakt WEL een connector-edge voor een expliciet gevalideerde, niet-afgewezen kandidaat", async () => {
     const nodes = new Map<string, GraphNode>([["1", makeNode("1", 0, 0)]]);
     const edges = new Map<string, GraphEdge[]>([["1", []]]);
     const provider = new FakeGraphProvider(nodes, edges);
     const nwbSegments: SlimNwbSegment[] = [{ id: "nwb1", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 1, y: 0 }, to: { x: 100, y: 0 }, lengthM: 99 }];
     const validatedConnectors: ValidatedConnectorInput[] = [{ goknoopNodeId: "1", nwbSegmentId: "nwb1", nwbEndpoint: "from", distanceM: 1, confidence: "high" }];
 
-    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
+    const graph = await buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
     expect(graph.totalConnectorsCreated).toBe(1);
     expect(graph.connectorsUsed).toEqual({ high: 1, lower: 0 });
 
@@ -206,7 +206,7 @@ describe("buildValidatedCombinedGraph (Fase 4 -- gebruikt gevalideerde connector
     if (result.found) expect(result.distanceM).toBe(1);
   });
 
-  it("telt high en lower afzonderlijk", () => {
+  it("telt high en lower afzonderlijk", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 1000, 0)],
@@ -224,11 +224,11 @@ describe("buildValidatedCombinedGraph (Fase 4 -- gebruikt gevalideerde connector
       { goknoopNodeId: "1", nwbSegmentId: "a", nwbEndpoint: "from", distanceM: 1, confidence: "high" },
       { goknoopNodeId: "2", nwbSegmentId: "b", nwbEndpoint: "from", distanceM: 1, confidence: "lower" },
     ];
-    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
+    const graph = await buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
     expect(graph.connectorsUsed).toEqual({ high: 1, lower: 1 });
   });
 
-  it("blijft de GoKnoop-graaf en NWB-graaf zelf ongewijzigd bouwen (zelfde als buildCombinedGraph, alleen stap 4 verschilt)", () => {
+  it("blijft de GoKnoop-graaf en NWB-graaf zelf ongewijzigd bouwen (zelfde als buildCombinedGraph, alleen stap 4 verschilt)", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 100, 0)],
@@ -239,7 +239,7 @@ describe("buildValidatedCombinedGraph (Fase 4 -- gebruikt gevalideerde connector
       ["2", [sharedEdge]],
     ]);
     const provider = new FakeGraphProvider(nodes, edges);
-    const graph = buildValidatedCombinedGraph(provider, [], 5, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 5, []);
     const result = dijkstraOnCombinedGraph(graph, "1", "2");
     expect(result.found).toBe(true);
     if (result.found) expect(result.distanceM).toBe(100);
@@ -247,7 +247,7 @@ describe("buildValidatedCombinedGraph (Fase 4 -- gebruikt gevalideerde connector
 });
 
 describe("computeConnectedComponents (Fase 4 -- topologie op de volledige gecombineerde graaf)", () => {
-  it("telt twee gescheiden GoKnoop-clusters als 2 componenten zolang er geen connector is", () => {
+  it("telt twee gescheiden GoKnoop-clusters als 2 componenten zolang er geen connector is", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 100, 0)],
@@ -261,7 +261,7 @@ describe("computeConnectedComponents (Fase 4 -- topologie op de volledige gecomb
       ["4", [{ id: "e2", fromLogicalNodeId: "3", toLogicalNodeId: "4", distanceM: 100, directionality: "unknown", geometry: [] }]],
     ]);
     const provider = new FakeGraphProvider(nodes, edges);
-    const graph = buildValidatedCombinedGraph(provider, [], 5, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 5, []);
     const stats = computeConnectedComponents(graph);
     expect(stats.componentCount).toBe(2);
     expect(stats.totalNodes).toBe(4);
@@ -269,7 +269,7 @@ describe("computeConnectedComponents (Fase 4 -- topologie op de volledige gecomb
     expect(stats.largestComponentPercent).toBe(50);
   });
 
-  it("verenigt twee GoKnoop-clusters tot 1 component zodra een gevalideerde NWB-connector ze verbindt", () => {
+  it("verenigt twee GoKnoop-clusters tot 1 component zodra een gevalideerde NWB-connector ze verbindt", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 100, 0)],
@@ -290,7 +290,7 @@ describe("computeConnectedComponents (Fase 4 -- topologie op de volledige gecomb
       { goknoopNodeId: "2", nwbSegmentId: "bridge", nwbEndpoint: "from", distanceM: 3, confidence: "high" },
       { goknoopNodeId: "3", nwbSegmentId: "bridge", nwbEndpoint: "to", distanceM: 3, confidence: "high" },
     ];
-    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
+    const graph = await buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
     const stats = computeConnectedComponents(graph);
     expect(stats.componentCount).toBe(1);
     expect(stats.largestComponentPercent).toBe(100);
@@ -305,7 +305,7 @@ describe("dijkstraWithCostModel + makeCostFn (Fase 5 -- empirisch kostenmodel)",
    * vandaag: NWB wint zolang D_nwb × F < D_goknoop, dus bij D_g=40, D_n=35
    * is het omslagpunt F = 40/35 ≈ 1,143.
    */
-  function buildParallelRoutesScenario() {
+  async function buildParallelRoutesScenario() {
     // GoKnoop-pad: 1 -> 2 -> 3, elk 20km, totaal 40km.
     const goknoopEdge1: GraphEdge = { id: "g1", fromLogicalNodeId: "1", toLogicalNodeId: "mid", distanceM: 20000, directionality: "unknown", geometry: [] };
     const goknoopEdge2: GraphEdge = { id: "g2", fromLogicalNodeId: "mid", toLogicalNodeId: "3", distanceM: 20000, directionality: "unknown", geometry: [] };
@@ -326,11 +326,11 @@ describe("dijkstraWithCostModel + makeCostFn (Fase 5 -- empirisch kostenmodel)",
       { goknoopNodeId: "1", nwbSegmentId: "shortcut", nwbEndpoint: "from", distanceM: 0, confidence: "high" },
       { goknoopNodeId: "3", nwbSegmentId: "shortcut", nwbEndpoint: "to", distanceM: 0, confidence: "high" },
     ];
-    return buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
+    return await buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
   }
 
-  it("bij F=1,00 (baseline) wint NWB (35km) van GoKnoop (40km) -- reproduceert de Fase 4-bevinding", () => {
-    const graph = buildParallelRoutesScenario();
+  it("bij F=1,00 (baseline) wint NWB (35km) van GoKnoop (40km) -- reproduceert de Fase 4-bevinding", async () => {
+    const graph = await buildParallelRoutesScenario();
     const result = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.0, 1.0));
     expect(result.found).toBe(true);
     if (result.found) {
@@ -340,15 +340,15 @@ describe("dijkstraWithCostModel + makeCostFn (Fase 5 -- empirisch kostenmodel)",
     }
   });
 
-  it("bij F=1,10 (onder het omslagpunt 1,143) wint NWB nog steeds", () => {
-    const graph = buildParallelRoutesScenario();
+  it("bij F=1,10 (onder het omslagpunt 1,143) wint NWB nog steeds", async () => {
+    const graph = await buildParallelRoutesScenario();
     const result = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.1, 1.0));
     expect(result.found).toBe(true);
     if (result.found) expect(result.goknoopEdgeCount).toBe(0);
   });
 
-  it("bij F=1,15 (boven het omslagpunt 1,143) wint GoKnoop -- het voorspelde omslagpunt klopt empirisch", () => {
-    const graph = buildParallelRoutesScenario();
+  it("bij F=1,15 (boven het omslagpunt 1,143) wint GoKnoop -- het voorspelde omslagpunt klopt empirisch", async () => {
+    const graph = await buildParallelRoutesScenario();
     const result = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.15, 1.0));
     expect(result.found).toBe(true);
     if (result.found) {
@@ -359,8 +359,8 @@ describe("dijkstraWithCostModel + makeCostFn (Fase 5 -- empirisch kostenmodel)",
     }
   });
 
-  it("distanceM (werkelijk) en costTotal (gewogen) zijn verschillende getallen zodra F != 1", () => {
-    const graph = buildParallelRoutesScenario();
+  it("distanceM (werkelijk) en costTotal (gewogen) zijn verschillende getallen zodra F != 1", async () => {
+    const graph = await buildParallelRoutesScenario();
     const result = dijkstraWithCostModel(graph, "1", "3", makeCostFn(1.0, 1.0));
     expect(result.found).toBe(true);
     if (result.found) {
@@ -383,14 +383,14 @@ describe("dijkstraWithCostModel + makeCostFn (Fase 5 -- empirisch kostenmodel)",
 });
 
 describe("CombinedEdge.nwbInfo.segmentId (10-9-2026, Geometry Integration Audit) -- betrouwbare segment-ID door de hele keten, geen reconstructie uit het cluster-knoop-ID", () => {
-  it("een NWB-edge draagt het originele segment.id, niet het (mogelijk afwijkende) cluster-wortel-ID", () => {
+  it("een NWB-edge draagt het originele segment.id, niet het (mogelijk afwijkende) cluster-wortel-ID", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 1000, 0)],
     ]);
     const provider = new FakeGraphProvider(nodes, new Map());
     const nwbSegments: SlimNwbSegment[] = [{ id: "wegvakken.origineel-id-123", bstCode: "FP", wegnummer: null, straatnaam: "Teststraat", from: { x: 0, y: 0 }, to: { x: 1000, y: 0 }, lengthM: 1000 }];
-    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, []);
+    const graph = await buildValidatedCombinedGraph(provider, nwbSegments, 5, []);
 
     // Zoek de NWB-edge op in de adjacency-lijst en controleer het segmentId direct.
     let foundSegmentId: string | undefined;
@@ -402,7 +402,7 @@ describe("CombinedEdge.nwbInfo.segmentId (10-9-2026, Geometry Integration Audit)
     expect(foundSegmentId).toBe("wegvakken.origineel-id-123");
   });
 
-  it("KERNGEVAL: bij een cluster van MEERDERE samengevoegde punten is het segmentId nog steeds correct -- dit was precies de situatie waarin het oude, parseer-gebaseerde cluster-knoop-ID onbetrouwbaar bleek", () => {
+  it("KERNGEVAL: bij een cluster van MEERDERE samengevoegde punten is het segmentId nog steeds correct -- dit was precies de situatie waarin het oude, parseer-gebaseerde cluster-knoop-ID onbetrouwbaar bleek", async () => {
     // Drie NWB-segmenten die allemaal in hetzelfde ene punt samenkomen (een
     // kruising) -- hun from/to-clusters smelten samen tot één cluster met
     // 3+ leden, dus de cluster-wortel is NIET meer gelijk aan slechts één
@@ -414,7 +414,7 @@ describe("CombinedEdge.nwbInfo.segmentId (10-9-2026, Geometry Integration Audit)
       { id: "wegvakken.oost", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 100, y: 0 }, to: { x: 1, y: 0 }, lengthM: 100 }, // eindigt vlak bij (0,0) -- binnen tolerantie
       { id: "wegvakken.zuid", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: -100 }, to: { x: 0, y: 1 }, lengthM: 100 }, // eindigt vlak bij (0,0)
     ];
-    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, []);
+    const graph = await buildValidatedCombinedGraph(provider, nwbSegments, 5, []);
 
     const foundSegmentIds = new Set<string>();
     for (const edges of graph.adjacency.values()) {
@@ -426,7 +426,7 @@ describe("CombinedEdge.nwbInfo.segmentId (10-9-2026, Geometry Integration Audit)
     expect(foundSegmentIds).toEqual(new Set(["wegvakken.noord", "wegvakken.oost", "wegvakken.zuid"]));
   });
 
-  it("dijkstraWithCostModel geeft het correcte nwbSegmentId per stap terug in CostAwareStep (de productie-Dijkstra, niet alleen de oudere variant)", () => {
+  it("dijkstraWithCostModel geeft het correcte nwbSegmentId per stap terug in CostAwareStep (de productie-Dijkstra, niet alleen de oudere variant)", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 1000, 0)],
@@ -437,7 +437,7 @@ describe("CombinedEdge.nwbInfo.segmentId (10-9-2026, Geometry Integration Audit)
       { goknoopNodeId: "1", nwbSegmentId: "wegvakken.stap-test", nwbEndpoint: "from", distanceM: 0, confidence: "high" },
       { goknoopNodeId: "2", nwbSegmentId: "wegvakken.stap-test", nwbEndpoint: "to", distanceM: 0, confidence: "high" },
     ];
-    const graph = buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
+    const graph = await buildValidatedCombinedGraph(provider, nwbSegments, 5, validatedConnectors);
     const result = dijkstraWithCostModel(graph, "1", "2", makeCostFn(1.0, 1.0));
 
     expect(result.found).toBe(true);

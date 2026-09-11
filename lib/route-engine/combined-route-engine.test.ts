@@ -25,15 +25,15 @@ function makeNode(id: string, x: number, y: number): GraphNode {
 }
 
 /** Bouwt de graaf op precies dezelfde manier als de (nu cachende) productie-laag dat doet. */
-function buildTestGraph(provider: GraphProvider, nwbSegments: SlimNwbSegment[] = [], connectors: ValidatedConnectorInput[] = []) {
-  return buildValidatedCombinedGraph(provider, nwbSegments, 20, connectors);
+async function buildTestGraph(provider: GraphProvider, nwbSegments: SlimNwbSegment[] = [], connectors: ValidatedConnectorInput[] = []) {
+  return await buildValidatedCombinedGraph(provider, nwbSegments, 20, connectors);
 }
 
 describe("computeCombinedRouteAsRoute (Fase M5, 10-9-2026) -- bouwt een ECHTE Route via de gecombineerde engine", () => {
   it("bouwt een geldige Route met correcte metadata en source-markering", async () => {
     const goknoopEdge: GraphEdge = { id: "g1", fromLogicalNodeId: "1", toLogicalNodeId: "2", distanceM: 100, directionality: "bidirectional", geometry: [{ x: 0, y: 0 }, { x: 100, y: 0 }] };
     const provider = new FakeGraphProvider(new Map([["1", makeNode("1", 0, 0)], ["2", makeNode("2", 100, 0)]]), new Map([["1", [goknoopEdge]], ["2", [goknoopEdge]]]));
-    const graph = buildTestGraph(provider);
+    const graph = await buildTestGraph(provider);
 
     const result = await computeCombinedRouteAsRoute(graph, provider, "test-dataset", "1", "2");
     expect(result.ok).toBe(true);
@@ -50,7 +50,7 @@ describe("computeCombinedRouteAsRoute (Fase M5, 10-9-2026) -- bouwt een ECHTE Ro
 
   it("geeft node_not_found terug voor een onbekend knooppunt", async () => {
     const provider = new FakeGraphProvider(new Map(), new Map());
-    const graph = buildTestGraph(provider);
+    const graph = await buildTestGraph(provider);
     const result = await computeCombinedRouteAsRoute(graph, provider, "test-dataset", "x", "y");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("node_not_found");
@@ -59,7 +59,7 @@ describe("computeCombinedRouteAsRoute (Fase M5, 10-9-2026) -- bouwt een ECHTE Ro
   it("geeft disconnected terug als er geen pad bestaat", async () => {
     const nodes = new Map([["1", makeNode("1", 0, 0)], ["2", makeNode("2", 1000, 0)]]);
     const provider = new FakeGraphProvider(nodes, new Map());
-    const graph = buildTestGraph(provider);
+    const graph = await buildTestGraph(provider);
     const result = await computeCombinedRouteAsRoute(graph, provider, "test-dataset", "1", "2");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("disconnected");
@@ -67,32 +67,32 @@ describe("computeCombinedRouteAsRoute (Fase M5, 10-9-2026) -- bouwt een ECHTE Ro
 });
 
 describe("computeCombinedRoute (productie-module, Fase G/H/I, HERZIEN Fase K)", () => {
-  it("bevestigt de definitieve, Fase-C-gekozen productiewaarden", () => {
+  it("bevestigt de definitieve, Fase-C-gekozen productiewaarden", async () => {
     expect(F_NWB_PRODUCTION).toBe(1.2);
     expect(F_CONNECTOR_PRODUCTION).toBe(1.0);
   });
 
-  it("geeft node_not_found terug als from/to niet in de graaf zit -- geen crash, geen aanname", () => {
+  it("geeft node_not_found terug als from/to niet in de graaf zit -- geen crash, geen aanname", async () => {
     const provider = new FakeGraphProvider(new Map(), new Map());
-    const graph = buildTestGraph(provider);
+    const graph = await buildTestGraph(provider);
     const result = computeCombinedRoute(graph, "onbestaand-1", "onbestaand-2");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("node_not_found");
   });
 
-  it("geeft disconnected terug als er geen enkel pad bestaat", () => {
+  it("geeft disconnected terug als er geen enkel pad bestaat", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 1000, 0)],
     ]);
     const provider = new FakeGraphProvider(nodes, new Map());
-    const graph = buildTestGraph(provider);
+    const graph = await buildTestGraph(provider);
     const result = computeCombinedRoute(graph, "1", "2");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("disconnected");
   });
 
-  it("accepteert een normale, gezonde route", () => {
+  it("accepteert een normale, gezonde route", async () => {
     const goknoopEdge: GraphEdge = { id: "g1", fromLogicalNodeId: "1", toLogicalNodeId: "2", distanceM: 5000, directionality: "unknown", geometry: [] };
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
@@ -103,7 +103,7 @@ describe("computeCombinedRoute (productie-module, Fase G/H/I, HERZIEN Fase K)", 
       ["2", [goknoopEdge]],
     ]);
     const provider = new FakeGraphProvider(nodes, edges);
-    const graph = buildTestGraph(provider);
+    const graph = await buildTestGraph(provider);
     const result = computeCombinedRoute(graph, "1", "2");
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -113,7 +113,7 @@ describe("computeCombinedRoute (productie-module, Fase G/H/I, HERZIEN Fase K)", 
     }
   });
 
-  it("WIJST een 337km-achtige anomalie AF -- de validatielaag werkt end-to-end", () => {
+  it("WIJST een 337km-achtige anomalie AF -- de validatielaag werkt end-to-end", async () => {
     const nodes = new Map<string, GraphNode>();
     const edgesByNode = new Map<string, GraphEdge[]>();
     function addGoknoopEdge(id: string, a: string, b: string, distanceM: number) {
@@ -134,7 +134,7 @@ describe("computeCombinedRoute (productie-module, Fase G/H/I, HERZIEN Fase K)", 
     ];
 
     const provider = new FakeGraphProvider(nodes, edgesByNode);
-    const graph = buildTestGraph(provider, [], validatedConnectors);
+    const graph = await buildTestGraph(provider, [], validatedConnectors);
     const result = computeCombinedRoute(graph, "start", "doel");
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -143,27 +143,27 @@ describe("computeCombinedRoute (productie-module, Fase G/H/I, HERZIEN Fase K)", 
     }
   });
 
-  it("meet computeTimeMs -- nu ALLEEN Dijkstra-tijd, geen graafopbouw meer inbegrepen", () => {
+  it("meet computeTimeMs -- nu ALLEEN Dijkstra-tijd, geen graafopbouw meer inbegrepen", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 100, 0)],
     ]);
     const edge: GraphEdge = { id: "e1", fromLogicalNodeId: "1", toLogicalNodeId: "2", distanceM: 100, directionality: "unknown", geometry: [] };
     const provider = new FakeGraphProvider(nodes, new Map([["1", [edge]], ["2", [edge]]]));
-    const graph = buildTestGraph(provider);
+    const graph = await buildTestGraph(provider);
     const result = computeCombinedRoute(graph, "1", "2");
     expect(result.ok).toBe(true);
     if (result.ok) expect(typeof result.computeTimeMs).toBe("number");
   });
 
-  it("gebruikt graph.nodePosition voor de hemelsbrede afstand -- geen GraphProvider meer nodig in deze functie", () => {
+  it("gebruikt graph.nodePosition voor de hemelsbrede afstand -- geen GraphProvider meer nodig in deze functie", async () => {
     const nodes = new Map<string, GraphNode>([
       ["1", makeNode("1", 0, 0)],
       ["2", makeNode("2", 3000, 4000)],
     ]);
     const edge: GraphEdge = { id: "e1", fromLogicalNodeId: "1", toLogicalNodeId: "2", distanceM: 5000, directionality: "unknown", geometry: [] };
     const provider = new FakeGraphProvider(nodes, new Map([["1", [edge]], ["2", [edge]]]));
-    const graph = buildTestGraph(provider);
+    const graph = await buildTestGraph(provider);
     const result = computeCombinedRoute(graph, "1", "2");
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.straightLineDistanceM).toBe(5000);

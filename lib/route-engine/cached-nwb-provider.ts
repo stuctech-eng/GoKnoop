@@ -86,7 +86,7 @@ export async function loadCachedCombinedGraph(provider: GraphProvider, datasetVe
     reportProgress("latest", "loadCachedCombinedGraph: connectoren opgehaald", { aantalConnectoren: validatedConnectors.length });
   }
 
-  const graph = buildValidatedCombinedGraph(provider, nwbSegments, CONNECTOR_SEARCH_TOLERANCE_M, validatedConnectors, (label, extra) =>
+  const graph = await buildValidatedCombinedGraph(provider, nwbSegments, CONNECTOR_SEARCH_TOLERANCE_M, validatedConnectors, (label, extra) =>
     reportProgress("latest", label, extra)
   );
   reportProgress("latest", "loadCachedCombinedGraph: buildValidatedCombinedGraph teruggekeerd -- volledig klaar");

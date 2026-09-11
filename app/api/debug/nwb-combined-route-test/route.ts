@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
     }
     const connectorSearchBbox = { minX: minX - 50, minY: minY - 50, maxX: maxX + 50, maxY: maxY + 50 };
 
-    const graph = buildCombinedGraph(provider, nwbSegments, toleranceM, connectorSearchBbox);
+    const graph = await buildCombinedGraph(provider, nwbSegments, toleranceM, connectorSearchBbox);
     const result = dijkstraOnCombinedGraph(graph, from, to);
 
     if (!result.found) {

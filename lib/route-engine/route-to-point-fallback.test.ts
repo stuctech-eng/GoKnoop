@@ -32,7 +32,7 @@ async function buildFixtureProvider(): Promise<InMemoryGraphProvider> {
 describe("computeRouteWithFallback", () => {
   it("valt terug van een niet-bereikbare kandidaat naar een werkende, en rapporteert dat transparant", async () => {
     const provider = await buildFixtureProvider();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const candidates = [
       { logicalNodeId: "isolated", distanceM: 200 }, // geen enkele edge, geen route mogelijk
       { logicalNodeId: "hub", distanceM: 800 },
@@ -52,7 +52,7 @@ describe("computeRouteWithFallback", () => {
 
   it("gebruikt kandidaat 1 direct als die al werkt", async () => {
     const provider = await buildFixtureProvider();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const candidates = [
       { logicalNodeId: "hub", distanceM: 100 },
       { logicalNodeId: "isolated", distanceM: 900 },
@@ -67,7 +67,7 @@ describe("computeRouteWithFallback", () => {
 
   it("geeft een duidelijke faal-uitkomst als geen enkele kandidaat werkt", async () => {
     const provider = await buildFixtureProvider();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const candidates = [{ logicalNodeId: "isolated", distanceM: 100 }];
     const result = await computeRouteWithFallback(provider, "v-test", graph, candidates, "target");
     expect("ok" in result && result.ok === false).toBe(true);
@@ -91,7 +91,7 @@ describe("computeRouteWithFallback", () => {
     ];
     const provider = new InMemoryGraphProvider(nodes, edges);
     await provider.load();
-    const graph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const graph = await buildValidatedCombinedGraph(provider, [], 20, []);
 
     const fromCandidates = [
       { logicalNodeId: "originA", distanceM: 50 },

@@ -97,7 +97,7 @@ export async function GET(req: NextRequest) {
     }
     const connectorSearchBbox = { minX: minX - 50, minY: minY - 50, maxX: maxX + 50, maxY: maxY + 50 };
 
-    const graph = buildCombinedGraph(provider, allSegments, toleranceM, connectorSearchBbox);
+    const graph = await buildCombinedGraph(provider, allSegments, toleranceM, connectorSearchBbox);
     const dijkstraResult = dijkstraOnCombinedGraph(graph, region.fromNodeId, region.toNodeId);
 
     return NextResponse.json({

@@ -155,7 +155,7 @@ export default function Fase5CostModelResearchPage() {
         .filter((c) => c.confidence !== "rejected")
         .map((c) => ({ goknoopNodeId: c.goknoopNodeId, nwbSegmentId: c.nwbSegmentId, nwbEndpoint: c.nwbEndpoint, distanceM: c.distanceM, confidence: c.confidence as "high" | "lower" }));
 
-      const combined: CombinedGraph = buildValidatedCombinedGraph(provider, nwbSegments, 20, validatedConnectors);
+      const combined: CombinedGraph = await buildValidatedCombinedGraph(provider, nwbSegments, 20, validatedConnectors);
       setLog((prev) => [...prev, `${regionKey}: graaf klaar (${validatedConnectors.length} connectoren). F-sweep starten...`]);
       await new Promise((r) => setTimeout(r, 20));
 

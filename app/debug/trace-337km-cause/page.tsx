@@ -151,7 +151,7 @@ export default function Trace337kmCausePage() {
       return;
     }
 
-    const combined = buildValidatedCombinedGraph(provider, nwbSegments, 20, validatedConnectors);
+    const combined = await buildValidatedCombinedGraph(provider, nwbSegments, 20, validatedConnectors);
 
     const traceResults: Record<string, unknown> = {};
     for (const pair of TRACE_PAIRS) {

@@ -108,7 +108,7 @@ export default function Fase5cVqdInteractionPage() {
     }
 
     // --- Punt 1: component van VQd... in de PURE GoKnoop-graaf. ---
-    const goknoopOnlyGraph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const goknoopOnlyGraph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const goknoopOnlyComponents = computeConnectedComponents(goknoopOnlyGraph);
     const suspectRoot = goknoopOnlyComponents.componentOfNode.get(SUSPECT_NODE_ID);
     let suspectComponentSize = 0;
@@ -173,7 +173,7 @@ export default function Fase5cVqdInteractionPage() {
       if (minSegId) nearestNwbSegmentToSuspect = { segmentId: minSegId, distanceM: Math.round(minDist) };
     }
 
-    const combined = buildValidatedCombinedGraph(provider, nwbSegments, 20, validatedConnectors);
+    const combined = await buildValidatedCombinedGraph(provider, nwbSegments, 20, validatedConnectors);
 
     // --- Punt 3: volledige padtrace v1, met expliciete lijst van connector-overgangen. ---
     setLog((prev) => [...prev, "Route v1 natrekken..."]);

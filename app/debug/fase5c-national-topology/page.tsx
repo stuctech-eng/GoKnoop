@@ -106,7 +106,7 @@ export default function Fase5cNationalTopologyPage() {
     }
 
     // 1. Connected components (GoKnoop-only) -- bevestiging van Fase 1.
-    const goknoopOnlyGraph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const goknoopOnlyGraph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const componentStats = computeConnectedComponents(goknoopOnlyGraph);
     setLog((prev) => [...prev, `Componenten: ${componentStats.componentCount}, grootste: ${componentStats.largestComponentSize} (${componentStats.largestComponentPercent.toFixed(1)}%).`]);
 

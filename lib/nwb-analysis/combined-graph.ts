@@ -76,18 +76,18 @@ class UnionFind {
  * buildValidatedCombinedGraph (Fase 4, echte gevalideerde connectors)
  * dezelfde, al-geteste snap-logica hergebruiken zonder duplicatie.
  */
-function buildBaseGraph(
+async function buildBaseGraph(
   provider: GraphProvider,
   nwbSegments: SlimNwbSegment[],
   toleranceM: number,
   onProgress?: (label: string, extra?: Record<string, unknown>) => void
-): {
+): Promise<{
   adjacency: Map<string, CombinedEdge[]>;
   nodePosition: Map<string, { x: number; y: number; source: "goknoop" | "nwb" }>;
   addEdge: (from: string, to: string, edge: CombinedEdge) => void;
   findNwbClusterNodeId: (segId: string, end: "from" | "to") => string;
   clusterList: { id: string; x: number; y: number }[];
-} {
+}> {
   // TOEGEVOEGD 10-9-2026, Fase M6/M7-diagnose: voortgang per stap, via een
   // OPTIONELE, GEÏNJECTEERDE callback -- NIET via een directe Firestore-
   // afhankelijkheid hier. `combined-graph.ts` wordt ook door client-side
@@ -160,7 +160,9 @@ function buildBaseGraph(
   }
   log("Grid gebouwd", { celAantal: grid.size });
 
-  for (const p of rawPoints) {
+  const YIELD_EVERY_N_POINTS = 5000;
+  for (let idx = 0; idx < rawPoints.length; idx++) {
+    const p = rawPoints[idx];
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
         const candidates = grid.get(String(cellKey(p.cx + dx, p.cy + dy)));
@@ -174,6 +176,17 @@ function buildBaseGraph(
           if (Math.hypot(p.x - q.x, p.y - q.y) <= toleranceM) uf.union(p.key, q.key);
         }
       }
+    }
+    // TOEGEVOEGD 10-9-2026: periodieke yield. Zonder dit is buildBaseGraph
+    // volledig synchroon -- geen enkele voortgangsmelding komt dan ooit
+    // daadwerkelijk het netwerk op vóór een eventuele platform-timeout
+    // (live bevestigd: 127 checkpoints, geen enkele van bínnen deze functie).
+    // `setImmediate` geeft de event loop precies genoeg ruimte om wachtende
+    // Firestore-writes te versturen, zonder de berekening zelf te vertragen
+    // met een volledige macrotaak-wisseling bij elk punt.
+    if (idx > 0 && idx % YIELD_EVERY_N_POINTS === 0) {
+      log("clustering voortgang", { verwerkt: idx, totaal: rawPoints.length });
+      await new Promise((resolve) => setImmediate(resolve));
     }
   }
   log("Union-find-clustering klaar");
@@ -217,14 +230,14 @@ function buildBaseGraph(
  * beperking (de volledige GoKnoop-graaf blijft wel altijd meedoen voor
  * Dijkstra zelf).
  */
-export function buildCombinedGraph(
+export async function buildCombinedGraph(
   provider: GraphProvider,
   nwbSegments: SlimNwbSegment[],
   toleranceM: number,
   connectorSearchBbox: { minX: number; minY: number; maxX: number; maxY: number },
   onProgress?: (label: string, extra?: Record<string, unknown>) => void
-): CombinedGraph {
-  const { adjacency, nodePosition, addEdge, clusterList } = buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
+): Promise<CombinedGraph> {
+  const { adjacency, nodePosition, addEdge, clusterList } = await buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
 
   const allNodeIds = provider.getAllNodeIds();
   let connectorCount = 0;
@@ -264,14 +277,14 @@ export type ValidatedCombinedGraph = CombinedGraph & {
   connectorsUsed: { high: number; lower: number };
 };
 
-export function buildValidatedCombinedGraph(
+export async function buildValidatedCombinedGraph(
   provider: GraphProvider,
   nwbSegments: SlimNwbSegment[],
   toleranceM: number,
   validatedConnectors: ValidatedConnectorInput[],
   onProgress?: (label: string, extra?: Record<string, unknown>) => void
-): ValidatedCombinedGraph {
-  const { adjacency, nodePosition, addEdge, findNwbClusterNodeId } = buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
+): Promise<ValidatedCombinedGraph> {
+  const { adjacency, nodePosition, addEdge, findNwbClusterNodeId } = await buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
 
   let highCount = 0;
   let lowerCount = 0;

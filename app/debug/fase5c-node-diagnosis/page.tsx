@@ -116,7 +116,7 @@ export default function Fase5cNodeDiagnosisPage() {
     });
 
     // Vraag 3: connected component in de GoKnoop-ONLY graaf (geen NWB, geen connectors).
-    const goknoopOnlyGraph = buildValidatedCombinedGraph(provider, [], 20, []);
+    const goknoopOnlyGraph = await buildValidatedCombinedGraph(provider, [], 20, []);
     const goknoopOnlyComponents = computeConnectedComponents(goknoopOnlyGraph);
     const targetComponentGoKnoopOnly = goknoopOnlyComponents.componentOfNode.get(TARGET_NODE_ID);
     const fromComponentGoKnoopOnly = goknoopOnlyComponents.componentOfNode.get(FROM_NODE_ID);
@@ -166,7 +166,7 @@ export default function Fase5cNodeDiagnosisPage() {
       .filter((c) => c.confidence !== "rejected")
       .map((c) => ({ goknoopNodeId: c.goknoopNodeId, nwbSegmentId: c.nwbSegmentId, nwbEndpoint: c.nwbEndpoint, distanceM: c.distanceM, confidence: c.confidence as "high" | "lower" }));
 
-    const combined = buildValidatedCombinedGraph(provider, nwbSegments, 20, validatedConnectors);
+    const combined = await buildValidatedCombinedGraph(provider, nwbSegments, 20, validatedConnectors);
     const combinedComponents = computeConnectedComponents(combined);
     const targetComponentCombined = combinedComponents.componentOfNode.get(TARGET_NODE_ID);
     const fromComponentCombined = combinedComponents.componentOfNode.get(FROM_NODE_ID);
