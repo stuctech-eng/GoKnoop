@@ -55,6 +55,13 @@ export async function GET(req: NextRequest) {
     const { graph, cacheHit: graphCacheHit } = await loadCachedCombinedGraph(provider, datasetVersionId);
     mark("combinedGraphLoad", { graphCacheHit });
 
+    const graphStats = {
+      totalConnectorsCreated: graph.totalConnectorsCreated,
+      nodePositionSize: graph.nodePosition.size,
+      adjacencySize: graph.adjacency.size,
+      goknoopNodeCountInProvider: provider.getAllNodeIds().length,
+    };
+
     const fromCandidates: LoopStartCandidate[] = ORIGIN_CANDIDATES.map((logicalNodeId) => ({ logicalNodeId }));
     const toCandidates: LoopStartCandidate[] = DESTINATION_CANDIDATES.map((logicalNodeId) => ({ logicalNodeId }));
 
@@ -62,7 +69,7 @@ export async function GET(req: NextRequest) {
     mark("knotLeg");
 
     if ("ok" in knotResult) {
-      return NextResponse.json({ ok: false, reason: knotResult.reason, message: knotResult.message, timings, graphCacheHit });
+      return NextResponse.json({ ok: false, reason: knotResult.reason, message: knotResult.message, timings, graphCacheHit, graphStats });
     }
 
     return NextResponse.json({
@@ -71,6 +78,7 @@ export async function GET(req: NextRequest) {
       edgeCount: knotResult.route.edges.length,
       timings,
       graphCacheHit,
+      graphStats,
     });
   } catch (err) {
     reportProgress("latest", "EXCEPTION", { error: err instanceof Error ? err.message : String(err) });
