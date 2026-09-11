@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const WRITE_CHUNK_SIZE = 400; // zelfde grootte als de oorspronkelijke migratie
+const WRITE_CHUNK_SIZE = 2000; // consistent met migrate-nwb-runner.tsx -- zelfde reden
 
 type CompactAssignment = { f: string; t: string };
 type SlimNwbSegment = { id: string; [key: string]: unknown };

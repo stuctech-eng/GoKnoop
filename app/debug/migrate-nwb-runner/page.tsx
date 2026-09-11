@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { SlimNwbSegment } from "@/lib/nwb-analysis/combined-graph";
 
 const REGIONS = ["hilversum", "lochem", "volendam"];
-const MIGRATE_CHUNK_SIZE = 400;
+const MIGRATE_CHUNK_SIZE = 2000; // vergroot van 400 -- Firestore-overhead is vooral per-document (bewezen bij de GoKnoop-edge-fix), 330 documenten -> ~66, elk nog ruim onder de 1MB-limiet (~490KB)
 
 export default function MigrateNwbRunnerPage() {
   const [datasetVersionId, setDatasetVersionId] = useState("uINZ3y2QsgBdEyky3duq");
@@ -52,7 +52,33 @@ export default function MigrateNwbRunnerPage() {
     }
 
     const allSegments = Array.from(segmentsById.values());
-    setLog((prev) => [...prev, `Alle regio's gelezen: ${allSegments.length} unieke segmenten totaal. Migreren naar productieschema...`]);
+    setLog((prev) => [...prev, `Alle regio's gelezen: ${allSegments.length} unieke segmenten totaal. Oude batches opruimen...`]);
+
+    // Oude batchdocumenten opruimen -- bij een grotere batchgrootte zijn er MINDER
+    // documenten nodig, dus zonder opruimen blijven hogere-index-documenten van een
+    // eerdere migratie als geestdata hangen naast de nieuwe.
+    try {
+      const params = new URLSearchParams();
+      if (key) params.set("key", key);
+      const clearRes = await fetch(`/api/admin/clear-nwb-batches?${params.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nwbDatasetVersionId }),
+      });
+      const clearJson = await clearRes.json();
+      if (!clearRes.ok) {
+        setLog((prev) => [...prev, `⚠️ Opruimen mislukt: ${clearJson.details ?? clearJson.error}`]);
+        setRunning(false);
+        return;
+      }
+      setLog((prev) => [...prev, "Oude batches opgeruimd."]);
+    } catch (err) {
+      setLog((prev) => [...prev, `⚠️ Opruimen mislukt: ${err instanceof Error ? err.message : String(err)}`]);
+      setRunning(false);
+      return;
+    }
+
+    setLog((prev) => [...prev, "Migreren naar productieschema..."]);
 
     // Stap 2: in chunks naar het productieschema schrijven.
     let migratedCount = 0;
