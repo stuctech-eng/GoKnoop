@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { loadCachedCombinedGraph } from "@/lib/route-engine/cached-nwb-provider";
-import { computeCombinedRoute } from "@/lib/route-engine/combined-route-engine";
+import { computeCombinedRoute, computeCombinedRouteAsRoute } from "@/lib/route-engine/combined-route-engine";
+import { reportProgress } from "@/lib/diagnostics/report-progress";
 
 export const maxDuration = 10;
 export const dynamic = "force-dynamic";
@@ -41,16 +42,37 @@ export async function GET(req: NextRequest) {
     await provider.load();
     const { graph } = await loadCachedCombinedGraph(provider, datasetVersionId);
 
-    // Uitsluitend kandidaat 2, ALLEEN -- isoleert of DIE specifieke aanroep traag is
-    // (3x op rij timeout zodra kandidaat 2 in de mix zat, kandidaat 1 alleen was juist snel).
-    const t0 = Date.now();
-    const candidate2Direct = computeCombinedRoute(graph, ORIGIN_CANDIDATES[1], DESTINATION);
-    const candidate2ComputeTimeMs = Date.now() - t0;
+    // Volledige Fase 1+2-keten repliceren (identiek aan computeRouteWithFallback), MET
+    // reportProgress op elke stap -- geeft zichtbaarheid ongeacht of dit timet of niet.
+    reportProgress("latest", "diagnose-fallback: Fase 1 start");
+    let bestIndex = -1;
+    let bestDistanceM = Infinity;
+    for (let i = 0; i < ORIGIN_CANDIDATES.length; i++) {
+      const nodeExists = !!provider.getNode(ORIGIN_CANDIDATES[i]);
+      const cheapResult = nodeExists ? computeCombinedRoute(graph, ORIGIN_CANDIDATES[i], DESTINATION) : null;
+      reportProgress("latest", `diagnose-fallback: kandidaat ${i} klaar`, { nodeExists, ok: cheapResult?.ok, distanceM: cheapResult?.ok ? cheapResult.distanceM : null });
+      if (cheapResult?.ok && cheapResult.distanceM < bestDistanceM) {
+        bestDistanceM = cheapResult.distanceM;
+        bestIndex = i;
+      }
+    }
+    reportProgress("latest", "diagnose-fallback: Fase 1 klaar", { bestIndex, bestDistanceM: bestIndex === -1 ? null : bestDistanceM });
+
+    if (bestIndex === -1) {
+      return NextResponse.json({ datasetVersionId, result: "fase1_geen_winnaar", bestIndex });
+    }
+
+    reportProgress("latest", "diagnose-fallback: Fase 2 start (dure geometrie-opbouw)");
+    const winner = ORIGIN_CANDIDATES[bestIndex];
+    const fullResult = await computeCombinedRouteAsRoute(graph, provider, datasetVersionId, winner, DESTINATION);
+    reportProgress("latest", "diagnose-fallback: Fase 2 klaar", { ok: fullResult.ok });
 
     return NextResponse.json({
       datasetVersionId,
-      candidate2DirectResult: candidate2Direct,
-      candidate2ComputeTimeMs,
+      result: fullResult.ok ? "succes" : "fase2_gefaald",
+      bestIndex,
+      bestDistanceM,
+      fase2Detail: fullResult.ok ? { distanceM: fullResult.route.distanceM } : { reason: fullResult.reason, message: fullResult.message },
     });
   } catch (err) {
     return NextResponse.json(
