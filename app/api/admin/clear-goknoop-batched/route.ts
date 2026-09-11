@@ -21,9 +21,15 @@ export const dynamic = "force-dynamic";
  * dat het opruimen zelf de trage, oude met-coords-documenten moest lezen
  * (live bevestigd: "The string did not match the expected pattern" bij
  * edges, exact dezelfde 10s-platform-timeout-fout als bij de hoofdroute-
- * berekening). Nu VERWIJDEREN OP INDEX-BEREIK, zonder eerst te lezen --
- * Firestore's delete() op een niet-bestaand document-ID slaagt
- * probleemloos, dus een ruim bereik (0-999) dekken is veilig en snel.
+ * berekening).
+ *
+ * HERZIEN (2): verwijderen op index-bereik via `db.batch()` -- gaf live
+ * "Transaction too big. Decrease transaction size.", zelfs bij een
+ * batchgrootte van 100 puur-delete-operaties (onverwacht, aangezien
+ * delete()'s nauwelijks data bevatten). Niet verder gegokt naar de
+ * precieze oorzaak -- in plaats daarvan `db.batch()` hier volledig
+ * vermeden: nu INDIVIDUELE `delete()`-aanroepen, parallel in kleine
+ * groepjes van 50 (geen transactie-semantiek van welke aard dan ook).
  */
 export async function POST(req: NextRequest) {
   const debugSecret = process.env.DEBUG_SECRET;
@@ -47,24 +53,22 @@ export async function POST(req: NextRequest) {
   }
 
   const MAX_BATCH_INDEX = 999; // ruim boven het hoogst mogelijke aantal batches bij elke huidige batchgrootte
-  const FIRESTORE_BATCH_LIMIT = 100; // verkleind van 450 -- live "Transaction too big"-fout, veiligheidsmarge
+  const PARALLEL_GROUP_SIZE = 50; // individuele delete()'s, parallel in kleine groepjes -- geen db.batch()
 
   try {
     const db = getDb();
     const collRef = db.collection("goknoopBatched").doc(datasetVersionId).collection(kind);
 
-    let deleted = 0;
-    for (let start = 0; start <= MAX_BATCH_INDEX; start += FIRESTORE_BATCH_LIMIT) {
-      const batch = db.batch();
-      const end = Math.min(start + FIRESTORE_BATCH_LIMIT, MAX_BATCH_INDEX + 1);
+    for (let start = 0; start <= MAX_BATCH_INDEX; start += PARALLEL_GROUP_SIZE) {
+      const end = Math.min(start + PARALLEL_GROUP_SIZE, MAX_BATCH_INDEX + 1);
+      const deletions: Promise<unknown>[] = [];
       for (let i = start; i < end; i++) {
-        batch.delete(collRef.doc(String(i)));
-        deleted++;
+        deletions.push(collRef.doc(String(i)).delete());
       }
-      await batch.commit();
+      await Promise.all(deletions);
     }
 
-    return NextResponse.json({ ok: true, kind, verwijderdBereik: `0-${MAX_BATCH_INDEX}`, opmerking: "delete() op niet-bestaande ID's is probleemloos -- dit dekt gewoon het volledige mogelijke bereik." });
+    return NextResponse.json({ ok: true, kind, verwijderdBereik: `0-${MAX_BATCH_INDEX}`, opmerking: "Individuele delete()-aanroepen, geen db.batch() -- vermijdt de eerder gevonden 'Transaction too big'-fout." });
   } catch (err) {
     return NextResponse.json(
       { error: "Opruimen mislukt.", details: err instanceof Error ? err.message : String(err) },
