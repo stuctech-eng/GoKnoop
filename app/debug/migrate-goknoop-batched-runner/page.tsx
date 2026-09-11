@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 const NODE_BATCH_SIZE = 500;
-const EDGE_BATCH_SIZE = 200; // kleiner dan nodes -- edges bevatten volledige geometrie (coords), potentieel veel groter per document
+const EDGE_BATCH_SIZE = 1000; // nu topologie-only (geen coords), dus veel groter mogelijk dan eerst
 
 export default function MigrateGoknoopBatchedRunnerPage() {
   const [datasetVersionId, setDatasetVersionId] = useState("uINZ3y2QsgBdEyky3duq");
@@ -56,8 +56,14 @@ export default function MigrateGoknoopBatchedRunnerPage() {
       await writeBatches("nodes", nodes, NODE_BATCH_SIZE);
 
       setLog((prev) => [...prev, "Edges lezen..."]);
-      const edges = await readAll("edges");
-      setLog((prev) => [...prev, `Klaar: ${edges.length} edges. Wegschrijven in gebatcht formaat...`]);
+      const edgesRaw = await readAll("edges");
+      // TOPOLOGIE-ONLY: coords eruit strippen vóór het wegschrijven. Dijkstra heeft
+      // alleen from/to/distanceM nodig -- geometrie wordt straks apart, on-demand
+      // opgehaald voor uitsluitend de edges in de uiteindelijk gekozen route (live
+      // gemeten: 78 edge-batch-documenten MET coords kostte 6,2s -- veel te traag
+      // voor de bulk-graafopbouw die bij elke aanvraag gebeurt).
+      const edges = edgesRaw.map(({ coords: _coords, ...topology }) => topology);
+      setLog((prev) => [...prev, `Klaar: ${edges.length} edges (topologie-only, coords gestript). Wegschrijven in gebatcht formaat...`]);
       await writeBatches("edges", edges, EDGE_BATCH_SIZE);
 
       setLog((prev) => [...prev, "✅ Volledig klaar. Originele logicalNodes/edges-collecties zijn ongewijzigd."]);

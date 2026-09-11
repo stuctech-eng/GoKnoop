@@ -1,9 +1,11 @@
 import type { GraphEdge, GraphProvider, Point } from "./types";
 import type { CombinedGraph, CostAwareStep } from "../nwb-analysis/combined-graph";
 import { resolveNwbGeometry } from "../nwb-analysis/nwb-geometry-resolver";
+import { fetchGoknoopEdgeGeometry } from "./fetch-goknoop-edge-geometry";
 
 /**
- * Combined-route-geometrie -- Fase M4, 10-9-2026.
+ * Combined-route-geometrie -- Fase M4, 10-9-2026, UITGEBREID Fase M6/M7
+ * (geometrie-scheiding), 10-9-2026.
  *
  * Zet een pad uit `dijkstraWithCostModel` (CostAwareStep[], met het
  * BETROUWBARE `nwbSegmentId` per stap -- zie de segmentId-fix van eerder
@@ -16,8 +18,12 @@ import { resolveNwbGeometry } from "../nwb-analysis/nwb-geometry-resolver";
  *   verschijnt ook tweemaal in de uitvoer (elke keer met zijn eigen,
  *   voor die specifieke doorkruising correcte reisrichting).
  * - Volgorde exact behouden, identiek aan het Dijkstra-pad.
- * - GoKnoop-hops: hergebruiken de ECHTE GraphEdge uit de bestaande
- *   GoKnoop-GraphProvider (geen nieuwe geometrie nodig, die bestaat al).
+ * - GoKnoop-hops: geometrie wordt ON-DEMAND opgehaald (`fetchGoknoopEdgeGeometry`),
+ *   NIET meer aangenomen dat de GraphProvider 'm al heeft -- sinds de
+ *   opslagformaat-fix bevat de bulk-graaf alleen nog topologie (from/to/
+ *   distanceM), geen geometrie (die bleek de bottleneck: 78 gebatchte
+ *   edge-documenten MET coords kostte 6,2s bij elke aanvraag, terwijl
+ *   een gekozen route maar een tiental edges gebruikt).
  * - NWB-hops: synthetische GraphEdge, met LIVE bij PDOK opgehaalde
  *   volledige geometrie (via de al-geverifieerde resolver).
  * - Connector-hops: synthetische GraphEdge met een RECHTE lijn tussen de
@@ -50,10 +56,18 @@ export async function buildCombinedRouteGeometry(steps: CostAwareStep[], graph: 
 
   // Vooraf alle benodigde NWB-segment-geometrie in één keer ophalen (efficiënter dan per-hop).
   const neededSegmentIds = new Set<string>();
-  for (const step of steps) {
+  // Vooraf ook alle benodigde GoKnoop-edge-ID's verzamelen, voor dezelfde reden.
+  const neededGoknoopEdgeIds = new Set<string>();
+  for (let i = 1; i < steps.length; i++) {
+    const step = steps[i];
     if (step.edgeSource === "nwb" && step.nwbSegmentId) neededSegmentIds.add(step.nwbSegmentId);
+    if (step.edgeSource === "goknoop") {
+      const realEdge = goknoopProvider.getEdgesFrom(steps[i - 1].nodeId).find((e) => e.toLogicalNodeId === step.nodeId || e.fromLogicalNodeId === step.nodeId);
+      if (realEdge) neededGoknoopEdgeIds.add(realEdge.id);
+    }
   }
-  const geometryResult = neededSegmentIds.size > 0 ? await resolveNwbGeometry(Array.from(neededSegmentIds)) : { resolved: new Map(), failed: [] };
+  const nwbGeometryResult = neededSegmentIds.size > 0 ? await resolveNwbGeometry(Array.from(neededSegmentIds)) : { resolved: new Map(), failed: [] };
+  const goknoopGeometryMap = neededGoknoopEdgeIds.size > 0 ? await fetchGoknoopEdgeGeometry(Array.from(neededGoknoopEdgeIds)) : new Map<string, Point[]>();
 
   const edges: GraphEdge[] = [];
   const fullGeometry: Point[] = [];
@@ -75,13 +89,14 @@ export async function buildCombinedRouteGeometry(steps: CostAwareStep[], graph: 
         return { ok: false, reason: `GoKnoop-edge tussen '${fromStep.nodeId}' en '${toStep.nodeId}' niet gevonden in de GraphProvider.` };
       }
       const forward = realEdge.fromLogicalNodeId === fromStep.nodeId;
-      edge = { ...realEdge, geometry: forward ? realEdge.geometry : [...realEdge.geometry].reverse() };
+      const fetchedGeometry = goknoopGeometryMap.get(realEdge.id) ?? realEdge.geometry; // fallback op provider's eigen geometrie (bijv. in tests, waar de provider 'm wel al heeft)
+      edge = { ...realEdge, geometry: forward ? fetchedGeometry : [...fetchedGeometry].reverse() };
     } else if (toStep.edgeSource === "nwb") {
       const segId = toStep.nwbSegmentId;
       if (!segId) return { ok: false, reason: `NWB-stap zonder nwbSegmentId (index ${i}) -- zou niet moeten voorkomen na de segmentId-fix.` };
       const fromPoint: Point = { x: fromPos.x, y: fromPos.y };
       const toPoint: Point = { x: toPos.x, y: toPos.y };
-      const rawCoords = geometryResult.resolved.get(segId);
+      const rawCoords = nwbGeometryResult.resolved.get(segId);
       const geometry = rawCoords ? orientNwbGeometry(rawCoords as Point[], fromPoint) : [fromPoint, toPoint]; // veilige degradatie: rechte lijn als geometrie-ophalen faalde
       edge = {
         id: `nwb-edge:${segId}:${i}`, // uniek per doorkruising (index i), zelfs als segId hergebruikt wordt
@@ -110,7 +125,7 @@ export async function buildCombinedRouteGeometry(steps: CostAwareStep[], graph: 
     else fullGeometry.push(...edge.geometry.slice(1)); // gedeeld punt niet dupliceren
   }
 
-  return { ok: true, edges, geometry: fullGeometry, unresolvedNwbSegments: geometryResult.failed };
+  return { ok: true, edges, geometry: fullGeometry, unresolvedNwbSegments: nwbGeometryResult.failed };
 }
 
 function distanceAlongPolyline(points: Point[]): number {
