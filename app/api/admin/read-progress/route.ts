@@ -23,15 +23,12 @@ export async function GET(req: NextRequest) {
 
   try {
     const db = getDb();
-    const limit = Number(req.nextUrl.searchParams.get("limit") ?? "200");
     const snap = await db
       .collection("_diagnostics")
       .doc("progress")
       .collection("runs")
       .doc("latest")
       .collection("checkpoints")
-      .orderBy("__name__")
-      .limitToLast(limit)
       .get();
 
     const checkpoints = snap.docs.map((d) => d.data());
