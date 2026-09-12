@@ -58,15 +58,22 @@ export async function GET(req: NextRequest) {
     const datasetVersionId = activeDatasetSnap.data()!.datasetVersionId as string;
     mark("3_goknoopDatasetLookup", { ms: Date.now() - tGkLookup, datasetVersionId });
 
-    // ---- 4+5. GoKnoop nodes/edges lezen ----
+    // ---- 4+5. GoKnoop nodes/edges lezen -- NU PARALLEL gestart met de NWB-fetch hieronder ----
+    // (Zelfde patroon als de drie echte productieroutes, 12-9-2026: GoKnoop-laden en
+    // NWB-laden zijn onderling onafhankelijk, dus geen reden om ze na elkaar te doen.)
     const tGkLoad = Date.now();
     const provider = new CachedGraphProvider(datasetVersionId);
-    await provider.load();
-    mark("4_5_goknoopNodesEnEdgesLezen", {
-      totaalMs: Date.now() - tGkLoad,
-      cacheHit: provider.wasCacheHit,
-      copyNaarEigenMapsMs: provider.lastCopyTimingMs,
-      nodeCount: provider.getAllNodeIds().length,
+    const providerLoadPromise = provider.load();
+    let goknoopMarked = false;
+    providerLoadPromise.then(() => {
+      if (goknoopMarked) return;
+      goknoopMarked = true;
+      mark("4_5_goknoopNodesEnEdgesLezen", {
+        totaalMs: Date.now() - tGkLoad,
+        cacheHit: provider.wasCacheHit,
+        copyNaarEigenMapsMs: provider.lastCopyTimingMs,
+        nodeCount: provider.getAllNodeIds().length,
+      });
     });
 
     // ---- 6. NWB dataset lookup ----
@@ -79,10 +86,14 @@ export async function GET(req: NextRequest) {
     let validatedConnectors: ValidatedConnectorInput[] = [];
 
     if (nwbDatasetVersionId) {
-      // ---- 7. NWB Firestore reads ----
+      // ---- 7+11. NWB Firestore reads + connectoren lezen -- NU OOK PARALLEL met elkaar ----
       const tNwbFetch = Date.now();
-      const batchesSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").get();
-      mark("7_nwbFirestoreReads", { ms: Date.now() - tNwbFetch, aantalBatchDocumenten: batchesSnap.docs.length });
+      const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
+      const [batchesSnap, connectorsSnap] = await Promise.all([
+        db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").get(),
+        db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get(),
+      ]);
+      mark("7_nwbFirestoreReads", { ms: Date.now() - tNwbFetch, aantalBatchDocumenten: batchesSnap.docs.length, toelichting: "Liep parallel met connectoren-fetch (11) en GoKnoop-laden (4+5)." });
 
       // ---- 8. NWB data deserialisatie ----
       const tNwbParse = Date.now();
@@ -90,20 +101,27 @@ export async function GET(req: NextRequest) {
         const data = doc.data() as { segments: SlimNwbSegment[] };
         nwbSegments.push(...data.segments);
       }
+      validatedConnectors = connectorsSnap.docs.map((d) => d.data() as ValidatedConnectorInput);
       mark("8_nwbDataDeserialisatie", { ms: Date.now() - tNwbParse, aantalSegmenten: nwbSegments.length });
       mark("9_nwbSegmentParsing", { ms: 0, toelichting: "Samengevallen met stap 8 -- geen apart parse-station in de huidige architectuur." });
-
-      // ---- 11. connectoren lezen ----
-      const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
-      const tConnFetch = Date.now();
-      const connectorsSnap = await db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get();
-      validatedConnectors = connectorsSnap.docs.map((d) => d.data() as ValidatedConnectorInput);
-      mark("11_connectorenLezen", { ms: Date.now() - tConnFetch, aantalConnectoren: validatedConnectors.length });
+      mark("11_connectorenLezen", { ms: 0, aantalConnectoren: validatedConnectors.length, toelichting: "Liep parallel met stap 7 (zelfde Promise.all) -- geen aparte tijd meer." });
     } else {
       mark("7_nwbFirestoreReads", { ms: 0, toelichting: "Geen actieve NWB-dataset." });
       mark("8_nwbDataDeserialisatie", { ms: 0 });
       mark("9_nwbSegmentParsing", { ms: 0 });
       mark("11_connectorenLezen", { ms: 0 });
+    }
+
+    // Nu pas wachten op GoKnoop, vlak vóór het bouwen -- was allang klaar of wordt hier ingewacht.
+    await providerLoadPromise;
+    if (!goknoopMarked) {
+      goknoopMarked = true;
+      mark("4_5_goknoopNodesEnEdgesLezen", {
+        totaalMs: Date.now() - tGkLoad,
+        cacheHit: provider.wasCacheHit,
+        copyNaarEigenMapsMs: provider.lastCopyTimingMs,
+        nodeCount: provider.getAllNodeIds().length,
+      });
     }
 
     // ---- 10+12+13+14. clustering/buildBaseGraph/connectoren verwerken/buildValidatedCombinedGraph ----
