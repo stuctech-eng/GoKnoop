@@ -30,12 +30,11 @@ export async function GET(req: NextRequest) {
       .collection("runs")
       .doc("latest")
       .collection("checkpoints")
-      .orderBy("__name__", "desc")
-      .limit(limit)
+      .orderBy("__name__")
+      .limitToLast(limit)
       .get();
 
-    // Weer chronologisch (oudste eerst) teruggeven voor leesbaarheid, ook al was de QUERY zelf op nieuwste-eerst.
-    const checkpoints = snap.docs.map((d) => d.data()).reverse();
+    const checkpoints = snap.docs.map((d) => d.data());
 
     return NextResponse.json({ aantalCheckpoints: checkpoints.length, checkpoints });
   } catch (err) {
