@@ -146,13 +146,29 @@ export async function computeNwbClusterAssignments(
   log("Union-find-clustering klaar");
 
   const result = new Map<string, { fromClusterId: string; toClusterId: string }>();
+  // KORTE ID's i.p.v. de ruwe pointKey-strings (die zijn ~50 tekens lang, want
+  // ze bevatten het volledige NWB-segment-ID + ":from"/":to"). Performance-audit,
+  // 12-9-2026: cluster-ID's namen 23,96% van de totale NWB-opslag in beslag
+  // (10,91MB van 45,54MB) -- puur door de labellengte, niet door aantal.
+  // Korte, opeenvolgende integer-strings ("0", "1", "2", ...) veranderen de
+  // GROEPERING niet (elke unieke root krijgt gewoon een kortere naam) --
+  // alleen de weergavevorm, geen inhoudelijke wijziging.
+  const shortIdByRoot = new Map<string, string>();
+  function shortIdFor(root: string): string {
+    let id = shortIdByRoot.get(root);
+    if (id === undefined) {
+      id = String(shortIdByRoot.size);
+      shortIdByRoot.set(root, id);
+    }
+    return id;
+  }
   for (const seg of setBSegments) {
     result.set(seg.id, {
-      fromClusterId: uf.find(pointKey(seg.id, "from")),
-      toClusterId: uf.find(pointKey(seg.id, "to")),
+      fromClusterId: shortIdFor(uf.find(pointKey(seg.id, "from"))),
+      toClusterId: shortIdFor(uf.find(pointKey(seg.id, "to"))),
     });
   }
-  log("Clustertoewijzingen klaar", { aantalSegmenten: result.size });
+  log("Clustertoewijzingen klaar", { aantalSegmenten: result.size, aantalUniekeClusters: shortIdByRoot.size });
 
   return result;
 }
