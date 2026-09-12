@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const WRITE_CHUNK_SIZE = 2000; // consistent met migrate-nwb-runner.tsx -- zelfde reden
 
@@ -8,10 +8,26 @@ type CompactAssignment = { f: string; t: string };
 type SlimNwbSegment = { id: string; [key: string]: unknown };
 
 export default function PrecomputeClusteringRunnerPage() {
-  const [nwbDatasetVersionId, setNwbDatasetVersionId] = useState(`nwb-${new Date().toISOString().slice(0, 10)}-v2-gebatcht`);
+  const [nwbDatasetVersionId, setNwbDatasetVersionId] = useState("(laden...)");
   const [key, setKey] = useState(() => (typeof window !== "undefined" ? window.localStorage.getItem("goknoop_debug_secret") || "" : ""));
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState<string[]>([]);
+
+  useEffect(() => {
+    // Niet meer gokken op basis van vandaag's datum (bleek fout zodra een
+    // precompute een dag NA de migratie wordt gedraaid) -- de daadwerkelijk
+    // actieve dataset-ID rechtstreeks ophalen.
+    const k = typeof window !== "undefined" ? window.localStorage.getItem("goknoop_debug_secret") || "" : "";
+    const params = new URLSearchParams();
+    if (k) params.set("key", k);
+    fetch(`/api/admin/get-active-nwb-dataset?${params.toString()}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.nwbDatasetVersionId) setNwbDatasetVersionId(json.nwbDatasetVersionId);
+        else setNwbDatasetVersionId("(geen actieve dataset gevonden -- vul handmatig in)");
+      })
+      .catch(() => setNwbDatasetVersionId("(ophalen mislukt -- vul handmatig in)"));
+  }, []);
 
   async function run() {
     setRunning(true);
