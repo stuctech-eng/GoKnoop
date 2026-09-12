@@ -51,10 +51,12 @@ export class FirestoreGraphProvider implements GraphProvider {
         durationMs: Date.now() - tEdges,
       });
 
+      const tParse = Date.now();
       for (const doc of batchedNodesSnap.docs) {
         const data = doc.data() as { items: (GraphNode & { id: string })[] };
         for (const n of data.items) this.nodes.set(n.id, n);
       }
+      const tAfterNodeParse = Date.now();
       for (const doc of batchedEdgesSnap.docs) {
         const data = doc.data() as { items: (Record<string, unknown> & { id: string; fromLogicalNodeId: string; toLogicalNodeId: string; distanceM: number; directionality?: string; coords?: unknown[] })[] };
         for (const d of data.items) {
@@ -73,6 +75,8 @@ export class FirestoreGraphProvider implements GraphProvider {
       reportProgress("latest", "FirestoreGraphProvider.load: GEBATCHT PAD volledig klaar", {
         nodeCount: this.nodes.size,
         edgeIndexSize: this.edgesByNode.size,
+        nodeParsingMs: tAfterNodeParse - tParse,
+        edgeParsingMs: Date.now() - tAfterNodeParse,
       });
       return;
     }

@@ -410,6 +410,7 @@ export async function buildValidatedCombinedGraph(
 ): Promise<ValidatedCombinedGraph> {
   const { adjacency, nodePosition, addEdge, findNwbClusterNodeId } = await buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
 
+  const tConnectors = Date.now();
   let highCount = 0;
   let lowerCount = 0;
   for (const c of validatedConnectors) {
@@ -420,6 +421,7 @@ export async function buildValidatedCombinedGraph(
     if (c.confidence === "high") highCount++;
     else lowerCount++;
   }
+  onProgress?.("buildValidatedCombinedGraph: connectoren verwerkt", { elapsedMs: Date.now() - tConnectors, aantalConnectoren: validatedConnectors.length, highCount, lowerCount });
 
   return { adjacency, nodePosition, totalConnectorsCreated: highCount + lowerCount, connectorsUsed: { high: highCount, lower: lowerCount } };
 }

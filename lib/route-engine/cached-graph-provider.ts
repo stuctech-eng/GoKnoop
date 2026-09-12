@@ -31,10 +31,16 @@ export class CachedGraphProvider implements GraphProvider {
     return this.cacheHit;
   }
 
+  private lastCopyMs = 0;
+  get lastCopyTimingMs(): number {
+    return this.lastCopyMs;
+  }
+
   async load(): Promise<void> {
     const cached = moduleCache.get(this.datasetVersionId);
     if (cached) {
       this.cacheHit = true;
+      this.lastCopyMs = 0;
       return;
     }
 
@@ -42,6 +48,7 @@ export class CachedGraphProvider implements GraphProvider {
     const underlying = new FirestoreGraphProvider(this.datasetVersionId);
     await underlying.load();
 
+    const tCopy = Date.now();
     const nodes = new Map<string, GraphNode>();
     for (const id of underlying.getAllNodeIds()) {
       const n = underlying.getNode(id);
@@ -51,6 +58,7 @@ export class CachedGraphProvider implements GraphProvider {
     for (const id of underlying.getAllNodeIds()) {
       edgesByNode.set(id, underlying.getEdgesFrom(id));
     }
+    this.lastCopyMs = Date.now() - tCopy;
 
     moduleCache.set(this.datasetVersionId, { nodes, edgesByNode, loadedAt: Date.now() });
   }

@@ -1,4 +1,4 @@
-import { getDb } from "@/lib/firebase-admin";
+import { getDb, getLastDbInitBreakdown } from "@/lib/firebase-admin";
 import { buildValidatedCombinedGraph, type CombinedGraph, type SlimNwbSegment, type ValidatedConnectorInput } from "@/lib/nwb-analysis/combined-graph";
 import { reportProgress } from "@/lib/diagnostics/report-progress";
 import type { GraphProvider } from "./types";
@@ -54,6 +54,7 @@ export function clearGraphCache(): number {
 export async function loadCachedCombinedGraph(provider: GraphProvider, datasetVersionId: string): Promise<CachedCombinedGraphResult> {
   reportProgress("latest", "loadCachedCombinedGraph: start");
   const db = getDb();
+  reportProgress("latest", "loadCachedCombinedGraph: getDb() klaar", getLastDbInitBreakdown());
 
   const activeNwbSnap = await db.collection("config").doc("activeNwbDataset").get();
   const nwbDatasetVersionId: string | null = activeNwbSnap.exists ? (activeNwbSnap.data()!.nwbDatasetVersionId as string) : null;
@@ -72,18 +73,23 @@ export async function loadCachedCombinedGraph(provider: GraphProvider, datasetVe
   if (nwbDatasetVersionId) {
     // Gebatchte documenten: elk document bevat een ARRAY van ~500 segmenten,
     // niet één document per segment (zie module-commentaar hierboven).
+    const tFetch = Date.now();
     const batchesSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").get();
-    reportProgress("latest", "loadCachedCombinedGraph: batches-documenten opgehaald", { aantalBatchDocumenten: batchesSnap.docs.length });
+    const fetchMs = Date.now() - tFetch;
+    reportProgress("latest", "loadCachedCombinedGraph: batches-documenten opgehaald (fetch)", { aantalBatchDocumenten: batchesSnap.docs.length, fetchMs });
+
+    const tParse = Date.now();
     for (const doc of batchesSnap.docs) {
       const data = doc.data() as { segments: SlimNwbSegment[] };
       nwbSegments.push(...data.segments);
     }
-    reportProgress("latest", "loadCachedCombinedGraph: segmenten uitgepakt", { aantalSegmenten: nwbSegments.length });
+    reportProgress("latest", "loadCachedCombinedGraph: segmenten uitgepakt (deserialisatie)", { aantalSegmenten: nwbSegments.length, parseMs: Date.now() - tParse });
 
     const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
+    const tConn = Date.now();
     const connectorsSnap = await db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get();
     validatedConnectors = connectorsSnap.docs.map((d) => d.data() as ValidatedConnectorInput);
-    reportProgress("latest", "loadCachedCombinedGraph: connectoren opgehaald", { aantalConnectoren: validatedConnectors.length });
+    reportProgress("latest", "loadCachedCombinedGraph: connectoren opgehaald", { aantalConnectoren: validatedConnectors.length, connectorFetchEnParseMs: Date.now() - tConn });
   }
 
   const graph = await buildValidatedCombinedGraph(provider, nwbSegments, CONNECTOR_SEARCH_TOLERANCE_M, validatedConnectors, (label, extra) =>
