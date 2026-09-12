@@ -51,7 +51,11 @@ export function clearGraphCache(): number {
   return size;
 }
 
-export async function loadCachedCombinedGraph(provider: GraphProvider, datasetVersionId: string): Promise<CachedCombinedGraphResult> {
+export async function loadCachedCombinedGraph(
+  provider: GraphProvider,
+  datasetVersionId: string,
+  providerReadyPromise?: Promise<void>
+): Promise<CachedCombinedGraphResult> {
   reportProgress("latest", "loadCachedCombinedGraph: start");
   const db = getDb();
   reportProgress("latest", "loadCachedCombinedGraph: getDb() klaar", getLastDbInitBreakdown());
@@ -71,25 +75,45 @@ export async function loadCachedCombinedGraph(provider: GraphProvider, datasetVe
   let nwbSegments: SlimNwbSegment[] = [];
   let validatedConnectors: ValidatedConnectorInput[] = [];
   if (nwbDatasetVersionId) {
-    // Gebatchte documenten: elk document bevat een ARRAY van ~500 segmenten,
-    // niet één document per segment (zie module-commentaar hierboven).
+    // TOEGEVOEGD 12-9-2026, timing-audit: batches- en connectoren-fetch zijn
+    // onderling ONAFHANKELIJK (allebei hebben alleen nwbDatasetVersionId
+    // nodig) -- nu parallel i.p.v. na elkaar. Bewezen via /api/admin/timing-
+    // breakdown: batches-fetch alleen al 4.240ms, was voorheen sequentieel
+    // vóór de connectoren-fetch (334ms) -- nu overlappend.
     const tFetch = Date.now();
-    const batchesSnap = await db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").get();
-    const fetchMs = Date.now() - tFetch;
-    reportProgress("latest", "loadCachedCombinedGraph: batches-documenten opgehaald (fetch)", { aantalBatchDocumenten: batchesSnap.docs.length, fetchMs });
+    const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
+    const [batchesSnap, connectorsSnap] = await Promise.all([
+      db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").get(),
+      db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get(),
+    ]);
+    reportProgress("latest", "loadCachedCombinedGraph: batches + connectoren parallel opgehaald (fetch)", {
+      aantalBatchDocumenten: batchesSnap.docs.length,
+      aantalConnectoren: connectorsSnap.docs.length,
+      fetchMs: Date.now() - tFetch,
+    });
 
     const tParse = Date.now();
     for (const doc of batchesSnap.docs) {
       const data = doc.data() as { segments: SlimNwbSegment[] };
       nwbSegments.push(...data.segments);
     }
-    reportProgress("latest", "loadCachedCombinedGraph: segmenten uitgepakt (deserialisatie)", { aantalSegmenten: nwbSegments.length, parseMs: Date.now() - tParse });
-
-    const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
-    const tConn = Date.now();
-    const connectorsSnap = await db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get();
     validatedConnectors = connectorsSnap.docs.map((d) => d.data() as ValidatedConnectorInput);
-    reportProgress("latest", "loadCachedCombinedGraph: connectoren opgehaald", { aantalConnectoren: validatedConnectors.length, connectorFetchEnParseMs: Date.now() - tConn });
+    reportProgress("latest", "loadCachedCombinedGraph: segmenten + connectoren uitgepakt (deserialisatie)", {
+      aantalSegmenten: nwbSegments.length,
+      aantalConnectoren: validatedConnectors.length,
+      parseMs: Date.now() - tParse,
+    });
+  }
+
+  // TOEGEVOEGD 12-9-2026, timing-audit: pas HIER wachten op de GoKnoop-
+  // provider -- die liep, indien meegegeven, al vanaf het begin van deze
+  // functie PARALLEL aan de NWB-fetch hierboven, i.p.v. er sequentieel vóór.
+  // Bewezen via /api/admin/timing-breakdown: GoKnoop-laden kostte 2.451ms,
+  // was voorheen volledig vóór de NWB-fetch (4.240ms) -- nu overlappend, tot
+  // ~2,4s besparing op het totaal.
+  if (providerReadyPromise) {
+    await providerReadyPromise;
+    reportProgress("latest", "loadCachedCombinedGraph: providerReadyPromise afgewacht (liep parallel)");
   }
 
   const graph = await buildValidatedCombinedGraph(provider, nwbSegments, CONNECTOR_SEARCH_TOLERANCE_M, validatedConnectors, (label, extra) =>

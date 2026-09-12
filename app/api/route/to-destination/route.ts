@@ -106,9 +106,11 @@ export async function POST(req: NextRequest) {
     const datasetVersionId = activeDatasetSnap.data()!.datasetVersionId as string;
 
     const provider = new CachedGraphProvider(datasetVersionId);
-    await provider.load();
+    const providerLoadPromise = provider.load();
+    const graphLoadPromise = loadCachedCombinedGraph(provider, datasetVersionId, providerLoadPromise);
+    await providerLoadPromise;
     mark("goknoopProviderLoad");
-    const { graph, cacheHit: graphCacheHit } = await loadCachedCombinedGraph(provider, datasetVersionId);
+    const { graph, cacheHit: graphCacheHit } = await graphLoadPromise;
     mark("combinedGraphLoad");
 
     // Been 1 (Layer A, beide kanten met fallback): herkomst-knooppunt -> bestemmings-knooppunt.

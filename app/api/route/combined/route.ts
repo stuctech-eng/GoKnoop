@@ -49,7 +49,14 @@ export async function POST(req: NextRequest) {
     const datasetVersionId = activeDatasetSnap.data()!.datasetVersionId as string;
 
     const provider = new CachedGraphProvider(datasetVersionId);
-    await provider.load();
+    // TOEGEVOEGD 12-9-2026, timing-audit: GoKnoop-laden en NWB-laden zijn
+    // onderling onafhankelijk (bewezen via /api/admin/timing-breakdown) --
+    // nu parallel gestart i.p.v. na elkaar. De validatiechecks hieronder
+    // wachten alleen op providerLoadPromise (nodig voor provider.getNode()),
+    // de NWB-fetch loopt intussen door.
+    const providerLoadPromise = provider.load();
+    const graphLoadPromise = loadCachedCombinedGraph(provider, datasetVersionId, providerLoadPromise);
+    await providerLoadPromise;
 
     if (!provider.getNode(fromLogicalNodeId)) {
       return NextResponse.json({ error: `fromLogicalNodeId '${fromLogicalNodeId}' bestaat niet in dataset ${datasetVersionId}.` }, { status: 404 });
@@ -62,7 +69,7 @@ export async function POST(req: NextRequest) {
     // warme aanvraag hergebruikt de al-gebouwde graaf, geen hernieuwde
     // NWB-clustering. Veilige degradatie blijft: geen actieve NWB-dataset ->
     // GoKnoop-only graaf.
-    const { graph, nwbDatasetVersionId, cacheHit } = await loadCachedCombinedGraph(provider, datasetVersionId);
+    const { graph, nwbDatasetVersionId, cacheHit } = await graphLoadPromise;
 
     const result = computeCombinedRoute(graph, fromLogicalNodeId, toLogicalNodeId);
 

@@ -73,8 +73,9 @@ export async function POST(req: NextRequest) {
     const datasetVersionId = activeDatasetSnap.data()!.datasetVersionId as string;
 
     const provider = new CachedGraphProvider(datasetVersionId);
-    await provider.load();
-    const { graph } = await loadCachedCombinedGraph(provider, datasetVersionId);
+    const providerLoadPromise = provider.load();
+    const { graph } = await loadCachedCombinedGraph(provider, datasetVersionId, providerLoadPromise);
+    await providerLoadPromise;
 
     if (!provider.getNode(routeStartNodeId)) {
       return NextResponse.json({ error: `routeStartNodeId '${routeStartNodeId}' bestaat niet.` }, { status: 404 });
