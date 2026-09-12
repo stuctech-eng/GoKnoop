@@ -1,5 +1,5 @@
 import { initializeApp, getApps, cert, App } from "firebase-admin/app";
-import { initializeFirestore, Firestore } from "firebase-admin/firestore";
+import { getFirestore, Firestore } from "firebase-admin/firestore";
 
 /**
  * Server-side Firebase Admin SDK init. Nooit importeren in client-code.
@@ -14,18 +14,20 @@ import { initializeFirestore, Firestore } from "firebase-admin/firestore";
  * `getDb()`-aanroep terug (initializeApp is 0ms bij een warme herhaalaanroep
  * binnen dezelfde instance, waar de Firebase-app al bestond).
  *
- * TOEGEVOEGD 12-9-2026, productiearchitectuur-keuze (optie C): `preferRest:
- * true` toegevoegd -- gedocumenteerde, officiële Firestore Admin SDK-
- * instelling (sinds firebase-admin 9.14.0) die HTTP/1.1-REST-transport
- * gebruikt i.p.v. gRPC totdat een methode gRPC daadwerkelijk vereist. Dit
- * slaat het laden/initialiseren van gRPC-bibliotheken over, een bekend,
- * gedocumenteerd mechanisme achter cold-start-vertraging bij Firestore in
- * serverless omgevingen. Gratis, aanvullende maatregel naast de hoofdkeuze
- * (het vooraf-berekende graafartefact) -- geen aparte, losstaande optie.
+ * TERUGGEDRAAID 12-9-2026 (hotfix, app-breed niet-werkend): `preferRest: true`
+ * (toegevoegd in commit d1172cf, "optie c architectuur") is hier verwijderd.
+ * Root cause: preferRest schakelt gRPC-streaming uit ten gunste van losse
+ * HTTP/1.1-round-trips per document. `FirestoreGraphProvider` leest duizenden
+ * documenten (11.003 nodes) per aanvraag -- onder REST bleek dat trager, niet
+ * sneller, waardoor requests over de 10s Vercel-limiet heen liepen en als
+ * HTML-timeoutpagina terugkwamen i.p.v. JSON. Dat brak niet alleen de
+ * precompute-route maar élke route die getDb() gebruikt, inclusief de
+ * basale locatie-resolutie. Teruggezet naar de bewezen werkende standaard-
+ * instelling. Niet opnieuw toevoegen zonder eerst afzonderlijk te meten of
+ * het voor dít bulk-leespatroon daadwerkelijk sneller is.
  */
 
 let app: App;
-let firestoreInstance: Firestore | undefined;
 
 function getFirebaseApp(): App {
   if (getApps().length > 0) {
@@ -59,10 +61,7 @@ export function getDb(): Firestore {
   const t0 = Date.now();
   const a = getFirebaseApp();
   const afterInitApp = Date.now();
-  if (!firestoreInstance) {
-    firestoreInstance = initializeFirestore(a, { preferRest: true });
-  }
-  const db = firestoreInstance;
+  const db = getFirestore(a);
   const afterGetFirestore = Date.now();
   (getDb as unknown as { _lastBreakdown: { initializeAppMs: number; getFirestoreMs: number } })._lastBreakdown = {
     initializeAppMs: afterInitApp - t0,
