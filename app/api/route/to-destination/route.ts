@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
-import { loadCachedCombinedGraph } from "@/lib/route-engine/cached-nwb-provider";
+import { loadPrecomputedOrBuildGraph } from "@/lib/route-engine/load-precomputed-graph";
 import { computeRouteBetweenCandidatesWithFallback } from "@/lib/route-engine/route-between-candidates";
 import { resolveNearestNodes } from "@/lib/route-engine/location-resolver";
 import { combineRouteLegs } from "@/lib/route-engine/combine-route-legs";
@@ -107,7 +107,7 @@ export async function POST(req: NextRequest) {
 
     const provider = new CachedGraphProvider(datasetVersionId);
     const providerLoadPromise = provider.load();
-    const graphLoadPromise = loadCachedCombinedGraph(provider, datasetVersionId, providerLoadPromise);
+    const graphLoadPromise = loadPrecomputedOrBuildGraph(provider, datasetVersionId, providerLoadPromise);
     await providerLoadPromise;
     mark("goknoopProviderLoad");
     const { graph, cacheHit: graphCacheHit } = await graphLoadPromise;

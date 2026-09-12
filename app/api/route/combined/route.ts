@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { computeCombinedRoute } from "@/lib/route-engine/combined-route-engine";
-import { loadCachedCombinedGraph } from "@/lib/route-engine/cached-nwb-provider";
+import { loadPrecomputedOrBuildGraph } from "@/lib/route-engine/load-precomputed-graph";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
     // wachten alleen op providerLoadPromise (nodig voor provider.getNode()),
     // de NWB-fetch loopt intussen door.
     const providerLoadPromise = provider.load();
-    const graphLoadPromise = loadCachedCombinedGraph(provider, datasetVersionId, providerLoadPromise);
+    const graphLoadPromise = loadPrecomputedOrBuildGraph(provider, datasetVersionId, providerLoadPromise);
     await providerLoadPromise;
 
     if (!provider.getNode(fromLogicalNodeId)) {

@@ -1,5 +1,5 @@
 import { initializeApp, getApps, cert, App } from "firebase-admin/app";
-import { getFirestore, Firestore } from "firebase-admin/firestore";
+import { initializeFirestore, Firestore } from "firebase-admin/firestore";
 
 /**
  * Server-side Firebase Admin SDK init. Nooit importeren in client-code.
@@ -13,9 +13,19 @@ import { getFirestore, Firestore } from "firebase-admin/firestore";
  * `getLastDbInitBreakdown()` geeft de tijdsopsplitsing van de meest recente
  * `getDb()`-aanroep terug (initializeApp is 0ms bij een warme herhaalaanroep
  * binnen dezelfde instance, waar de Firebase-app al bestond).
+ *
+ * TOEGEVOEGD 12-9-2026, productiearchitectuur-keuze (optie C): `preferRest:
+ * true` toegevoegd -- gedocumenteerde, officiële Firestore Admin SDK-
+ * instelling (sinds firebase-admin 9.14.0) die HTTP/1.1-REST-transport
+ * gebruikt i.p.v. gRPC totdat een methode gRPC daadwerkelijk vereist. Dit
+ * slaat het laden/initialiseren van gRPC-bibliotheken over, een bekend,
+ * gedocumenteerd mechanisme achter cold-start-vertraging bij Firestore in
+ * serverless omgevingen. Gratis, aanvullende maatregel naast de hoofdkeuze
+ * (het vooraf-berekende graafartefact) -- geen aparte, losstaande optie.
  */
 
 let app: App;
+let firestoreInstance: Firestore | undefined;
 
 function getFirebaseApp(): App {
   if (getApps().length > 0) {
@@ -49,7 +59,10 @@ export function getDb(): Firestore {
   const t0 = Date.now();
   const a = getFirebaseApp();
   const afterInitApp = Date.now();
-  const db = getFirestore(a);
+  if (!firestoreInstance) {
+    firestoreInstance = initializeFirestore(a, { preferRest: true });
+  }
+  const db = firestoreInstance;
   const afterGetFirestore = Date.now();
   (getDb as unknown as { _lastBreakdown: { initializeAppMs: number; getFirestoreMs: number } })._lastBreakdown = {
     initializeAppMs: afterInitApp - t0,
