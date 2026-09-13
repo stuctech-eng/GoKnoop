@@ -3,6 +3,8 @@ import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { generateLoopRoutesWithScoring } from "@/lib/route-engine/start-node-scoring";
 import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
+import { fetchGoknoopEdgeGeometry } from "@/lib/route-engine/fetch-goknoop-edge-geometry";
+import { concatenateGeometry } from "@/lib/route-engine/route-builder";
 
 export const maxDuration = 10; // BUGFIX 30-8-2026: Vercel Hobby-plan kapt hoe dan ook af bij 10s, ongeacht wat hier stond -- gecorrigeerd naar de echte limiet.
 export const dynamic = "force-dynamic";
@@ -87,6 +89,30 @@ export async function POST(req: NextRequest) {
         },
         { status: 404 }
       );
+    }
+
+    // HOTFIX 12-9-2026: sinds de M6/M7-opslagformaat-fix (10-9-2026) laadt de bulk-graaf
+    // alleen topologie, geen geometrie -- geometrie wordt nu, net als bij de A->B-routes
+    // (combined-route-geometry.ts), pas HIER opgehaald: gericht, alleen voor de edges van
+    // de uiteindelijk gekozen rondjes (typisch een tiental per rondje), niet voor alle
+    // geëvalueerde kandidaten tijdens het zoeken zelf.
+    if (result.loops.length > 0) {
+      const neededEdgeIds = new Set<string>();
+      for (const loop of result.loops) {
+        for (const edge of loop.resolvedEdges) neededEdgeIds.add(edge.id);
+      }
+      const geometryMap = await fetchGoknoopEdgeGeometry(Array.from(neededEdgeIds));
+      result.loops = result.loops.map((loop) => {
+        const hydratedEdges = loop.resolvedEdges.map((edge) => ({
+          ...edge,
+          geometry: geometryMap.get(edge.id) ?? edge.geometry,
+        }));
+        return {
+          ...loop,
+          resolvedEdges: hydratedEdges,
+          route: { ...loop.route, geometry: concatenateGeometry(loop.route.nodes, hydratedEdges) },
+        };
+      });
     }
 
     return NextResponse.json(result);
