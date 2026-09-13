@@ -327,7 +327,11 @@ export default function Home() {
         setErrorMessage(
           data.reason === "no_usable_candidate"
             ? `We konden geen bruikbare route van ${km} km vinden vanaf ${data.candidatesAttempted ?? locationCandidates.length} knooppunten bij je locatie. Probeer een andere afstand of locatie.`
-            : "Er ging iets mis bij het zoeken naar routes."
+            : /* HOTFIX 12-9-2026, sectie 15 (fouten moeten zichtbaar zijn in de app zelf): toont
+               * nu de échte serverfout (data.error/data.details) i.p.v. altijd dezelfde vaste
+               * tekst -- zonder dit was er geen manier om de daadwerkelijke crash-reden te zien
+               * zonder externe tools. */
+              `Er ging iets mis bij het zoeken naar routes.${data.error ? ` (${data.error}${data.details ? `: ${data.details}` : ""})` : ""}`
         );
         setStep("error");
         return;
