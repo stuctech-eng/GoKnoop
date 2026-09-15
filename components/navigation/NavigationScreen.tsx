@@ -28,10 +28,14 @@
  * zelf al doet. `lib/navigation/` en `lib/route-engine/` kennen MapLibre
  * niet -- dat blijft uitsluitend hier en in `lib/map/`.
  *
- * Route blijft immutable: de meegegeven `edges`/`nodeSequence` representeren de
- * door de gebruiker gekozen route. Een eventuele reroute (nog niet in dit
- * component aangesloten op een live Route Engine-aanroep) zou een NIEUW
- * `Route`-object opleveren, nooit een mutatie van de oorspronkelijke keuze.
+ * Route blijft immutable ten opzichte van de props: de meegegeven initiële
+ * `edges`/`nodeSequence` representeren de door de gebruiker gekozen route en worden
+ * nooit gemuteerd. Een succesvolle herberekening (13-9-2026, reroute-koppeling --
+ * voorheen hier niet aangesloten) levert een NIEUW `Route`-object op via de echte
+ * Route Engine (`RerouteExecutor`/`performReroute`, `lib/navigation/reroute/`); de
+ * sessie volgt vanaf dat moment sessie-lokale, herwijsbare kopieën (`currentRoute`/
+ * `currentEdges`/`currentNodeSequence`/`currentNodeDisplayNumbers` in `start()`),
+ * nooit de props zelf.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -53,7 +57,11 @@ import { resolvePhysicalStart } from "@/lib/navigation/physical-anchor";
 import { buildRouteGeoJson } from "@/lib/map/route-geometry-adapter";
 import { buildPositionMarkerGeoJson } from "@/lib/map/position-marker-adapter";
 import { recordRiddenRoute } from "@/lib/history/ridden-routes-store";
-import type { GraphEdge } from "@/lib/route-engine/types";
+import { RerouteExecutor } from "@/lib/navigation/reroute/reroute-executor";
+import { RerouteContextTracker } from "@/lib/navigation/reroute/reroute-context-tracker";
+import { performReroute } from "@/lib/navigation/reroute/perform-reroute";
+import { HttpRouteEngineClient } from "@/lib/navigation/reroute/http-route-engine-client";
+import type { GraphEdge, Route, Point } from "@/lib/route-engine/types";
 import type { NavigationState } from "@/lib/navigation/types";
 
 // BELANGRIJK (6-9-2026, zie LiveLocationScreen.tsx voor de volledige toelichting):
@@ -120,6 +128,16 @@ const HEADING_SMOOTHING_ALPHA = 0.35; // uitgangspunt, nog niet definitief (zelf
 // Verlengd van 500 naar 900ms (30-8-2026, "draaien gaat stukje voor stukje" -- zelfde
 // aanpassing als de Kaart-hometab, LiveLocationScreen.tsx). Uitgangspunt, nog niet definitief.
 const EASE_DURATION_MS = 900;
+// TOEGEVOEGD 13-9-2026 (Fase 2A-vervolg, reroute-koppeling) -- zelfde discipline als de
+// overige kalibratiewaarden hierboven: expliciete constante, nog niet definitief
+// vastgezet, uitgesteld naar echte productietests (zelfde principe als
+// RerouteContextTracker's eigen doc-comment over RECENT_ROUTE_MEMORY).
+const RECENT_ROUTE_MEMORY_M = 250;
+// Voorkomt een aanvraagstorm als herberekenen herhaaldelijk mislukt (bijv. tijdelijk geen
+// netwerk) -- geen nieuwe aanvraag binnen dit venster na een mislukte poging. Beschermt
+// specifiek tegen falen-en-meteen-opnieuw, niet tegen normale GPS-ruis (die wordt al
+// door `deviationConfirmDurationMs`/`GpsFixEvaluator` opgevangen, hier ongewijzigd).
+const REROUTE_RETRY_BACKOFF_MS = 5000;
 
 // Statusweergave per NavigationState (stap 12.6) -- puur weergave, geen nieuwe
 // navigatielogica. Beknopte, niet-alarmistische labels (ontwerpregel: afwijking
@@ -242,6 +260,8 @@ export default function NavigationScreen({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const routeToStartLayerRef = useRef<L.Polyline | null>(null);
+  const routeLineLayerRef = useRef<L.Polyline | null>(null);
+  const nodeLayerGroupRef = useRef<L.LayerGroup | null>(null);
   const positionMarkerRef = useRef<L.CircleMarker | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const sourceRef = useRef<BrowserGeolocationSource | null>(null);
@@ -393,12 +413,18 @@ export default function NavigationScreen({
         attribContainer.style.transform = "translateX(-50%)";
       }
 
-      // Route-lijn (GeoJSON coordinates zijn [lon,lat], Leaflet wil [lat,lon]).
+      // Route-lijn (GeoJSON coordinates zijn [lon,lat], Leaflet wil [lat,lon]). Bewaard in
+      // een ref (13-9-2026, reroute-koppeling) zodat een latere succesvolle herberekening
+      // deze lijn kan bijwerken i.p.v. alleen de marker te laten bewegen.
       const lineLatLngs: L.LatLngTuple[] = (geoJson.line.geometry.coordinates as [number, number][]).map(([lon, lat]) => [lat, lon]);
-      L.polyline(lineLatLngs, { color: ROUTE_COLOR, weight: 5, lineJoin: "round", lineCap: "round" }).addTo(map);
+      routeLineLayerRef.current = L.polyline(lineLatLngs, { color: ROUTE_COLOR, weight: 5, lineJoin: "round", lineCap: "round" }).addTo(map);
 
       // Knooppuntcirkels + eigen HTML-labels (i.p.v. MapLibre's symbol-laag) -- eigen data,
       // eigen weergave, zelfde principe als GPT's "vervang alleen de renderer"-uitgangspunt.
+      // In een layerGroup (13-9-2026, reroute-koppeling) zodat ze na een herberekening in
+      // één keer vervangen kunnen worden.
+      const nodeLayerGroup = L.layerGroup().addTo(map);
+      nodeLayerGroupRef.current = nodeLayerGroup;
       for (const feature of geoJson.nodes.features) {
         const [lon, lat] = feature.geometry.coordinates;
         const nodeId = feature.properties.nodeId;
@@ -408,7 +434,7 @@ export default function NavigationScreen({
           weight: 3,
           fillColor: "#FFFFFF",
           fillOpacity: 1,
-        }).addTo(map);
+        }).addTo(nodeLayerGroup);
         L.marker([lat, lon], {
           icon: L.divIcon({
             className: "goknoop-node-label",
@@ -416,7 +442,7 @@ export default function NavigationScreen({
             iconSize: [0, 0],
           }),
           interactive: false,
-        }).addTo(map);
+        }).addTo(nodeLayerGroup);
       }
 
       // Live-positiemarker (stap 12.4): subtiel blauw stipje -- bewust anders dan de teal
@@ -461,6 +487,8 @@ export default function NavigationScreen({
       mapRef.current = null;
       positionMarkerRef.current = null;
       routeToStartLayerRef.current = null;
+      routeLineLayerRef.current = null;
+      nodeLayerGroupRef.current = null;
     };
   }, []);
 
@@ -472,14 +500,229 @@ export default function NavigationScreen({
 
     const clock = new SystemNavigationClock();
     const stateMachine = new NavigationStateMachine({ deviationConfirmDurationMs: CONFIRM_MS, rerouteCooldownMs: COOLDOWN_MS });
-    const model = buildRouteProgressModel(edges, nodeSequence);
-    const detector = new DeviationDetector(model.geometry, stateMachine, clock, {
+    // HERSCHREVEN (13-9-2026, reroute-koppeling): was `const model`/`const detector` --
+    // route blijft ONVERANDERLIJK t.o.v. de props (zie dataketen-comment bovenaan dit
+    // bestand), maar de SESSIE moet na een succesvolle herberekening een nieuwe, eigen
+    // Route kunnen volgen. Vandaar `let` + aparte, sessie-lokale kopieën van
+    // edges/nodeSequence/nodeDisplayNumbers -- de props zelf worden nergens gemuteerd.
+    let model = buildRouteProgressModel(edges, nodeSequence);
+    let currentEdges: readonly GraphEdge[] = edges;
+    let currentNodeSequence: readonly string[] = nodeSequence;
+    let currentNodeDisplayNumbers: readonly string[] = nodeDisplayNumbers;
+    let detector = new DeviationDetector(model.geometry, stateMachine, clock, {
       deviationThresholdM: 20,
       accuracyThresholdM: 25,
       gpsTimeoutMs: 10000,
       matchOptions: { baseWindowM: 100, windowMarginPerMps: 10, weights: { distance: 1, heading: 0.1, continuity: 0.5 } },
     });
     const controller = new NavigationSessionController(detector, stateMachine, clock, ARRIVAL_CONFIRM_DURATION_MS);
+
+    // Reroute-machinerie (13-9-2026): hergebruikt uitsluitend bestaande, al-geteste
+    // bouwstenen (RerouteExecutor, RerouteContextTracker, performReroute) -- geen tweede
+    // systeem. `currentRoute` is een sessie-lokaal `Route`-object dat de ECHTE, actieve
+    // route representeert (initieel synthetisch opgebouwd uit de props, zelfde patroon
+    // als `app/api/route/resolve/route.ts`'s `routeShaped`); na een succesvolle
+    // herberekening wijst dit naar de nieuwe `Route` van de Route Engine.
+    let currentRoute: Route = {
+      id: "navigation-session-initial",
+      datasetVersionId,
+      source: "route-engine-v1",
+      network: "fiets",
+      mode: "bicycle",
+      nodes: nodeSequence,
+      edges: edges.map((e) => e.id),
+      geometry: model.geometry as Point[],
+      distanceM: model.totalDistanceM,
+      elevation: null,
+      durationEstimate: null,
+      preferences: {},
+      constraints: {},
+      waypoints: [],
+      alternatives: [],
+      navigation: null,
+      metadata: { algorithm: "dijkstra", computedAt: new Date().toISOString(), computeTimeMs: 0, edgesConsidered: 0 },
+    };
+    const rerouteContextTracker = new RerouteContextTracker();
+    const rerouteExecutor = new RerouteExecutor(new HttpRouteEngineClient());
+    let lastRerouteFailureAtMs: number | null = null;
+    // Losse, expliciete vlag (naast de state machine) omdat `triggerReroute()` zelf al
+    // awaited werk doet (knooppunt-resolutie) VÓÓR `performReroute()` -- en dus vóór
+    // `stateMachine.startReroute()` -- aangeroepen wordt. Zonder deze vlag zou elke
+    // GPS-sample die tijdens die wachttijd binnenkomt een EIGEN, parallelle
+    // herberekening starten (de state staat dan nog steeds op OFF_ROUTE). Dit is dus
+    // GEEN tweede state-systeem, alleen bescherming tegen een race vóórdat de state
+    // machine zelf de situatie kan bewaken.
+    let rerouteInFlight = false;
+
+    /**
+     * Voert een échte herberekening uit (vervangt de vroegere stopgap die alleen
+     * REROUTING->REROUTED simuleerde zonder nieuwe route). Bewust hier als losse
+     * functie i.p.v. inline in de sample-callback: wordt van twee plekken aangeroepen
+     * (de eerste OFF_ROUTE-transitie zelf, én de daaropvolgende samples zolang de state
+     * OFF_ROUTE blijft) en moet overal exact hetzelfde gedrag hebben.
+     */
+    async function triggerReroute() {
+      if (rerouteInFlight) return;
+      if (lastRerouteFailureAtMs !== null && clock.now() - lastRerouteFailureAtMs < REROUTE_RETRY_BACKOFF_MS) {
+        return; // backoff na een mislukte poging -- voorkomt een aanvraagstorm
+      }
+
+      const lastSample = lastSampleRef.current;
+      if (!lastSample) {
+        appendLog("herberekening overgeslagen: nog geen GPS-positie bekend");
+        return;
+      }
+
+      rerouteInFlight = true;
+      try {
+        await triggerRerouteInner(lastSample);
+      } finally {
+        rerouteInFlight = false;
+      }
+    }
+
+    async function triggerRerouteInner(lastSample: { lat: number; lon: number }) {
+      // Dichtstbijzijnde routeerbare node bij de huidige positie -- expliciet de
+      // verantwoordelijkheid van de aanroeper (RerouteRequest-contract, reroute-executor.ts),
+      // hergebruikt hier hetzelfde, al-bestaande endpoint als de gewone locatiebepaling
+      // (vandaag al gefixt voor de preferRest-regressie).
+      let fromLogicalNodeId: string;
+      try {
+        const resolveRes = await fetch("/api/location/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat: lastSample.lat, lon: lastSample.lon, limit: 1 }),
+        });
+        const resolveData = await resolveRes.json();
+        const candidate = resolveData?.candidates?.[0]?.logicalNodeId;
+        if (!resolveRes.ok || !candidate) {
+          throw new Error(resolveData?.error ?? "geen dichtstbijzijnd knooppunt gevonden");
+        }
+        fromLogicalNodeId = candidate;
+      } catch (err) {
+        lastRerouteFailureAtMs = clock.now();
+        appendLog(`herberekening mislukt (knooppunt-resolutie): ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      // Tijdelijk te vermijden edges (pingpong-preventie, ontwerp sectie 10) -- alleen
+      // zinvol als er nog een geldige match tegen het HUIDIGE model bestaat.
+      let temporaryAvoidEdgeIds: readonly string[] = [];
+      const lastMatch = detector.getLastMatch();
+      if (lastMatch) {
+        try {
+          const progressAtDeviation = calculateProgress(model, lastMatch);
+          temporaryAvoidEdgeIds = rerouteContextTracker.getTemporaryAvoidEdgeIds(
+            progressAtDeviation.distanceAlongRouteM,
+            RECENT_ROUTE_MEMORY_M
+          );
+        } catch {
+          // Matched positie hoort niet meer bij het huidige model -- geen avoid-edges, geen crash.
+        }
+      }
+
+      let result;
+      try {
+        result = await performReroute({
+          stateMachine,
+          clock,
+          executor: rerouteExecutor,
+          request: { originalRoute: currentRoute, fromLogicalNodeId, temporaryAvoidEdgeIds },
+        });
+      } catch {
+        // stateMachine.startReroute() zelf gooide (bijv. state ondertussen alweer ON_ROUTE
+        // door een razendsnel binnengekomen volgend sample) -- geen crash, gewoon niets doen.
+        return;
+      }
+      setNavState(stateMachine.getState());
+
+      if (result.outcome !== "success") {
+        lastRerouteFailureAtMs = clock.now();
+        appendLog(`herberekening mislukt: ${result.reason} -- ${result.message}`);
+        return;
+      }
+
+      // Succesvolle herberekening: nieuwe Route -> volledige GraphEdge[] + weergavenummers
+      // ophalen via het bestaande, daarvoor gebouwde endpoint (eigen doc-comment: "klaar om
+      // rechtstreeks in NavigationScreen te voeden") -- geen nieuwe resolutielogica.
+      let resolveEdgesData: { resolvedEdges?: GraphEdge[]; nodeDisplayNumbers?: string[]; error?: string };
+      try {
+        const res = await fetch("/api/route/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            datasetVersionId: result.newRoute.datasetVersionId,
+            edgeIds: result.newRoute.edges,
+            nodeIds: result.newRoute.nodes,
+          }),
+        });
+        resolveEdgesData = await res.json();
+        if (!res.ok || !resolveEdgesData.resolvedEdges || !resolveEdgesData.nodeDisplayNumbers) {
+          throw new Error(resolveEdgesData.error ?? "kon nieuwe route niet volledig ophalen");
+        }
+      } catch (err) {
+        // Route Engine leverde wél een geldige nieuwe Route, maar de vervolgstap om 'm
+        // bruikbaar te maken voor matching/kaart mislukte -- state blijft REROUTED staan
+        // (geen crash), maar zonder nieuw model kan matching niet hervatten. Gelogd zodat
+        // dit zichtbaar is; de gebruiker blijft OFF_ROUTE-achtig totdat een volgende poging
+        // (na de backoff) wel lukt.
+        lastRerouteFailureAtMs = clock.now();
+        appendLog(`herberekening: nieuwe route ontvangen maar niet bruikbaar gemaakt: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      // VEILIGHEIDSKRITISCH (Te's expliciete eis): het oude matching-model mag na een
+      // succesvolle reroute niet actief blijven tegen de oude route. Alle drie -- model,
+      // detector, currentRoute -- worden hier in dezelfde stap vervangen, nooit los van
+      // elkaar (zou een inconsistente tussentoestand geven).
+      currentRoute = result.newRoute;
+      currentEdges = resolveEdgesData.resolvedEdges;
+      currentNodeSequence = result.newRoute.nodes;
+      currentNodeDisplayNumbers = resolveEdgesData.nodeDisplayNumbers;
+      model = buildRouteProgressModel(currentEdges, currentNodeSequence);
+      detector = new DeviationDetector(model.geometry, stateMachine, clock, {
+        deviationThresholdM: 20,
+        accuracyThresholdM: 25,
+        gpsTimeoutMs: 10000,
+        matchOptions: { baseWindowM: 100, windowMarginPerMps: 10, weights: { distance: 1, heading: 0.1, continuity: 0.5 } },
+      });
+      rerouteContextTracker.clear(); // "de blokkade vervalt zodra de gebruiker weer op een logisch aansluitend deel van de route zit"
+      lastRerouteFailureAtMs = null;
+
+      // Zichtbare routegeometrie ook daadwerkelijk vervangen (Te's expliciete eis) -- niet
+      // alleen de marker laten bewegen. `setLatLngs`/`clearLayers` i.p.v. remove+recreate,
+      // zelfde bestaande idioom als de routeToStartLayerRef hierboven.
+      const map = mapRef.current;
+      if (map) {
+        try {
+          const L = await import("leaflet");
+          const geoJson = buildRouteGeoJson(model, currentNodeDisplayNumbers as string[]);
+          const newLineLatLngs: L.LatLngTuple[] = (geoJson.line.geometry.coordinates as [number, number][]).map(([lon, lat]) => [lat, lon]);
+          routeLineLayerRef.current?.setLatLngs(newLineLatLngs);
+
+          nodeLayerGroupRef.current?.clearLayers();
+          const group = nodeLayerGroupRef.current ?? L.layerGroup().addTo(map);
+          for (const feature of geoJson.nodes.features) {
+            const [lon, lat] = feature.geometry.coordinates;
+            const nodeId = feature.properties.nodeId;
+            L.circleMarker([lat, lon], { radius: 10, color: ROUTE_COLOR, weight: 3, fillColor: "#FFFFFF", fillOpacity: 1 }).addTo(group);
+            L.marker([lat, lon], {
+              icon: L.divIcon({
+                className: "goknoop-node-label",
+                html: `<div style="font-size:12px;font-weight:700;font-family:sans-serif;color:${ROUTE_COLOR};white-space:nowrap;transform:translate(14px,-8px);">${nodeId}</div>`,
+                iconSize: [0, 0],
+              }),
+              interactive: false,
+            }).addTo(group);
+          }
+          nodeLayerGroupRef.current = group;
+        } catch (err) {
+          appendLog(`kaartlijn bijwerken mislukt (matching zelf werkt wel door): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      appendLog(`herberekening geslaagd -- nieuwe route: ${currentEdges.length} edges, ${Math.round(model.totalDistanceM)}m`);
+    }
 
     let sessionStarted = false;
 
@@ -665,22 +908,21 @@ export default function NavigationScreen({
       const outcome = controller.processGpsSample(sample);
       setNavState(stateMachine.getState());
 
-      // BUGFIX (30-8-2026, "blijft locatie staan bij verlaten route"): OFF_ROUTE accepteert
-      // uitsluitend startReroute() als geldige overgang (state machine, stap 2/7) -- zonder
-      // die aanroep werd ELKE volgende sample afgewezen ("abstained: state_not_accepting_
-      // signal"), waardoor de marker voor altijd bevroor, ook als je weer terug naar de route
-      // reed. Dit is BEWUST NOG GEEN volledige reroute-feature (die zou een echte nieuwe
-      // Route Engine-aanroep + RerouteContextTracker/RECENT_ROUTE_MEMORY-dedup vereisen --
-      // apart, groter werk, sectie 7/8-machinerie bestaat al maar is nog niet aangesloten).
-      // Dit is een minimale, eerlijke stopgap: cyclet direct door REROUTING->REROUTED heen
-      // ZONDER een nieuwe route te berekenen (dezelfde `model`/geometrie blijft gelden), puur
-      // om matching te laten hervatten. De bestaande `rerouteCooldownMs`-bescherming in de
-      // state machine zelf voorkomt dat dit meteen weer naar OFF_ROUTE terugflipt.
-      if (outcome.action === "abstained" && outcome.reason === "state_not_accepting_signal" && stateMachine.getState() === "OFF_ROUTE") {
-        stateMachine.startReroute();
-        stateMachine.completeReroute(clock.now());
-        setNavState(stateMachine.getState());
-        appendLog("matching hervat (geen nieuwe route berekend -- zelfde route, stopgap-fix)");
+      // ECHTE HERBEREKENING (13-9-2026, reroute-koppeling) -- vervangt de eerdere stopgap
+      // van 30-8-2026 die alleen REROUTING->REROUTED simuleerde zonder nieuwe route op te
+      // halen (zie git-historie voor de oorspronkelijke, eerlijke comment daarover).
+      //
+      // Trigger op `stateMachine.getState() === "OFF_ROUTE"` zelf (niet pas op de
+      // eerstvolgende afgewezen sample): de sample die de afwijking bevestigt (via
+      // `reportDeviation()`, hysterese-venster voorbij) zet de state DIRECT op OFF_ROUTE
+      // en levert een normale `reported_deviation`-uitkomst op -- geen "abstained" nodig
+      // om te weten dat er herberekend moet worden. Elke volgende sample (die wél
+      // "abstained: state_not_accepting_signal" oplevert zolang REROUTING loopt) triggert
+      // dezelfde check opnieuw, maar `performReroute()` zet de state meteen synchroon naar
+      // REROUTING, dus deze voorwaarde is dan al niet meer waar -- geen dubbele aanvragen
+      // nodig, geen aparte "in-flight"-vlag nodig (state machine is de enige bron van waarheid).
+      if (stateMachine.getState() === "OFF_ROUTE") {
+        void triggerReroute();
       }
 
       // KERNPUNT: de marker wordt UITSLUITEND bijgewerkt op basis van een geaccepteerde
@@ -694,7 +936,7 @@ export default function NavigationScreen({
         // Niveau 1 (richting, stap 12.5): dezelfde matchedPosition hergebruikt, geen
         // nieuwe matching/positiebepaling -- alleen afgeleide weergave-informatie.
         const progress = calculateProgress(model, outcome.matchedPosition);
-        const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, nodeDisplayNumbers);
+        const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, currentNodeDisplayNumbers as string[]);
 
         // Zoom-inzoomen (sectie 6C/6G): UITSLUITEND tijdens NAVIGATING zoomt de kaart
         // dichterbij. Kaartrotatie zelf is losgelaten (Leaflet, blijft noord-boven, zie
@@ -727,6 +969,11 @@ export default function NavigationScreen({
 
         setProgressInfo({ ratio: progress.progressRatio, distanceAlongM: progress.distanceAlongRouteM, totalM: model.totalDistanceM });
 
+        // Reroute-context bijhouden (13-9-2026, reroute-koppeling) -- ÉÉN plek, ongeacht
+        // ON_ROUTE of (nog niet bevestigde) afwijking: RerouteContextTracker zelf bepaalt pas
+        // bij een latere herberekening welke edges nog "recent" genoeg zijn om te vermijden.
+        rerouteContextTracker.recordPosition(progress.currentEdgeId, progress.distanceAlongRouteM);
+
         // Fase 2 (gereden-routes-tracking, 29-8-2026): checkArrival() bestond al in de
         // controller maar werd nooit aangeroepen -- ARRIVED werd zo nooit bereikt. Nu
         // gekoppeld: bij bevestigde aankomst wordt de rit precies ÉÉN keer vastgelegd
@@ -737,9 +984,9 @@ export default function NavigationScreen({
           if (!hasRecordedArrivalRef.current) {
             hasRecordedArrivalRef.current = true;
             recordRiddenRoute({
-              edgeIds: edges.map((e) => e.id),
-              nodeIds: nodeSequence,
-              startNodeId: nodeSequence[0],
+              edgeIds: currentEdges.map((e) => e.id),
+              nodeIds: currentNodeSequence as string[],
+              startNodeId: currentNodeSequence[0],
               datasetVersionId,
               distanceM: model.totalDistanceM,
             });
