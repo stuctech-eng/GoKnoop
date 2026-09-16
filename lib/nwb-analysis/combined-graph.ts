@@ -140,7 +140,7 @@ export async function computeNwbClusterAssignments(
     }
     if (idx > 0 && idx % YIELD_EVERY_N_POINTS === 0) {
       log("clustering voortgang", { verwerkt: idx, totaal: rawPoints.length });
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 0)); // FIX 15-9-2026: setImmediate is Node-only, deze functie draait ook client-side (debugtools)
     }
   }
   log("Union-find-clustering klaar");
@@ -309,7 +309,7 @@ async function buildBaseGraph(
       }
       if (idx > 0 && idx % YIELD_EVERY_N_POINTS === 0) {
         log("clustering voortgang", { verwerkt: idx, totaal: rawPoints.length });
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 0)); // FIX 15-9-2026: setImmediate is Node-only, deze functie draait ook client-side (debugtools)
       }
     }
     log("Union-find-clustering klaar");
