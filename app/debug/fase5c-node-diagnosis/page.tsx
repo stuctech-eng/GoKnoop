@@ -100,6 +100,7 @@ export default function Fase5cNodeDiagnosisPage() {
     }
 
     // Vraag 1: exacte locatie.
+    try {
     const targetNode = provider.getNode(TARGET_NODE_ID);
     if (!targetNode) {
       setLog((prev) => [...prev, `⚠️ Knoop ${TARGET_NODE_ID} niet gevonden in de graaf.`]);
@@ -135,14 +136,19 @@ export default function Fase5cNodeDiagnosisPage() {
         if (key) params.set("key", key);
         const res = await fetch(`/api/debug/nwb-collector-read-tiles?${params.toString()}`, { cache: "no-store" });
         const json = await res.json();
-        if (!res.ok) break;
+        if (!res.ok) {
+          setLog((prev) => [...prev, `⚠️ tegels lezen gestopt: ${json?.error ?? res.status} ${json?.details ?? ""}`.trim()]);
+          break;
+        }
         for (const seg of json.segments as SlimNwbSegment[]) segmentsById.set(seg.id, seg);
         if (json.done) break;
         offset += json.tilesInPage;
-      } catch {
+      } catch (err) {
+        setLog((prev) => [...prev, `⚠️ tegels lezen gestopt (netwerkfout): ${err instanceof Error ? err.message : String(err)}`]);
         break;
       }
     }
+    setLog((prev) => [...prev, `Volendam NWB-tegels: ${segmentsById.size} segmenten opgehaald.`]);
     const nwbSegments = Array.from(segmentsById.values());
 
     let goknoopBearingNodes: GoKnoopNodeInput[] = [];
@@ -151,9 +157,13 @@ export default function Fase5cNodeDiagnosisPage() {
       if (key) params.set("key", key);
       const res = await fetch(`/api/debug/nwb-collector-goknoop-bearings?${params.toString()}`, { cache: "no-store" });
       const json = await res.json();
-      if (res.ok) goknoopBearingNodes = json.nodes;
-    } catch {
-      /* leeg */
+      if (res.ok) {
+        goknoopBearingNodes = json.nodes;
+      } else {
+        setLog((prev) => [...prev, `⚠️ knooppunt-richtingen ophalen mislukt: ${json?.error ?? res.status}`]);
+      }
+    } catch (err) {
+      setLog((prev) => [...prev, `⚠️ knooppunt-richtingen ophalen mislukt (netwerkfout): ${err instanceof Error ? err.message : String(err)}`]);
     }
 
     await new Promise((r) => setTimeout(r, 20));
@@ -320,7 +330,11 @@ export default function Fase5cNodeDiagnosisPage() {
       VERDACHTE_KNOOP_EDGE_CONTROLE: suspectNodeAnalysis,
     });
     setLog((prev) => [...prev, "Diagnose klaar."]);
-    setRunning(false);
+    } catch (err) {
+      setLog((prev) => [...prev, `⚠️ Diagnose gestopt door een fout: ${err instanceof Error ? err.message : String(err)}`]);
+    } finally {
+      setRunning(false);
+    }
   }
 
   const copyText = report ? JSON.stringify(report, null, 2) : "";
