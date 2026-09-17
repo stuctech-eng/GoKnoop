@@ -102,10 +102,23 @@ export async function loadCachedCombinedGraph(
   // is de enige scope die tot nu toe daadwerkelijk gegenereerd/geschreven is
   // (zie generate-bridges-runner-sessie 17-9-2026) -- "weak" levert dus nu
   // gewoon een lege query op, geen foutafhandeling nodig.
+  //
+  // HERZIEN, zelfde dag (live bevestigd: 504 FUNCTION_INVOCATION_TIMEOUT bij
+  // Volendam->Hoorn via de app, cold start): `.select()` gebruikt om de
+  // `geometry`-array (20-40+ punten per bridge, x1941 landelijk) NIET mee te
+  // lezen. Dijkstra heeft voor het padzoeken zelf alleen `distanceM` nodig,
+  // geen geometrie -- exact hetzelfde topologie-eerst-principe dat vandaag al
+  // voor gewone GoKnoop-edges is toegepast (route-builder.ts, M6/M7). Gevolg:
+  // bridge-edges hebben nu tijdelijk `geometry: []` (zie toGraphEdge() in
+  // bridge-augmented-graph-provider.ts) totdat een latere hydratie-stap
+  // (zelfde patroon als fetchGoknoopEdgeGeometry, nog niet gebouwd voor
+  // bridges) dat voor de uiteindelijk gekozen route aanvult -- bewust een
+  // bekende, nu nog openstaande beperking, geen stille aanname.
   const bridgesPromise = db
     .collection("networkBridges")
     .where("datasetVersionId", "==", datasetVersionId)
     .where("validationStatus", "==", "valid")
+    .select("sourceNodeId", "targetNodeId", "distanceM", "circuityRatio")
     .get();
 
   if (nwbDatasetVersionId) {
@@ -151,7 +164,14 @@ export async function loadCachedCombinedGraph(
   }
 
   const bridgesSnap = await bridgesPromise;
-  const validBridges = bridgesSnap.docs.map((d) => d.data() as NetworkBridge);
+  // `.select()` projecteert alleen expliciet gevraagde velden -- `id` en `geometry` horen daar
+  // NIET bij (zie boven), dus hier expliciet aangevuld: `doc.id` (het Firestore-document-ID is
+  // altijd gelijk aan het `id`-veld, per constructie in de write-fase) en `geometry: []`
+  // (bewust leeg, zie comment bij bridgesPromise hierboven).
+  const validBridges: NetworkBridge[] = bridgesSnap.docs.map((d) => {
+    const data = d.data() as Omit<NetworkBridge, "id" | "geometry">;
+    return { ...data, id: d.id, geometry: [] };
+  });
   const selectedBridges = selectTopBridgesPerNode(validBridges);
   reportProgress("latest", "loadCachedCombinedGraph: bridges opgehaald + geselecteerd (top-N per node)", {
     aantalValidBridges: validBridges.length,

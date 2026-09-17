@@ -108,6 +108,10 @@ function toGraphEdge(bridge: NetworkBridge): GraphEdge {
     toLogicalNodeId: bridge.targetNodeId,
     distanceM: bridge.distanceM,
     directionality: "forward", // zie klasse-commentaar -- bewust NIET "bidirectional"
-    geometry: bridge.geometry.map((p): Point => wgs84ToRd(p.lat, p.lon)), // RD, consistent met reguliere edges
+    // TOEGEVOEGD 17-9-2026: `bridge.geometry` kan leeg zijn (bewust, performance-fix --
+    // zie cached-nwb-provider.ts) -- Dijkstra heeft alleen distanceM nodig, geometrie wordt
+    // pas later gehydrateerd voor de uiteindelijk gekozen route (nog te bouwen, zelfde
+    // patroon als fetchGoknoopEdgeGeometry). `?? []` voorkomt een crash op undefined/leeg.
+    geometry: (bridge.geometry ?? []).map((p): Point => wgs84ToRd(p.lat, p.lon)),
   };
 }
