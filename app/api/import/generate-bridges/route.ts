@@ -415,13 +415,23 @@ export async function GET(req: NextRequest) {
 
     // ============================================================
     // PHASE: inspect -- TOEGEVOEGD 17-9-2026, uitsluitend lezen, GEEN schrijf-
-    // of genereeractie (expliciete eis Te). Beantwoordt de twee open vragen
-    // vóór een eventuele integratie-GO:
-    //  (a) hoeveel valid bridges bestaan er per gap-node (voor
-    //      MAX_ACTIVE_BRIDGES_PER_NODE -- nog nergens een echte waarde);
-    //  (b) is er een opgeslagen bridge voor een specifieke node (NDSM-case).
-    // Leest uitsluitend `networkBridges`; raakt `generateBridgesAttempts` of
-    // de candidate-cache niet aan.
+    // of genereeractie (expliciete eis Te). Beantwoordt de open vragen vóór een
+    // eventuele integratie-GO.
+    //
+    // HERZIEN 17-9-2026 (Te's methodologische correctie): de eerste versie
+    // groepeerde ALLE valid bridges op sourceNodeId, zonder te filteren op
+    // "is dit ook echt een strong-gap-node (edgeCount===0)". Omdat bridges
+    // directioneel zijn (elke richting een eigen document), telde die
+    // groepering ook retour-bridges mee vanuit grote, goedverbonden hub-
+    // knopen terug naar een gap -- precies de asymmetrie die de NDSM-case
+    // blootlegde (wél een bridge ALS target, geen enkele ALS source). Dat
+    // vertroebelde exact de vraag die voor MAX_ACTIVE_BRIDGES_PER_NODE telt:
+    // "hoeveel manieren heeft een gap-node om te VERTREKKEN". Nu: expliciet
+    // gefilterd op de bekende strong-gap-node-set (edgeCount===0, dezelfde
+    // detectGapNodes()-logica als phase=analyze/prepare), en per zo'n node
+    // uitsluitend de eigen UITGAANDE valid bridges geteld -- inclusief nodes
+    // met NUL (anders zou het gemiddelde/mediaan alleen over de "gelukkigen"
+    // gaan, niet over de hele populatie die de limiet moet dienen).
     // ============================================================
     if (phase === "inspect") {
       const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
@@ -429,50 +439,87 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "scope is verplicht en moet 'strong' of 'weak' zijn." }, { status: 400 });
       }
       const lookupNodeId = req.nextUrl.searchParams.get("nodeId");
+      const NDSM_NODE_ID = "pR2n6KWgtHLRPwvkUmZ8"; // bekende, eerder bevestigde case -- Te wil deze altijd in de rapportage
 
-      const validBridgesSnap = await db
-        .collection("networkBridges")
-        .where("datasetVersionId", "==", datasetVersionId)
-        .where("scope", "==", scope)
-        .where("validationStatus", "==", "valid")
-        .get();
+      const [structure, validBridgesSnap] = await Promise.all([
+        loadGraphStructure(db, datasetVersionId),
+        db
+          .collection("networkBridges")
+          .where("datasetVersionId", "==", datasetVersionId)
+          .where("scope", "==", scope)
+          .where("validationStatus", "==", "valid")
+          .get(),
+      ]);
+      if (!structure) {
+        return NextResponse.json({ error: `Geen graafstructuur gevonden voor datasetVersionId=${datasetVersionId}.` }, { status: 400 });
+      }
       const validBridges = validBridgesSnap.docs.map((d) => d.data() as NetworkBridge);
 
-      // (a) Verdeling: aantal valid bridges per sourceNodeId (bridges zijn directioneel,
-      // dus sourceNodeId is de enige zinvolle groepering -- targetNodeId zou de
-      // omgekeerde-richting-documenten dubbel meetellen).
-      const bridgeCountByNode = new Map<string, number>();
+      // Ruwe (nog steeds niet-gefilterde) telling per sourceNodeId -- bewust behouden
+      // als context, nu expliciet gelabeld als "ongefilterd" i.p.v. als hét antwoord.
+      const rawBridgeCountByNode = new Map<string, number>();
       for (const b of validBridges) {
-        bridgeCountByNode.set(b.sourceNodeId, (bridgeCountByNode.get(b.sourceNodeId) || 0) + 1);
+        rawBridgeCountByNode.set(b.sourceNodeId, (rawBridgeCountByNode.get(b.sourceNodeId) || 0) + 1);
       }
-      const counts = [...bridgeCountByNode.values()];
-      const distribution: Record<string, number> = {};
-      for (const c of counts) {
+      const rawCounts = [...rawBridgeCountByNode.values()];
+      const rawDistribution: Record<string, number> = {};
+      for (const c of rawCounts) {
         const bucket = c >= 5 ? "5+" : String(c);
-        distribution[bucket] = (distribution[bucket] || 0) + 1;
+        rawDistribution[bucket] = (rawDistribution[bucket] || 0) + 1;
       }
 
-      // (b) Gerichte lookup, alleen als nodeId is meegegeven.
-      let nodeLookup: { nodeId: string; bridgesAsSource: NetworkBridge[]; bridgesAsTarget: NetworkBridge[] } | null = null;
-      if (lookupNodeId) {
-        nodeLookup = {
-          nodeId: lookupNodeId,
-          bridgesAsSource: validBridges.filter((b) => b.sourceNodeId === lookupNodeId),
-          bridgesAsTarget: validBridges.filter((b) => b.targetNodeId === lookupNodeId),
+      // Precieze telling: alleen strong-gap-nodes (edgeCount===0), alleen hun
+      // eigen uitgaande valid bridges, INCLUSIEF nodes met nul.
+      const { strongGap } = detectGapNodes(structure, DEFAULT_GAP_COMPONENT_SIZE_THRESHOLD);
+      const strongGapNodeIds = [...strongGap].map((i) => structure.nodes[i].id);
+      const outgoingCounts = strongGapNodeIds.map((id) => rawBridgeCountByNode.get(id) || 0);
+      const outgoingDistribution: Record<string, number> = { "0": 0, "1": 0, "2": 0, "3": 0, "4+": 0 };
+      for (const c of outgoingCounts) {
+        const bucket = c >= 4 ? "4+" : String(c);
+        outgoingDistribution[bucket] = (outgoingDistribution[bucket] || 0) + 1;
+      }
+      const sortedOutgoing = [...outgoingCounts].sort((a, b) => a - b);
+      const mean = outgoingCounts.length > 0 ? outgoingCounts.reduce((s, c) => s + c, 0) / outgoingCounts.length : 0;
+      const outliers = strongGapNodeIds
+        .map((id) => ({ nodeId: id, outgoingValidBridgeCount: rawBridgeCountByNode.get(id) || 0 }))
+        .filter((o) => o.outgoingValidBridgeCount > 0)
+        .sort((a, b) => b.outgoingValidBridgeCount - a.outgoingValidBridgeCount)
+        .slice(0, 15);
+
+      // NDSM-case, altijd in de rapportage (Te's expliciete voorkeur), plus een
+      // optionele extra lookup op verzoek.
+      function buildLookup(nodeId: string) {
+        return {
+          nodeId,
+          isKnownStrongGapNode: strongGapNodeIds.includes(nodeId),
+          bridgesAsSource: validBridges.filter((b) => b.sourceNodeId === nodeId),
+          bridgesAsTarget: validBridges.filter((b) => b.targetNodeId === nodeId),
         };
       }
+      const ndsmLookup = buildLookup(NDSM_NODE_ID);
+      const customLookup = lookupNodeId && lookupNodeId !== NDSM_NODE_ID ? buildLookup(lookupNodeId) : null;
 
       return NextResponse.json({
         phase: "inspect",
         scope,
         readOnly: true,
-        totalValidBridges: validBridges.length,
-        gapNodesWithAtLeastOneBridge: bridgeCountByNode.size,
-        bridgesPerGapNodeDistribution: distribution,
-        bridgesPerGapNodeMin: counts.length > 0 ? Math.min(...counts) : 0,
-        bridgesPerGapNodeMax: counts.length > 0 ? Math.max(...counts) : 0,
-        bridgesPerGapNodeMedian: median([...counts].sort((a, b) => a - b)),
-        nodeLookup,
+        precieze_meting_uitgaande_bridges_per_strong_gap_node: {
+          totalStrongGapNodes: strongGapNodeIds.length,
+          strongGapNodesWithAtLeastOneOutgoingValidBridge: outgoingCounts.filter((c) => c > 0).length,
+          distribution: outgoingDistribution,
+          min: sortedOutgoing.length > 0 ? sortedOutgoing[0] : 0,
+          max: sortedOutgoing.length > 0 ? sortedOutgoing[sortedOutgoing.length - 1] : 0,
+          median: median(sortedOutgoing),
+          mean: Number(mean.toFixed(2)),
+          top15OutliersBySourceCount: outliers,
+        },
+        ongefilterde_meting_ter_referentie_LET_OP_bevat_ook_retourbridges: {
+          totalValidBridges: validBridges.length,
+          gapNodesWithAtLeastOneBridge: rawBridgeCountByNode.size,
+          distribution: rawDistribution,
+        },
+        ndsmCase: ndsmLookup,
+        customLookup,
       });
     }
 
