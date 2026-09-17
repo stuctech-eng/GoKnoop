@@ -331,9 +331,18 @@ export default function GenerateBridgesRunnerPage() {
         </button>
       )}
 
-      {writeResult && (
+      {/* FIX 17-9-2026: writeResult wordt nu per chunk bijgewerkt (hervatbare write-lus) --
+          dit blok toonde voorheen bij ELKE tussenstap al de groene "klaar"-stijl, wat een
+          tussenstand liet lijken als eindresultaat. Nu twee aparte weergaven: een neutrale
+          "bezig"-regel tijdens het schrijven, en pas de groene ✅ zodra status echt "written" is. */}
+      {writeResult && status !== "written" && (
+        <div style={{ padding: 12, background: "#fff8e1", border: "1px solid #e0c97a", borderRadius: 8, marginBottom: 16 }}>
+          ⏳ Bezig met schrijven... tot nu toe {writeResult.written} bridges ({writeResult.validCount} valid). Niet de pagina sluiten.
+        </div>
+      )}
+      {writeResult && status === "written" && (
         <div style={{ padding: 12, background: "#e6f4ea", border: "1px solid #b7dfc0", borderRadius: 8, marginBottom: 16 }}>
-          ✅ Geschreven: {writeResult.written} bridges ({writeResult.validCount} valid).
+          ✅ Geschreven (compleet): {writeResult.written} bridges ({writeResult.validCount} valid).
         </div>
       )}
 
