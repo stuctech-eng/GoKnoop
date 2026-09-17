@@ -499,6 +499,95 @@ export async function GET(req: NextRequest) {
       const ndsmLookup = buildLookup(NDSM_NODE_ID);
       const customLookup = lookupNodeId && lookupNodeId !== NDSM_NODE_ID ? buildLookup(lookupNodeId) : null;
 
+      // ============================================================
+      // TOEGEVOEGD 17-9-2026 (Te's vervolgvraag): kwaliteitsanalyse specifiek
+      // voor de 278 strong-gap-nodes met EXACT 3 uitgaande valid bridges.
+      // Doel: is bridge 1/2/3 kwalitatief vergelijkbaar, of is de kandidaat-
+      // volgorde (gegenereerd op geografische nabijheid, findCandidates())
+      // ook betekenisvol voor kwaliteit (circuityRatio)? Puur lezen -- ook
+      // hier geen enkele .set()/.update()/.delete().
+      //
+      // `geographicDistanceM` (de hemelsbrede afstand die de generatie-
+      // volgorde bepaalde) staat NIET op NetworkBridge zelf, alleen op de
+      // ATTEMPTS_COLLECTION-documenten (zelfde `id`, dus rechtstreeks te
+      // koppelen). `.select()` gebruikt om alleen de nodige velden op te
+      // halen (geen geometry) -- lichter binnen het 10s-budget.
+      // ============================================================
+      const nodesWithExactlyThree = strongGapNodeIds.filter((id) => (rawBridgeCountByNode.get(id) || 0) === 3);
+      const nodesWithExactlyThreeSet = new Set(nodesWithExactlyThree);
+
+      const attemptsSnap = await db
+        .collection(ATTEMPTS_COLLECTION)
+        .where("datasetVersionId", "==", datasetVersionId)
+        .where("scope", "==", scope)
+        .where("validationStatus", "==", "valid")
+        .select("sourceNodeId", "geographicDistanceM")
+        .get();
+      const geoDistanceById = new Map<string, number>();
+      for (const doc of attemptsSnap.docs) {
+        const d = doc.data() as { sourceNodeId: string; geographicDistanceM: number };
+        if (nodesWithExactlyThreeSet.has(d.sourceNodeId)) geoDistanceById.set(doc.id, d.geographicDistanceM);
+      }
+
+      type TripleEntry = { bridgeId: string; circuityRatio: number; distanceM: number; geographicDistanceM: number | null };
+      const byGenerationOrder: TripleEntry[][] = [[], [], []]; // index 0 = dichtstbij gegenereerd, 1 = middelste, 2 = verst
+      const byQualityOrder: TripleEntry[][] = [[], [], []]; // index 0 = beste circuity, 1 = middelste, 2 = slechtste
+      let nodesWhereWorstClearlyWorse = 0; // circuityRatio van de slechtste > 1,3x de beste (binnen dezelfde node)
+      let nodesWhereGenerationOrderMatchesQualityOrder = 0; // dichtstbij-gegenereerd is óók de beste circuity
+      const CLEARLY_WORSE_THRESHOLD = 1.3;
+      let analyzedNodeCount = 0;
+
+      for (const nodeId of nodesWithExactlyThree) {
+        const bridges = validBridges.filter((b) => b.sourceNodeId === nodeId);
+        if (bridges.length !== 3) continue; // veiligheidscheck, hoort altijd te kloppen gegeven het filter hierboven
+        const entries: TripleEntry[] = bridges.map((b) => ({
+          bridgeId: b.id,
+          circuityRatio: b.circuityRatio,
+          distanceM: b.distanceM,
+          geographicDistanceM: geoDistanceById.get(b.id) ?? null,
+        }));
+        if (entries.some((e) => e.geographicDistanceM === null)) continue; // geen match in attempts gevonden, overslaan i.p.v. gokken
+        analyzedNodeCount++;
+
+        const byGen = [...entries].sort((a, b) => (a.geographicDistanceM as number) - (b.geographicDistanceM as number));
+        const byQual = [...entries].sort((a, b) => a.circuityRatio - b.circuityRatio);
+        byGen.forEach((e, i) => byGenerationOrder[i].push(e));
+        byQual.forEach((e, i) => byQualityOrder[i].push(e));
+
+        if (byQual[2].circuityRatio > byQual[0].circuityRatio * CLEARLY_WORSE_THRESHOLD) nodesWhereWorstClearlyWorse++;
+        if (byGen[0].bridgeId === byQual[0].bridgeId) nodesWhereGenerationOrderMatchesQualityOrder++;
+      }
+
+      function summarize(entries: TripleEntry[]) {
+        const ratios = entries.map((e) => e.circuityRatio).sort((a, b) => a - b);
+        const distances = entries.map((e) => e.distanceM).sort((a, b) => a - b);
+        return {
+          n: entries.length,
+          circuityRatio: { median: median(ratios), min: ratios[0] ?? 0, max: ratios[ratios.length - 1] ?? 0 },
+          distanceM: { median: median(distances), min: distances[0] ?? 0, max: distances[distances.length - 1] ?? 0 },
+          above1_5x: entries.filter((e) => e.circuityRatio > 1.5).length,
+          above2_0x: entries.filter((e) => e.circuityRatio > 2.0).length,
+          above2_5x: entries.filter((e) => e.circuityRatio > 2.5).length,
+        };
+      }
+
+      const tripleBridgeQualityAnalysis = {
+        LET_OP: "Alleen de 278 strong-gap-nodes met exact 3 uitgaande valid bridges. Analyzed telt hoeveel daarvan daadwerkelijk een geographicDistanceM-match hadden in de attempts-collectie (voor generatievolgorde).",
+        nodesWithExactlyThreeOutgoing: nodesWithExactlyThree.length,
+        analyzedNodeCount,
+        byGenerationOrder_nearest_middle_farthest: byGenerationOrder.map(summarize),
+        byQualityOrder_best_middle_worst_circuity: byQualityOrder.map(summarize),
+        nodesWhereWorstClearlyWorseThanBest: {
+          count: nodesWhereWorstClearlyWorse,
+          definitie: `slechtste circuityRatio > ${CLEARLY_WORSE_THRESHOLD}x de beste, binnen dezelfde node`,
+        },
+        nodesWhereNearestGeneratedIsAlsoBestQuality: nodesWhereGenerationOrderMatchesQualityOrder,
+        conclusieHint:
+          analyzedNodeCount > 0
+            ? `Bij ${nodesWhereGenerationOrderMatchesQualityOrder}/${analyzedNodeCount} nodes is de dichtstbijzijnde gegenereerde kandidaat ook de beste (laagste circuity) -- vergelijk dit met wat toeval (1/3, dus ~33%) zou geven om te zien of de generatievolgorde zelf al betekenisvol is.`
+            : "Geen enkele node kon geanalyseerd worden (geen geographicDistanceM-match gevonden).",
+      };
+
       return NextResponse.json({
         phase: "inspect",
         scope,
@@ -519,6 +608,9 @@ export async function GET(req: NextRequest) {
           distribution: rawDistribution,
         },
         ndsmCase: ndsmLookup,
+        ndsmCase_WAARSCHUWING:
+          "NDSM is NIET opgelost in de richting NDSM -> Centraal. Alleen Centraal -> NDSM heeft een valid bridge (bridgesAsTarget). bridgesAsSource is leeg. Niet als opgelost beschouwen bij het testen van de integratie in die richting.",
+        tripleBridgeQualityAnalysis,
         customLookup,
       });
     }
