@@ -638,8 +638,11 @@ export default function Home() {
             },
           });
           setStep("navigating");
-        } catch {
-          setErrorMessage("Er ging iets mis bij het berekenen van de route.");
+        } catch (err) {
+          // FIX 17-9-2026, zelfde principe als eerder bij de rondje-foutmelding: de échte
+          // fout zichtbaar maken i.p.v. een vaste tekst, juist nu we een nieuwe wijziging
+          // (bridge-laag) aan het valideren zijn en een onbekende fout niet mogen gokken.
+          setErrorMessage(`Er ging iets mis bij het berekenen van de route.${err instanceof Error ? ` (${err.message})` : ""}`);
           setStep("error");
         } finally {
           setRouteToDestinationLoading(false);
