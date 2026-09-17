@@ -31,6 +31,7 @@ const CATEGORIES: DebugCategory[] = [
       { href: "/debug/migrate-goknoop-batched-runner", label: "GoKnoop → gebatcht formaat migreren", description: "Fixt de 11,2s-trage GoKnoop-basisgraaf-lading." },
       { href: "/debug/instellingen", label: "Debug-instellingen (sleutel invullen)", description: "Vul hier de DEBUG_SECRET in, zonder browserconsole." },
       { href: "/debug/test-to-destination-live", label: "Live test: /api/route/to-destination", description: "Reproduceert de foutmelding uit de app direct, met exacte fout + timing." },
+      { href: "/debug/test-to-destination-address-flow", label: "Adres-flow met tijdmeting per stap", description: "Zelfde 3 stappen als de app (locatie -> geocoden -> route), maar dan met een tijdmeting per stap -- laat zien WELKE stap vastloopt/traag is." },
       { href: "/debug/test-nwb-geometry-resolver", label: "Geometrie-resolver debuggen", description: "Probeert drie resourceId-varianten, toont de ruwe PDOK-respons per variant." },
       { href: "/debug/trace-337km-cause", label: "Gerichte trace: 337km-anomalie", description: "Waarom reproduceerde de anomalie niet in productie? Echte productie-connectoren, geen nieuwe generatie." },
       { href: "/debug/production-regression-runner", label: "Fase J: Productieregressies (echte /api/route/combined)", description: "Draait bekende testgevallen tegen het echte, live productie-eindpunt." },
