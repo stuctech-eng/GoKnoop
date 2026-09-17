@@ -46,6 +46,10 @@ export default function GenerateBridgesRunnerPage() {
   const [status, setStatus] = useState<"idle" | "running" | "complete" | "written" | "error">("idle");
   const [writeResult, setWriteResult] = useState<{ written: number; validCount: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectError, setInspectError] = useState<string | null>(null);
+  const [inspectResult, setInspectResult] = useState<Record<string, unknown> | null>(null);
+  const [inspectNodeId, setInspectNodeId] = useState("");
   const runningRef = useRef(false); // synchrone guard tegen dubbeltik/race -- state alleen sluit het tijdvenster niet snel genoeg
 
   useEffect(() => {
@@ -229,6 +233,24 @@ export default function GenerateBridgesRunnerPage() {
     }
   }
 
+  // TOEGEVOEGD 17-9-2026: roept uitsluitend phase=inspect aan (alleen-lezen, zie server-kant
+  // comment). Geen lus nodig -- dit is één snelle, niet-tijdsbudget-gevoelige leesquery.
+  async function doInspect() {
+    setInspecting(true);
+    setInspectError(null);
+    try {
+      const params: Record<string, string> = { phase: "inspect", scope };
+      if (inspectNodeId.trim()) params.nodeId = inspectNodeId.trim();
+      const result = await call(params);
+      setInspectResult(result);
+    } catch (err) {
+      const details = err instanceof ApiCallError && typeof err.data.details === "string" ? err.data.details : null;
+      setInspectError(err instanceof Error ? `${err.message}${details ? ` — ${details}` : ""}` : String(err));
+    } finally {
+      setInspecting(false);
+    }
+  }
+
   const totalProcessed = log.length > 0 ? log[log.length - 1].processedCount : 0;
   const totalItems = log.length > 0 ? log[log.length - 1].totalDirectionalItems : 0;
   const cumulativeValid = log.reduce((sum, b) => sum + b.batchValidCount, 0);
@@ -354,6 +376,36 @@ export default function GenerateBridgesRunnerPage() {
           {b.stoppedEarly && <div style={{ color: "#b8860b" }}>⏸️ {b.stoppedEarly}</div>}
         </div>
       ))}
+
+      {/* TOEGEVOEGD 17-9-2026: alleen-lezen inspectie, los van de generatie-lus hierboven.
+          Roept uitsluitend phase=inspect aan -- schrijft of genereert niets (expliciete eis Te). */}
+      <div style={{ marginTop: 32, paddingTop: 16, borderTop: "2px solid #333" }}>
+        <h2 style={{ fontSize: 16, marginBottom: 8 }}>Inspecteren (alleen lezen)</h2>
+        <p style={{ fontSize: 13, color: "#666", marginBottom: 12 }}>
+          Beantwoordt: hoeveel valid bridges bestaan er per gap-node, en (optioneel) is er een opgeslagen bridge voor een specifiek knooppunt. Wijzigt niets.
+        </p>
+        <input
+          value={inspectNodeId}
+          onChange={(e) => setInspectNodeId(e.target.value)}
+          placeholder="optioneel: node-ID voor gerichte lookup (bv. pR2n6KWgtHLRPwvkUmZ8)"
+          style={{ width: "100%", padding: 10, fontSize: 13, border: "1px solid #ccc", borderRadius: 8, marginBottom: 8, boxSizing: "border-box" }}
+        />
+        <button
+          onClick={doInspect}
+          disabled={inspecting || !debugKey}
+          style={{ width: "100%", padding: 12, fontSize: 16, background: "#1a73e8", color: "white", border: "none", borderRadius: 8, marginBottom: 12 }}
+        >
+          {inspecting ? "Bezig..." : "Inspecteren"}
+        </button>
+        {inspectError && (
+          <div style={{ padding: 12, background: "#fee", border: "1px solid #fbb", borderRadius: 8, marginBottom: 12, color: "#c00" }}>⚠️ {inspectError}</div>
+        )}
+        {inspectResult && (
+          <pre style={{ fontSize: 12, background: "#f5f5f5", padding: 12, borderRadius: 8, overflowX: "auto" }}>
+            {JSON.stringify(inspectResult, null, 2)}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }

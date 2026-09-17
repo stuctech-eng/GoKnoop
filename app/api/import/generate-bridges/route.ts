@@ -414,6 +414,69 @@ export async function GET(req: NextRequest) {
     }
 
     // ============================================================
+    // PHASE: inspect -- TOEGEVOEGD 17-9-2026, uitsluitend lezen, GEEN schrijf-
+    // of genereeractie (expliciete eis Te). Beantwoordt de twee open vragen
+    // vóór een eventuele integratie-GO:
+    //  (a) hoeveel valid bridges bestaan er per gap-node (voor
+    //      MAX_ACTIVE_BRIDGES_PER_NODE -- nog nergens een echte waarde);
+    //  (b) is er een opgeslagen bridge voor een specifieke node (NDSM-case).
+    // Leest uitsluitend `networkBridges`; raakt `generateBridgesAttempts` of
+    // de candidate-cache niet aan.
+    // ============================================================
+    if (phase === "inspect") {
+      const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
+      if (scope !== "strong" && scope !== "weak") {
+        return NextResponse.json({ error: "scope is verplicht en moet 'strong' of 'weak' zijn." }, { status: 400 });
+      }
+      const lookupNodeId = req.nextUrl.searchParams.get("nodeId");
+
+      const validBridgesSnap = await db
+        .collection("networkBridges")
+        .where("datasetVersionId", "==", datasetVersionId)
+        .where("scope", "==", scope)
+        .where("validationStatus", "==", "valid")
+        .get();
+      const validBridges = validBridgesSnap.docs.map((d) => d.data() as NetworkBridge);
+
+      // (a) Verdeling: aantal valid bridges per sourceNodeId (bridges zijn directioneel,
+      // dus sourceNodeId is de enige zinvolle groepering -- targetNodeId zou de
+      // omgekeerde-richting-documenten dubbel meetellen).
+      const bridgeCountByNode = new Map<string, number>();
+      for (const b of validBridges) {
+        bridgeCountByNode.set(b.sourceNodeId, (bridgeCountByNode.get(b.sourceNodeId) || 0) + 1);
+      }
+      const counts = [...bridgeCountByNode.values()];
+      const distribution: Record<string, number> = {};
+      for (const c of counts) {
+        const bucket = c >= 5 ? "5+" : String(c);
+        distribution[bucket] = (distribution[bucket] || 0) + 1;
+      }
+
+      // (b) Gerichte lookup, alleen als nodeId is meegegeven.
+      let nodeLookup: { nodeId: string; bridgesAsSource: NetworkBridge[]; bridgesAsTarget: NetworkBridge[] } | null = null;
+      if (lookupNodeId) {
+        nodeLookup = {
+          nodeId: lookupNodeId,
+          bridgesAsSource: validBridges.filter((b) => b.sourceNodeId === lookupNodeId),
+          bridgesAsTarget: validBridges.filter((b) => b.targetNodeId === lookupNodeId),
+        };
+      }
+
+      return NextResponse.json({
+        phase: "inspect",
+        scope,
+        readOnly: true,
+        totalValidBridges: validBridges.length,
+        gapNodesWithAtLeastOneBridge: bridgeCountByNode.size,
+        bridgesPerGapNodeDistribution: distribution,
+        bridgesPerGapNodeMin: counts.length > 0 ? Math.min(...counts) : 0,
+        bridgesPerGapNodeMax: counts.length > 0 ? Math.max(...counts) : 0,
+        bridgesPerGapNodeMedian: median([...counts].sort((a, b) => a - b)),
+        nodeLookup,
+      });
+    }
+
+    // ============================================================
     // PHASE: analyze -- landelijke, ORS-vrije structuuranalyse. Ongewijzigd
     // t.o.v. de vorige versie; geen cache-effect, puur informatief.
     // ============================================================
