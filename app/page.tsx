@@ -593,7 +593,23 @@ export default function Home() {
               extraM: extraKm > 0 ? extraKm * 1000 : undefined,
             }),
           });
-          const routeData = await routeRes.json();
+          // FIX 17-9-2026: zelfde, al eerder in dit project doorgronde les (generate-bridges-
+          // runner/clear-goknoop-batched-comments) -- rauwe tekst lezen vóórdat JSON.parse
+          // geprobeerd wordt, i.p.v. res.json() direct. Zonder dit gaf een Vercel-10s-timeout
+          // (rauwe HTML i.p.v. JSON) de cryptische Safari-fout "The string did not match the
+          // expected pattern" i.p.v. een leesbare melding.
+          const routeRawText = await routeRes.text();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let routeData: any;
+          try {
+            routeData = JSON.parse(routeRawText);
+          } catch {
+            setErrorMessage(
+              `Er ging iets mis bij het berekenen van de route (server gaf geen geldig antwoord, status ${routeRes.status} -- waarschijnlijk een timeout). Probeer het opnieuw.`
+            );
+            setStep("error");
+            return;
+          }
           if (!routeRes.ok) {
             setErrorMessage(routeData.error ?? "Kon geen route naar dit adres vinden.");
             setStep("error");
