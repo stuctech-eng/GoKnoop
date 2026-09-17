@@ -9,6 +9,7 @@ import { computeDetourOffsetPoint } from "@/lib/route-engine/detour-waypoint";
 import { rdToWgs84, wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
 import { LocalBikeRouter } from "@/lib/local-bike-router/local-bike-router";
 import { OpenRouteServiceAdapter } from "@/lib/local-bike-router/open-route-service-adapter";
+import { reportProgress } from "@/lib/diagnostics/report-progress";
 import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
 export const maxDuration = 10; // Vercel Hobby-plan kapt hoe dan ook af bij 10s.
@@ -44,9 +45,22 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   const timings: Record<string, number> = {};
   const tStart = Date.now();
+  // TOEGEVOEGD 17-9-2026 (Fase 3-meetdiscipline, GO van Te): puur observability, geen
+  // gedragswijziging. requestId onderscheidt gelijktijdige aanvragen in de gedeelde
+  // "laatste run"-checkpointlog (bekende beperking uit Fase 2: zonder dit lopen
+  // overlappende aanvragen door elkaar). mark() bleef qua signatuur ongewijzigd voor de
+  // rest van dit bestand -- nu ook DUURZAAM (reportProgress, niet-afgewacht Firestore-
+  // write), zodat de timings-data een harde Vercel-timeout overleeft. Zonder dit ging
+  // exact deze data (al die tijd al berekend, al in `timings`!) verloren zodra de functie
+  // werd afgebroken vóórdat de response verstuurd kon worden -- precies wat er bij elke
+  // Volendam->Hoorn-504 gebeurde.
+  const requestId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   function mark(label: string) {
     timings[label] = Date.now() - tStart;
+    reportProgress("latest", `to-destination: ${label}`, { requestId, elapsedMs: timings[label] });
   }
+  const onProgress = (label: string, extra?: Record<string, unknown>) => reportProgress("latest", `to-destination: ${label}`, { requestId, ...extra });
+  onProgress("requestStart");
 
   let body: {
     originCandidateNodeIds?: string[];
@@ -114,7 +128,7 @@ export async function POST(req: NextRequest) {
     mark("combinedGraphLoad");
 
     // Been 1 (Layer A, beide kanten met fallback): herkomst-knooppunt -> bestemmings-knooppunt.
-    let knotResult = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidates);
+    let knotResult = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidates, {}, onProgress);
     mark("knotLeg");
     if ("ok" in knotResult) {
       return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot", timings, graphCacheHit }, { status: 404 });
@@ -138,9 +152,15 @@ export async function POST(req: NextRequest) {
           const waypointCandidates = resolveNearestNodes(provider, offsetPoint, 3);
 
           for (const wp of waypointCandidates) {
-            const leg1 = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, [
-              { logicalNodeId: wp.logicalNodeId, distanceM: wp.distanceM },
-            ]);
+            const leg1 = await computeRouteBetweenCandidatesWithFallback(
+              provider,
+              datasetVersionId,
+              graph,
+              fromCandidates,
+              [{ logicalNodeId: wp.logicalNodeId, distanceM: wp.distanceM }],
+              {},
+              onProgress
+            );
             if ("ok" in leg1) continue;
 
             const leg2 = await computeRouteBetweenCandidatesWithFallback(
@@ -148,7 +168,9 @@ export async function POST(req: NextRequest) {
               datasetVersionId,
               graph,
               [{ logicalNodeId: leg1.selectedDestinationNodeId, distanceM: 0 }],
-              toCandidates
+              toCandidates,
+              {},
+              onProgress
             );
             if ("ok" in leg2) continue;
 
@@ -190,7 +212,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: lastMileResult.message, reason: lastMileResult.reason, leg: "lastMile", timings, graphCacheHit }, { status: 502 });
     }
 
-    return NextResponse.json({ knotLeg: knotResult, lastMileLeg: lastMileResult, actualExtraM, timings, graphCacheHit });
+    mark("responseReady");
+    return NextResponse.json({ knotLeg: knotResult, lastMileLeg: lastMileResult, actualExtraM, timings, graphCacheHit, requestId });
   } catch (err) {
     return NextResponse.json(
       { error: "Route-naar-bestemming-berekening mislukt.", details: err instanceof Error ? err.message : String(err), timings },

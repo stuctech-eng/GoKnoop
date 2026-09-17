@@ -1,4 +1,4 @@
-import { GraphProvider, RouteConstraints } from "./types";
+import type { GraphProvider, RouteConstraints } from "./types";
 import { computeRouteWithFallback, RouteToPointWithFallbackResult } from "./route-to-point-fallback";
 import type { CombinedGraph } from "../nwb-analysis/combined-graph";
 import type { LoopStartCandidate } from "./loop-route-generator";
@@ -36,7 +36,11 @@ export async function computeRouteBetweenCandidatesWithFallback(
   graph: CombinedGraph,
   fromCandidates: readonly LoopStartCandidate[],
   toCandidates: readonly LoopStartCandidate[],
-  constraints: RouteConstraints = {}
+  constraints: RouteConstraints = {},
+  // TOEGEVOEGD 17-9-2026 (Fase 3-meetdiscipline, puur observability, geen gedragswijziging):
+  // optioneel, bewust hetzelfde patroon als buildValidatedCombinedGraph's onProgress-callback.
+  // Zonder deze parameter (bestaande aanroepers, bijv. het "plus lusje"-been) verandert er niets.
+  onProgress?: (label: string, extra?: Record<string, unknown>) => void
 ): Promise<RouteBetweenCandidatesResult | RouteBetweenCandidatesFailure> {
   // BUGFIX (30-8-2026, echte, bevestigde regressie: "snelste route" naar Hilversum bleek een
   // gigantische omweg via Zwolle): eerder werd hier gestopt bij de EERSTE werkende combinatie
@@ -56,7 +60,15 @@ export async function computeRouteBetweenCandidatesWithFallback(
     const toCandidate = toCandidates[i];
     if (!provider.getNode(toCandidate.logicalNodeId)) continue; // onbekend knooppunt -- volgende bestemmingskandidaat
 
-    const result = await computeRouteWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidate.logicalNodeId, constraints);
+    const tCandidateStart = Date.now();
+    const result = await computeRouteWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidate.logicalNodeId, constraints, onProgress);
+    onProgress?.("destinationCandidateEvaluated", {
+      destinationCandidateIndex: i,
+      destinationCandidateNodeId: toCandidate.logicalNodeId,
+      succeeded: !("ok" in result),
+      distanceM: "ok" in result ? undefined : result.route.distanceM,
+      elapsedMs: Date.now() - tCandidateStart,
+    });
     if ("ok" in result) continue; // deze bestemmingskandidaat leverde niets op -- volgende proberen
 
     const success = result as RouteToPointWithFallbackResult;
@@ -71,6 +83,12 @@ export async function computeRouteBetweenCandidatesWithFallback(
       best = candidateResult;
     }
   }
+
+  onProgress?.("allDestinationCandidatesEvaluated", {
+    destinationCandidatesTotal: toCandidates.length,
+    winnerFound: best !== null,
+    winnerDistanceM: best?.route.distanceM,
+  });
 
   if (best) return best;
 

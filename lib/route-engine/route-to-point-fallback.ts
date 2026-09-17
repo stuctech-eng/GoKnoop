@@ -59,7 +59,9 @@ export async function computeRouteWithFallback(
   graph: CombinedGraph,
   fromCandidates: readonly LoopStartCandidate[],
   toLogicalNodeId: string,
-  constraints: RouteConstraints = {}
+  constraints: RouteConstraints = {},
+  // TOEGEVOEGD 17-9-2026 (Fase 3-meetdiscipline, puur observability): zelfde patroon als elders.
+  onProgress?: (label: string, extra?: Record<string, unknown>) => void
 ): Promise<RouteToPointWithFallbackResult | RouteToPointFallbackFailure> {
   // BUGFIX (30-8-2026, vervolg op sectie 9.50 -- de bestemmingskant-fix loste het gemelde
   // probleem NIET volledig op): als de EERST geprobeerde herkomstkandidaat (dichtstbijzijnde
@@ -74,14 +76,17 @@ export async function computeRouteWithFallback(
   // zijn dan "eerste die toevallig werkt" -- in het slechtste geval identiek, typisch beter.
 
   // FASE 1 (goedkoop): elke kandidaat vergelijken op afstand, GEEN geometrie, GEEN PDOK-aanroep.
+  const tPhase1Start = Date.now();
   let bestIndex = -1;
   let bestDistanceM = Infinity;
+  let originCandidatesEvaluated = 0;
 
   for (let i = 0; i < fromCandidates.length; i++) {
     const candidate = fromCandidates[i];
     if (!provider.getNode(candidate.logicalNodeId)) continue; // onbekend knooppunt -- volgende proberen
 
     const cheapResult = computeCombinedRoute(graph, candidate.logicalNodeId, toLogicalNodeId);
+    originCandidatesEvaluated++;
     if (!cheapResult.ok) continue; // deze kandidaat leverde geen (of geen gevalideerde) route op -- volgende proberen
 
     if (cheapResult.distanceM < bestDistanceM) {
@@ -89,6 +94,13 @@ export async function computeRouteWithFallback(
       bestIndex = i;
     }
   }
+  onProgress?.("phase1CheapCandidateCheckDone", {
+    toLogicalNodeId,
+    originCandidatesTotal: fromCandidates.length,
+    originCandidatesEvaluated,
+    winnerFound: bestIndex !== -1,
+    elapsedMs: Date.now() - tPhase1Start,
+  });
 
   if (bestIndex === -1) {
     return {
@@ -99,9 +111,20 @@ export async function computeRouteWithFallback(
     };
   }
 
-  // FASE 2 (duur, PRECIES ÉÉN KEER): volledige geometrie opbouwen voor de winnaar.
+  // FASE 2 (duur, PRECIES ÉÉN KEER PER AANROEP VAN DEZE FUNCTIE -- let op: de aanroeper
+  // (computeRouteBetweenCandidatesWithFallback) roept deze functie zelf herhaald aan, één keer
+  // per bestemmingskandidaat, dus dit dure pad kan in totaal vaker dan één keer per request
+  // lopen. Precies dát maakt onProgress hier zinvol).
+  const tPhase2Start = Date.now();
   const winner = fromCandidates[bestIndex];
   const fullResult = await computeCombinedRouteAsRoute(graph, provider, datasetVersionId, winner.logicalNodeId, toLogicalNodeId, constraints);
+  onProgress?.("phase2ExpensiveGeometryBuildDone", {
+    toLogicalNodeId,
+    winnerOriginNodeId: winner.logicalNodeId,
+    succeeded: fullResult.ok,
+    elapsedMs: Date.now() - tPhase2Start,
+    internalComputeTimeMs: fullResult.ok ? fullResult.route.metadata.computeTimeMs : undefined,
+  });
 
   if (!fullResult.ok) {
     // Zou niet moeten gebeuren (fase 1 zei al ok) -- maar geen aanname, expliciet als faal behandelen.
