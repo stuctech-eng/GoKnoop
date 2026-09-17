@@ -186,15 +186,40 @@ export default function GenerateBridgesRunnerPage() {
     }
   }
 
+  // HERSCHREVEN 17-9-2026: was één enkele aanroep die bij een echte 4002-item-run
+  // een 504-timeout gaf (server deed toen alle ~9 batch.commit()'s in één functie-
+  // aanroep). Nu een hervatbare lus, exact hetzelfde patroon als de compute-batch-lus
+  // hierboven -- inclusief dezelfde automatische-hertry-bij-transiënte-hapering.
   async function doWrite() {
     if (runningRef.current) return;
     runningRef.current = true;
     setRunning(true);
     setError(null);
+    let totalWritten = 0;
+    let totalValid = 0;
+    let transientRetries = 0;
+    const MAX_TRANSIENT_RETRIES = 3;
     try {
-      const result = await call({ phase: "write", scope });
-      setWriteResult({ written: result.written, validCount: result.validCount });
-      setStatus("written");
+      for (;;) {
+        try {
+          const result = await call({ phase: "write", scope });
+          transientRetries = 0;
+          totalWritten += result.written;
+          totalValid += result.validCount;
+          setWriteResult({ written: totalWritten, validCount: totalValid });
+          if (result.done) {
+            setStatus("written");
+            break;
+          }
+        } catch (err) {
+          if (err instanceof ApiCallError && err.data.transient && transientRetries < MAX_TRANSIENT_RETRIES) {
+            transientRetries++;
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          throw err;
+        }
+      }
     } catch (err) {
       const details = err instanceof ApiCallError && typeof err.data.details === "string" ? err.data.details : null;
       setError(err instanceof Error ? `${err.message}${details ? ` — ${details}` : ""}` : String(err));

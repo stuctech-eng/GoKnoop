@@ -945,6 +945,16 @@ export async function GET(req: NextRequest) {
 
     // ============================================================
     // PHASE: write -- alleen toegestaan wanneer status "complete" is.
+    //
+    // HERSCHREVEN 17-9-2026: schreef voorheen ALLE attempts (bij 4002 items dus
+    // ~9 sequentiële batch.commit()-aanroepen) binnen ÉÉN functie-aanroep --
+    // exact het patroon dat elders in dit bestand (zie maxDuration-comment
+    // hierboven, "tijdsbudget-bewust, niet call-count-bewust") al bewust
+    // vermeden wordt voor compute-batch, maar hier gemist was. Gaf een 504
+    // FUNCTION_INVOCATION_TIMEOUT bij een echte 4002-item-run (bevestigd,
+    // 17-9-2026). Nu: exact hetzelfde hervatbare patroon als compute-batch --
+    // één FIRESTORE_OP_LIMIT-chunk per aanroep, voortgang in metaRef, de
+    // client-lus (page.tsx) roept herhaald aan tot done=true.
     // ============================================================
     if (phase === "write") {
       const scope = req.nextUrl.searchParams.get("scope") as Scope | null;
@@ -957,9 +967,9 @@ export async function GET(req: NextRequest) {
       if (!metaSnap.exists) {
         return NextResponse.json({ error: `Geen kandidatenlijst gevonden voor scope=${scope}. Roep eerst phase=prepare aan.` }, { status: 400 });
       }
-      const meta = metaSnap.data() as { totalDirectionalItems: number; processedCount: number; status: string };
+      const meta = metaSnap.data() as { totalDirectionalItems: number; processedCount: number; status: string; writeOffset?: number };
 
-      if (meta.status !== "complete") {
+      if (meta.status !== "complete" && meta.status !== "writing") {
         return NextResponse.json(
           {
             error:
@@ -971,17 +981,23 @@ export async function GET(req: NextRequest) {
         );
       }
 
+      // Elke aanroep leest de volledige attempts-lijst opnieuw (onvermijdelijk,
+      // geen geheugen tussen aparte serverless-aanroepen -- zelfde, al-geaccepteerde
+      // patroon als de Optie-C-precompute), maar schrijft maar één chunk.
       const attemptsSnap = await db
         .collection(ATTEMPTS_COLLECTION)
         .where("datasetVersionId", "==", datasetVersionId)
         .where("scope", "==", scope)
         .get();
-
-      const nowIso = new Date().toISOString();
       const docs = attemptsSnap.docs;
-      for (let i = 0; i < docs.length; i += FIRESTORE_OP_LIMIT) {
+
+      const writeOffset = meta.status === "writing" ? (meta.writeOffset ?? 0) : 0;
+      const chunk = docs.slice(writeOffset, writeOffset + FIRESTORE_OP_LIMIT);
+      const nowIso = new Date().toISOString();
+
+      if (chunk.length > 0) {
         const batch = db.batch();
-        for (const doc of docs.slice(i, i + FIRESTORE_OP_LIMIT)) {
+        for (const doc of chunk) {
           const a = doc.data() as StoredAttempt;
           const bridge: NetworkBridge = {
             id: a.id,
@@ -1006,13 +1022,23 @@ export async function GET(req: NextRequest) {
         await batch.commit();
       }
 
-      await metaRef.update({ status: "written", writtenAt: nowIso });
+      const newOffset = writeOffset + chunk.length;
+      const done = newOffset >= docs.length;
+
+      if (done) {
+        await metaRef.update({ status: "written", writtenAt: nowIso, writeOffset: newOffset });
+      } else {
+        await metaRef.update({ status: "writing", writeOffset: newOffset });
+      }
 
       return NextResponse.json({
         phase: "write",
         scope,
-        written: docs.length,
-        validCount: docs.filter((d) => (d.data() as StoredAttempt).validationStatus === "valid").length,
+        done,
+        writeOffset: newOffset,
+        totalItems: docs.length,
+        written: chunk.length,
+        validCount: chunk.filter((d) => (d.data() as StoredAttempt).validationStatus === "valid").length,
       });
     }
 
