@@ -12,7 +12,11 @@ import { OpenRouteServiceAdapter } from "@/lib/local-bike-router/open-route-serv
 import { reportProgress } from "@/lib/diagnostics/report-progress";
 import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
-export const maxDuration = 10; // Vercel Hobby-plan kapt hoe dan ook af bij 10s.
+export const maxDuration = 30; // TOEGEVOEGD 17-9-2026 (GO van Te, diagnostische stap): was 10, gebaseerd op de aanname
+// "Vercel Hobby kapt hoe dan ook af bij 10s" -- die aanname bleek bij verificatie tegen actuele
+// Vercel-documentatie niet (meer) te kloppen (Hobby staat tot 60s toe zonder Fluid Compute, tot
+// 300s met). Bewust EERST 30s als meetpunt, niet meteen 60 -- doel is nu vaststellen hoeveel tijd
+// deze route daadwerkelijk nodig heeft, geen aanname doen. Geen andere wijziging in dit bestand.
 export const dynamic = "force-dynamic";
 
 /**
