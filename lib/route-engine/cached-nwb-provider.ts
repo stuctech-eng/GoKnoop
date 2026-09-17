@@ -1,6 +1,8 @@
 import { getDb, getLastDbInitBreakdown } from "@/lib/firebase-admin";
 import { buildValidatedCombinedGraph, type CombinedGraph, type SlimNwbSegment, type ValidatedConnectorInput } from "@/lib/nwb-analysis/combined-graph";
 import { reportProgress } from "@/lib/diagnostics/report-progress";
+import { BridgeAugmentedGraphProvider, selectTopBridgesPerNode } from "./bridge-augmented-graph-provider";
+import type { NetworkBridge } from "./network-bridge-types";
 import type { GraphProvider } from "./types";
 
 /**
@@ -31,6 +33,26 @@ import type { GraphProvider } from "./types";
  * document) i.p.v. één document per segment -- ~288 documenten i.p.v.
  * 144.000, dezelfde totale databytes maar drastisch minder per-document-
  * overhead.
+ *
+ * NETWORK BRIDGE LAYER-INTEGRATIE, 17-9-2026: `provider` wordt nu, ná het
+ * afwachten van `providerReadyPromise`, in een `BridgeAugmentedGraphProvider`
+ * gewikkeld met de top-`MAX_ACTIVE_BRIDGES_PER_NODE` (=2, gemeten beslissing,
+ * zie bridge-augmented-graph-provider.ts) valid bridges per strong-gap-node,
+ * VÓÓRDAT `buildValidatedCombinedGraph()` wordt aangeroepen. Geen wijziging
+ * aan `combined-graph.ts`, Dijkstra, NWB-verwerking of connector-generatie --
+ * de decorator voegt uitsluitend extra `getEdgesFrom()`-resultaten toe, exact
+ * zoals die klasse al vanaf 5-9-2026 voor dit doel gebouwd was maar tot nu
+ * nooit werd aangeroepen. Bridges-fetch loopt parallel met de bestaande
+ * NWB-fetch hieronder (zelfde parallellisatie-principe als de 12-9-timing-
+ * audit al elders in dit bestand toepaste).
+ *
+ * BEKENDE BEPERKING (bewust niet opgelost in deze stap, met opzet geen nieuwe
+ * architectuur erbij): `moduleCache` cachet de gebouwde graaf op
+ * `datasetVersionId__nwbDatasetVersionId`, zonder een bridge-versie in de
+ * sleutel. Een latere wijziging aan de bridge-selectie (nieuwe generatieronde,
+ * andere MAX_ACTIVE_BRIDGES_PER_NODE) wordt dus pas zichtbaar na een cache-
+ * miss (nieuwe Vercel-instance/deployment) -- geen risico voor deze eerste
+ * activering, wel iets om te weten bij een volgende bridge-generatieronde.
  */
 
 type CachedGraphEntry = {
@@ -74,6 +96,18 @@ export async function loadCachedCombinedGraph(
 
   let nwbSegments: SlimNwbSegment[] = [];
   let validatedConnectors: ValidatedConnectorInput[] = [];
+  // TOEGEVOEGD 17-9-2026: bridges-fetch start hier, parallel met de NWB-fetch
+  // hieronder -- onafhankelijk van elkaar, zelfde parallellisatie-principe als
+  // de rest van deze functie al toepast. Alleen valid bridges; scope="strong"
+  // is de enige scope die tot nu toe daadwerkelijk gegenereerd/geschreven is
+  // (zie generate-bridges-runner-sessie 17-9-2026) -- "weak" levert dus nu
+  // gewoon een lege query op, geen foutafhandeling nodig.
+  const bridgesPromise = db
+    .collection("networkBridges")
+    .where("datasetVersionId", "==", datasetVersionId)
+    .where("validationStatus", "==", "valid")
+    .get();
+
   if (nwbDatasetVersionId) {
     // TOEGEVOEGD 12-9-2026, timing-audit: batches- en connectoren-fetch zijn
     // onderling ONAFHANKELIJK (allebei hebben alleen nwbDatasetVersionId
@@ -116,7 +150,16 @@ export async function loadCachedCombinedGraph(
     reportProgress("latest", "loadCachedCombinedGraph: providerReadyPromise afgewacht (liep parallel)");
   }
 
-  const graph = await buildValidatedCombinedGraph(provider, nwbSegments, CONNECTOR_SEARCH_TOLERANCE_M, validatedConnectors, (label, extra) =>
+  const bridgesSnap = await bridgesPromise;
+  const validBridges = bridgesSnap.docs.map((d) => d.data() as NetworkBridge);
+  const selectedBridges = selectTopBridgesPerNode(validBridges);
+  reportProgress("latest", "loadCachedCombinedGraph: bridges opgehaald + geselecteerd (top-N per node)", {
+    aantalValidBridges: validBridges.length,
+    aantalGeselecteerdeBridges: selectedBridges.length,
+  });
+  const bridgeAugmentedProvider = new BridgeAugmentedGraphProvider(provider, selectedBridges);
+
+  const graph = await buildValidatedCombinedGraph(bridgeAugmentedProvider, nwbSegments, CONNECTOR_SEARCH_TOLERANCE_M, validatedConnectors, (label, extra) =>
     reportProgress("latest", label, extra)
   );
   reportProgress("latest", "loadCachedCombinedGraph: buildValidatedCombinedGraph teruggekeerd -- volledig klaar");

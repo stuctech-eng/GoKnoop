@@ -3,6 +3,43 @@ import type { NetworkBridge } from "./network-bridge-types";
 import { wgs84ToRd } from "./coordinate-transform";
 
 /**
+ * TOEGEVOEGD 17-9-2026 -- eerste echte waarde, gebaseerd op gemeten data
+ * (GoKnoop-project, generate-bridges phase=inspect-onderzoek), niet verzonnen:
+ * van de 729 strong-gap-nodes hebben er 278 precies 3 gevalideerde bridges.
+ * Kwaliteitsanalyse van die 278: bij 92 (33%) is de zwakste van de drie
+ * aantoonbaar slechter (circuityRatio >1,3x de beste binnen dezelfde node),
+ * en de generatievolgorde (dichtstbij-eerst) bleek onvoldoende voorspellend
+ * voor kwaliteit om daarop te selecteren (46% treffer vs. 33% bij toeval --
+ * een zwak, geen sterk signaal). Bewuste keuze: start op 2 i.p.v. 3, zodat de
+ * route-engine eerst moet bewijzen dat de bridge-laag routekwaliteit
+ * verbetert zonder nieuwe vreemde routes te introduceren, vóórdat de derde
+ * (vaker zwakkere) optie ook wordt geactiveerd. Kan later verhoogd worden op
+ * basis van meting uit de integratietest, niet vooraf geraden.
+ */
+export const MAX_ACTIVE_BRIDGES_PER_NODE = 2;
+
+/**
+ * Selecteert per sourceNodeId de N BESTE bridges op werkelijke kwaliteit
+ * (laagste circuityRatio), NIET de eerst-gegenereerde/dichtstbijzijnde --
+ * expliciete, gemeten reden hierboven bij MAX_ACTIVE_BRIDGES_PER_NODE.
+ * Puur een selectiestap; voert zelf geen validatie of generatie uit.
+ */
+export function selectTopBridgesPerNode(bridges: NetworkBridge[], maxPerNode: number = MAX_ACTIVE_BRIDGES_PER_NODE): NetworkBridge[] {
+  const bySource = new Map<string, NetworkBridge[]>();
+  for (const bridge of bridges) {
+    const list = bySource.get(bridge.sourceNodeId) || [];
+    list.push(bridge);
+    bySource.set(bridge.sourceNodeId, list);
+  }
+  const selected: NetworkBridge[] = [];
+  for (const list of bySource.values()) {
+    const byQuality = [...list].sort((a, b) => a.circuityRatio - b.circuityRatio);
+    selected.push(...byQuality.slice(0, maxPerNode));
+  }
+  return selected;
+}
+
+/**
  * BridgeAugmentedGraphProvider — Network Bridge Layer, plan §9
  * (docs/network-bridge-layer-plan.md). Wikkelt om een bestaande `GraphProvider`
  * (bv. `CachedGraphProvider`) zonder die aan te raken -- 437/437 bestaande
