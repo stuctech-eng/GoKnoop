@@ -111,7 +111,20 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
     }
 
     if (!res.ok) {
-      return { reason: "provider_error", message: `OpenRouteService gaf status ${res.status}.` };
+      // TOEGEVOEGD 17-9-2026 (Fase "ORS 403 isoleren", GO van Te): responsbody meelezen --
+      // een kale statuscode (403) is niet genoeg om onderscheid te maken tussen quota,
+      // account/sleutel-blokkade of iets anders (bevestigd: ORS/HeiGIT geeft voor elk van die
+      // gevallen een andere, onderscheidende fouttekst terug in de body, niet alleen de code).
+      // Bewust NIET de apiKey of de aanvraag-headers in de melding -- alleen wat ORS zelf
+      // terugstuurt. Geen gedragswijziging: dit blijft dezelfde `provider_error`-uitkomst,
+      // alleen met een leesbare reden in plaats van kaal "status 403".
+      let bodyText = "";
+      try {
+        bodyText = (await res.text()).slice(0, 500);
+      } catch {
+        // Body kon niet gelezen worden -- geen crash, gewoon zonder verdere details verder.
+      }
+      return { reason: "provider_error", message: `OpenRouteService gaf status ${res.status}.${bodyText ? ` Body: ${bodyText}` : ""}` };
     }
 
     let data: unknown;
