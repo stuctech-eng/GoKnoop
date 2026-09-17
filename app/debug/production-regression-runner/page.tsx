@@ -9,6 +9,9 @@ const TEST_PAIRS = [
   { naam: "337km-anomalie (v7: tweede bekende geval, moet ook afgewezen)", from: "AG9myGNbdE6eH0W2SUmi", to: "nKfPyXuKA5e2SMxiKON3" },
   { naam: "Lochem l1 (normale, gezonde route)", from: "0pgYw2kgDphP2IT1RAi7", to: "61aNR7RWLxQhHTOfMHtm" },
   { naam: "Lochem l3 (normale, gezonde route)", from: "CDdOFbRpdb959FzzPLc0", to: "WDsLzusuMQzU8aBk43mq" },
+  // TOEGEVOEGD 17-9-2026, Network Bridge Layer-integratietest (MAX_ACTIVE_BRIDGES_PER_NODE=2):
+  { naam: "Amsterdam Centraal -> NDSM-pontje (bridge DEZE richting bestaat -- verwacht verbeterde route)", from: "CJSXBPUMG49vOPmYvhJd", to: "pR2n6KWgtHLRPwvkUmZ8" },
+  { naam: "NDSM-pontje -> Amsterdam Centraal (bridge alleen omgekeerde richting -- verwacht NOG GEEN oplossing, bekende beperking)", from: "pR2n6KWgtHLRPwvkUmZ8", to: "CJSXBPUMG49vOPmYvhJd" },
 ];
 
 function CopyAllButton({ text }: { text: string }) {
