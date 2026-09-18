@@ -115,11 +115,21 @@ export async function loadCachedCombinedGraph(
   // (zelfde patroon als fetchGoknoopEdgeGeometry, nog niet gebouwd voor
   // bridges) dat voor de uiteindelijk gekozen route aanvult -- bewust een
   // bekende, nu nog openstaande beperking, geen stille aanname.
+  // HERZIEN 18-9-2026 (vervolg op het root-cause-onderzoek): deze query miste
+  // dezelfde `.orderBy()` die net wel aan de segmenten/connectoren-fetch is
+  // toegevoegd -- inconsistent, en precies bridges zijn van vandaag en raken
+  // direct de regio waar de wisselvalligheid optreedt. Bij een gelijkspel in
+  // circuityRatio tussen twee bridges vanaf dezelfde node bepaalt de
+  // aanvoervolgorde (nu pas gegarandeerd stabiel) welke er als "top-2"
+  // wordt geselecteerd in selectTopBridgesPerNode -- als die twee bridges
+  // niet even goed verbonden zijn, verklaart dat een andere connectiviteit
+  // tussen overigens identieke aanvragen.
   const bridgesPromise = db
     .collection("networkBridges")
     .where("datasetVersionId", "==", datasetVersionId)
     .where("validationStatus", "==", "valid")
     .select("sourceNodeId", "targetNodeId", "distanceM", "circuityRatio")
+    .orderBy(FieldPath.documentId())
     .get();
 
   if (nwbDatasetVersionId) {
