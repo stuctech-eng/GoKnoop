@@ -91,7 +91,16 @@ export function clearGraphCache(): number {
 export async function loadCachedCombinedGraph(
   provider: GraphProvider,
   datasetVersionId: string,
-  providerReadyPromise?: Promise<void>
+  providerReadyPromise?: Promise<void>,
+  // TOEGEVOEGD 18-9-2026 (GO van Te, puur forensisch onderzoek): optionele,
+  // standaard UITGESCHAKELDE bypass -- bestaande aanroepers (de echte
+  // routeberekening) geven dit nooit mee en zijn dus op geen enkele manier
+  // gewijzigd. Alleen het nieuwe forensische debug-endpoint gebruikt dit,
+  // om meerdere, GEGARANDEERD onafhankelijke verse graafopbouwen binnen één
+  // aanvraag te kunnen vergelijken (moduleCache zou anders de 2e/3e poging
+  // binnen dezelfde Vercel-instance laten hergebruiken, wat precies het
+  // vergelijken van "verse opbouw A" vs "verse opbouw B" onmogelijk maakt).
+  opts?: { bypassCache?: boolean }
 ): Promise<CachedCombinedGraphResult> {
   reportProgress("latest", "loadCachedCombinedGraph: start");
   const db = getDb();
@@ -102,7 +111,7 @@ export async function loadCachedCombinedGraph(
   reportProgress("latest", "loadCachedCombinedGraph: activeNwbDataset gelezen", { nwbDatasetVersionId });
 
   const cacheKey = `${datasetVersionId}__${nwbDatasetVersionId ?? "none"}`;
-  const cached = moduleCache.get(cacheKey);
+  const cached = opts?.bypassCache ? undefined : moduleCache.get(cacheKey);
   if (cached && Date.now() - cached.loadedAt < CACHE_TTL_MS) {
     reportProgress("latest", "loadCachedCombinedGraph: CACHE HIT, klaar", { cacheAgeMs: Date.now() - cached.loadedAt });
     return { graph: cached.graph, nwbDatasetVersionId: cached.nwbDatasetVersionId, cacheHit: true, bridgesPresent: cached.bridgesPresent };
@@ -243,7 +252,9 @@ export async function loadCachedCombinedGraph(
   );
   reportProgress("latest", "loadCachedCombinedGraph: buildValidatedCombinedGraph teruggekeerd -- volledig klaar");
   const bridgesPresent = selectedBridges.length > 0;
-  moduleCache.set(cacheKey, { graph, nwbDatasetVersionId, loadedAt: Date.now(), bridgesPresent });
+  if (!opts?.bypassCache) {
+    moduleCache.set(cacheKey, { graph, nwbDatasetVersionId, loadedAt: Date.now(), bridgesPresent });
+  }
 
   return { graph, nwbDatasetVersionId, cacheHit: false, bridgesPresent };
 }
