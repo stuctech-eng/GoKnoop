@@ -74,21 +74,24 @@ export async function POST(req: NextRequest) {
 
     const provider = new CachedGraphProvider(datasetVersionId);
     const providerLoadPromise = provider.load();
-    const { graph } = await loadPrecomputedOrBuildGraph(provider, datasetVersionId, providerLoadPromise);
+    const { graph, effectiveProvider } = await loadPrecomputedOrBuildGraph(provider, datasetVersionId, providerLoadPromise);
     await providerLoadPromise;
 
-    if (!provider.getNode(routeStartNodeId)) {
+    if (!effectiveProvider.getNode(routeStartNodeId)) {
       return NextResponse.json({ error: `routeStartNodeId '${routeStartNodeId}' bestaat niet.` }, { status: 404 });
     }
 
     // Been 1 (Layer A): huidige positie -> startknooppunt, via het knooppuntennetwerk zelf.
-    const knotResult = await computeRouteWithFallback(provider, datasetVersionId, graph, candidates, routeStartNodeId);
+    // ROOT-CAUSE-FIX 18-9-2026: `effectiveProvider` (mét bridges) i.p.v. de kale `provider` --
+    // zie decisions-and-calibration.md voor de volledige reconstructie (Fase 2's geometrie-
+    // opbouw kon een door Dijkstra gekozen bridge-edge anders nooit terugvinden).
+    const knotResult = await computeRouteWithFallback(effectiveProvider, datasetVersionId, graph, candidates, routeStartNodeId);
     if ("ok" in knotResult) {
       return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot" }, { status: 404 });
     }
 
     // Been 2 (Layer B): startknooppunt -> parkeerplaats, via LocalBikeRouter/straten.
-    const startNode = provider.getNode(routeStartNodeId)!;
+    const startNode = effectiveProvider.getNode(routeStartNodeId)!;
     const startNodeWgs84 = rdToWgs84(startNode.x, startNode.y);
     const router = new LocalBikeRouter(new OpenRouteServiceAdapter());
     const lastMileResult = await router.route(startNodeWgs84, physicalStart, "cycling");

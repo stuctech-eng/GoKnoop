@@ -89,7 +89,19 @@ export async function buildCombinedRouteGeometry(steps: CostAwareStep[], graph: 
         return { ok: false, reason: `GoKnoop-edge tussen '${fromStep.nodeId}' en '${toStep.nodeId}' niet gevonden in de GraphProvider.` };
       }
       const forward = realEdge.fromLogicalNodeId === fromStep.nodeId;
-      const fetchedGeometry = goknoopGeometryMap.get(realEdge.id) ?? realEdge.geometry; // fallback op provider's eigen geometrie (bijv. in tests, waar de provider 'm wel al heeft)
+      let fetchedGeometry = goknoopGeometryMap.get(realEdge.id) ?? realEdge.geometry; // fallback op provider's eigen geometrie (bijv. in tests, waar de provider 'm wel al heeft)
+      if (fetchedGeometry.length === 0) {
+        // TOEGEVOEGD 18-9-2026 (root-cause-fix, vervolg): dit treft vooral bridge-edges --
+        // die hebben BEWUST geen opgeslagen geometrie (performance-fix, zie
+        // cached-nwb-provider.ts). Expliciete, EERLIJKE rechte-lijn-fallback tussen de twee
+        // eindpunten -- zelfde patroon als de connector-tak hieronder -- i.p.v. een stille
+        // lege polyline-sprong. Bekende, nog openstaande beperking: dit is geen echte
+        // fietspad-geometrie voor het bridge-stuk, alleen een correcte plaatsaanduiding.
+        fetchedGeometry = [
+          { x: fromPos.x, y: fromPos.y },
+          { x: toPos.x, y: toPos.y },
+        ];
+      }
       edge = { ...realEdge, geometry: forward ? fetchedGeometry : [...fetchedGeometry].reverse() };
     } else if (toStep.edgeSource === "nwb") {
       const segId = toStep.nwbSegmentId;

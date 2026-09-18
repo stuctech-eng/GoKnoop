@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
     const graphLoadPromise = loadPrecomputedOrBuildGraph(provider, datasetVersionId, providerLoadPromise);
     await providerLoadPromise;
     mark("goknoopProviderLoad");
-    const { graph, cacheHit: graphCacheHit, graphSource, bridgesPresent } = await graphLoadPromise;
+    const { graph, cacheHit: graphCacheHit, graphSource, bridgesPresent, effectiveProvider } = await graphLoadPromise;
     // TOEGEVOEGD 18-9-2026 (GO van Te, puur diagnostisch, GEEN gedragswijziging): maakt
     // zichtbaar welk graafpad daadwerkelijk gebruikt is (voorberekend Optie-C-artefact
     // zonder bridges, vs. de reconstructie met bridges) -- de aanleiding was dat beide
@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
     mark("combinedGraphLoad");
 
     // Been 1 (Layer A, beide kanten met fallback): herkomst-knooppunt -> bestemmings-knooppunt.
-    let knotResult = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidates, {}, onProgress);
+    let knotResult = await computeRouteBetweenCandidatesWithFallback(effectiveProvider, datasetVersionId, graph, fromCandidates, toCandidates, {}, onProgress);
     mark("knotLeg");
     if ("ok" in knotResult) {
       return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot", timings, graphCacheHit, graphDiagnostics }, { status: 404 });
@@ -148,7 +148,7 @@ export async function POST(req: NextRequest) {
 
     // "Plus lusje" (sectie 9.49): probeer een omweg-tussenpunt te vinden, alleen als gevraagd.
     if (extraM && extraM > 0) {
-      const originNode = provider.getNode(knotResult.selectedStartNodeId);
+      const originNode = effectiveProvider.getNode(knotResult.selectedStartNodeId);
       if (originNode) {
         const originPoint = { x: originNode.x, y: originNode.y };
         const destinationRd = wgs84ToRd(destinationLat, destinationLon);
@@ -159,11 +159,11 @@ export async function POST(req: NextRequest) {
 
         for (const side of ["left", "right"] as const) {
           const offsetPoint = computeDetourOffsetPoint(originPoint, destinationRd, extraM, side);
-          const waypointCandidates = resolveNearestNodes(provider, offsetPoint, 3);
+          const waypointCandidates = resolveNearestNodes(effectiveProvider, offsetPoint, 3);
 
           for (const wp of waypointCandidates) {
             const leg1 = await computeRouteBetweenCandidatesWithFallback(
-              provider,
+              effectiveProvider,
               datasetVersionId,
               graph,
               fromCandidates,
@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
             if ("ok" in leg1) continue;
 
             const leg2 = await computeRouteBetweenCandidatesWithFallback(
-              provider,
+              effectiveProvider,
               datasetVersionId,
               graph,
               [{ logicalNodeId: leg1.selectedDestinationNodeId, distanceM: 0 }],
@@ -212,7 +212,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Been 2 (Layer B): bestemmings-knooppunt -> exact adres.
-    const destinationNode = provider.getNode(knotResult.selectedDestinationNodeId)!;
+    const destinationNode = effectiveProvider.getNode(knotResult.selectedDestinationNodeId)!;
     const destinationNodeWgs84 = rdToWgs84(destinationNode.x, destinationNode.y);
     const router = new LocalBikeRouter(new OpenRouteServiceAdapter());
     const lastMileResult = await router.route(destinationNodeWgs84, { lat: destinationLat, lon: destinationLon }, "cycling");

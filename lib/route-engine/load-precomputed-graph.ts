@@ -76,6 +76,7 @@ export async function loadPrecomputedOrBuildGraph(
           precomputedArtifactUsed: true,
           graphSource: "precomputed-artifact" as const,
           bridgesPresent: false, // dit pad bevat nooit bridges (zie comment hierboven)
+          effectiveProvider: provider, // geen bridges hier, dus de kale provider is al correct
         };
       }
       reportProgress("latest", "loadPrecomputedOrBuildGraph: artefact leeg/corrupt, terugvallen op reconstructie", { elapsedMs: Date.now() - t0 });

@@ -61,6 +61,12 @@ type CachedGraphEntry = {
   nwbDatasetVersionId: string | null;
   loadedAt: number;
   bridgesPresent: boolean;
+  // TOEGEVOEGD 18-9-2026 (root-cause-fix: Fase 2 gebruikte de verkeerde provider voor
+  // geometrie-opbouw, waardoor bridge-edges nooit teruggevonden konden worden -- zie
+  // uitgebreide toelichting bij de teruggave hieronder). De AANROEPER moet vanaf nu
+  // deze provider gebruiken voor ALLES na de graafopbouw (kandidatenlus, Fase 2,
+  // geometrie), niet een losse, kale `CachedGraphProvider`.
+  effectiveProvider: GraphProvider;
 };
 
 const moduleCache = new Map<string, CachedGraphEntry>();
@@ -80,7 +86,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minuten -- eerste, voorzichtige waarde,
 
 const CONNECTOR_SEARCH_TOLERANCE_M = 20;
 
-export type CachedCombinedGraphResult = { graph: CombinedGraph; nwbDatasetVersionId: string | null; cacheHit: boolean; bridgesPresent: boolean };
+export type CachedCombinedGraphResult = { graph: CombinedGraph; nwbDatasetVersionId: string | null; cacheHit: boolean; bridgesPresent: boolean; effectiveProvider: GraphProvider };
 
 export function clearGraphCache(): number {
   const size = moduleCache.size;
@@ -114,7 +120,7 @@ export async function loadCachedCombinedGraph(
   const cached = opts?.bypassCache ? undefined : moduleCache.get(cacheKey);
   if (cached && Date.now() - cached.loadedAt < CACHE_TTL_MS) {
     reportProgress("latest", "loadCachedCombinedGraph: CACHE HIT, klaar", { cacheAgeMs: Date.now() - cached.loadedAt });
-    return { graph: cached.graph, nwbDatasetVersionId: cached.nwbDatasetVersionId, cacheHit: true, bridgesPresent: cached.bridgesPresent };
+    return { graph: cached.graph, nwbDatasetVersionId: cached.nwbDatasetVersionId, cacheHit: true, bridgesPresent: cached.bridgesPresent, effectiveProvider: cached.effectiveProvider };
   }
   if (cached) {
     reportProgress("latest", "loadCachedCombinedGraph: CACHE VERLOPEN (TTL), opnieuw opbouwen", { cacheAgeMs: Date.now() - cached.loadedAt });
@@ -252,9 +258,16 @@ export async function loadCachedCombinedGraph(
   );
   reportProgress("latest", "loadCachedCombinedGraph: buildValidatedCombinedGraph teruggekeerd -- volledig klaar");
   const bridgesPresent = selectedBridges.length > 0;
+  // ROOT-CAUSE-FIX 18-9-2026: `bridgeAugmentedProvider` (al bestond, gebruikt om de graaf
+  // zelf te bouwen) wordt nu OOK teruggegeven, zodat de aanroeper 'm kan doorgeven aan Fase 2
+  // (geometrie-opbouw) -- die gebruikte tot nu toe een apart, kaal `CachedGraphProvider`-
+  // exemplaar zonder bridges, waardoor een door Dijkstra gekozen bridge-edge daar nooit
+  // teruggevonden kon worden (`getEdgesFrom()` kende 'm niet) en de hele kandidaat als
+  // "unusable" werd afgewezen -- ondanks dat Fase 1 'm net had goedgekeurd. Zie
+  // decisions-and-calibration.md voor de volledige forensische reconstructie.
   if (!opts?.bypassCache) {
-    moduleCache.set(cacheKey, { graph, nwbDatasetVersionId, loadedAt: Date.now(), bridgesPresent });
+    moduleCache.set(cacheKey, { graph, nwbDatasetVersionId, loadedAt: Date.now(), bridgesPresent, effectiveProvider: bridgeAugmentedProvider });
   }
 
-  return { graph, nwbDatasetVersionId, cacheHit: false, bridgesPresent };
+  return { graph, nwbDatasetVersionId, cacheHit: false, bridgesPresent, effectiveProvider: bridgeAugmentedProvider };
 }
