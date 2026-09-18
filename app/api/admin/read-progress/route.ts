@@ -44,6 +44,16 @@ export async function GET(req: NextRequest) {
 
     let checkpoints = snap.docs.map((d) => d.data());
 
+    // TOEGEVOEGD 18-9-2026, vervolg op de filter hierboven: expliciet op `at` (ISO-tijdstempel)
+    // gesorteerd, nieuwste EERST -- zonder dit gaf Firestore's natuurlijke volgorde soms sterk
+    // verouderde entries terug (letterlijk van de vorige dag), wat een gefilterd resultaat
+    // onbruikbaar maakte om "wat gebeurde er bij de laatste poging" te beantwoorden.
+    checkpoints.sort((a, b) => {
+      const atA = typeof a.at === "string" ? a.at : "";
+      const atB = typeof b.at === "string" ? b.at : "";
+      return atB.localeCompare(atA); // nieuwste eerst
+    });
+
     if (contains) {
       const needle = contains.toLowerCase();
       checkpoints = checkpoints.filter((c) => {
@@ -54,7 +64,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (limit !== undefined) {
-      checkpoints = checkpoints.slice(-limit); // meest recente `limit` stuks
+      checkpoints = checkpoints.slice(0, limit); // nu al nieuwste-eerst gesorteerd, dus gewoon de eerste N
     }
 
     return NextResponse.json({ aantalCheckpoints: checkpoints.length, checkpoints });
