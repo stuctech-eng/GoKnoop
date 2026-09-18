@@ -25,6 +25,8 @@ function makeCombinedGraph(nodePositions: Record<string, { x: number; y: number;
     adjacency: new Map(),
     nodePosition: new Map(Object.entries(nodePositions)),
     totalConnectorsCreated: 0,
+    allPrecomputed: false,
+    clusterCount: 0,
   };
 }
 

@@ -55,6 +55,9 @@ export type CombinedGraph = {
    * van "connectors bestaan, maar geen ervan levert een kortere route op"
    * (een legitieme, andere uitkomst). */
   totalConnectorsCreated: number;
+  /** TOEGEVOEGD 18-9-2026 (GO van Te, puur diagnostisch): zie buildBaseGraph. */
+  allPrecomputed: boolean;
+  clusterCount: number;
 };
 
 export class UnionFind {
@@ -191,6 +194,12 @@ async function buildBaseGraph(
   addEdge: (from: string, to: string, edge: CombinedEdge) => void;
   findNwbClusterNodeId: (segId: string, end: "from" | "to") => string;
   clusterList: { id: string; x: number; y: number }[];
+  // TOEGEVOEGD 18-9-2026 (GO van Te, puur diagnostisch): welk clusteringspad
+  // daadwerkelijk liep, en hoeveel clusters dat opleverde -- onderscheidt
+  // "vooraf-berekend hergebruikt" van "live opnieuw berekend" zonder de
+  // route-uitkomst zelf op enige manier te veranderen.
+  allPrecomputed: boolean;
+  clusterCount: number;
 }> {
   // TOEGEVOEGD 10-9-2026, Fase M6/M7-diagnose: voortgang per stap, via een
   // OPTIONELE, GEÏNJECTEERDE callback -- NIET via een directe Firestore-
@@ -342,6 +351,8 @@ async function buildBaseGraph(
     addEdge,
     findNwbClusterNodeId: (segId, end) => `nwb:${resolveCluster(segId, end)}`,
     clusterList: Array.from(clusterRepresentative.entries()).map(([root, pos]) => ({ id: `nwb:${root}`, ...pos })),
+    allPrecomputed,
+    clusterCount: clusterRepresentative.size,
   };
 }
 
@@ -361,7 +372,7 @@ export async function buildCombinedGraph(
   connectorSearchBbox: { minX: number; minY: number; maxX: number; maxY: number },
   onProgress?: (label: string, extra?: Record<string, unknown>) => void
 ): Promise<CombinedGraph> {
-  const { adjacency, nodePosition, addEdge, clusterList } = await buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
+  const { adjacency, nodePosition, addEdge, clusterList, allPrecomputed, clusterCount } = await buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
 
   const allNodeIds = provider.getAllNodeIds();
   let connectorCount = 0;
@@ -379,7 +390,7 @@ export async function buildCombinedGraph(
     }
   }
 
-  return { adjacency, nodePosition, totalConnectorsCreated: connectorCount };
+  return { adjacency, nodePosition, totalConnectorsCreated: connectorCount, allPrecomputed, clusterCount };
 }
 
 /**
@@ -408,7 +419,7 @@ export async function buildValidatedCombinedGraph(
   validatedConnectors: ValidatedConnectorInput[],
   onProgress?: (label: string, extra?: Record<string, unknown>) => void
 ): Promise<ValidatedCombinedGraph> {
-  const { adjacency, nodePosition, addEdge, findNwbClusterNodeId } = await buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
+  const { adjacency, nodePosition, addEdge, findNwbClusterNodeId, allPrecomputed, clusterCount } = await buildBaseGraph(provider, nwbSegments, toleranceM, onProgress);
 
   const tConnectors = Date.now();
   let highCount = 0;
@@ -423,7 +434,7 @@ export async function buildValidatedCombinedGraph(
   }
   onProgress?.("buildValidatedCombinedGraph: connectoren verwerkt", { elapsedMs: Date.now() - tConnectors, aantalConnectoren: validatedConnectors.length, highCount, lowerCount });
 
-  return { adjacency, nodePosition, totalConnectorsCreated: highCount + lowerCount, connectorsUsed: { high: highCount, lower: lowerCount } };
+  return { adjacency, nodePosition, totalConnectorsCreated: highCount + lowerCount, connectorsUsed: { high: highCount, lower: lowerCount }, allPrecomputed, clusterCount };
 }
 
 export type DijkstraStep = { nodeId: string; edgeSource: CombinedEdgeSource | "start"; distanceM: number; nwbInfo?: CombinedEdge["nwbInfo"] };

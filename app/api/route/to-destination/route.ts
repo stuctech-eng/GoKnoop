@@ -128,14 +128,20 @@ export async function POST(req: NextRequest) {
     const graphLoadPromise = loadPrecomputedOrBuildGraph(provider, datasetVersionId, providerLoadPromise);
     await providerLoadPromise;
     mark("goknoopProviderLoad");
-    const { graph, cacheHit: graphCacheHit } = await graphLoadPromise;
+    const { graph, cacheHit: graphCacheHit, graphSource, bridgesPresent } = await graphLoadPromise;
+    // TOEGEVOEGD 18-9-2026 (GO van Te, puur diagnostisch, GEEN gedragswijziging): maakt
+    // zichtbaar welk graafpad daadwerkelijk gebruikt is (voorberekend Optie-C-artefact
+    // zonder bridges, vs. de reconstructie met bridges) -- de aanleiding was dat beide
+    // paden voorheen identiek "graphCacheHit: false" rapporteerden, waardoor twee
+    // functioneel verschillende graven niet van elkaar te onderscheiden waren.
+    const graphDiagnostics = { graphSource, allPrecomputed: graph.allPrecomputed, clusterCount: graph.clusterCount, bridgesPresent };
     mark("combinedGraphLoad");
 
     // Been 1 (Layer A, beide kanten met fallback): herkomst-knooppunt -> bestemmings-knooppunt.
     let knotResult = await computeRouteBetweenCandidatesWithFallback(provider, datasetVersionId, graph, fromCandidates, toCandidates, {}, onProgress);
     mark("knotLeg");
     if ("ok" in knotResult) {
-      return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot", timings, graphCacheHit }, { status: 404 });
+      return NextResponse.json({ error: knotResult.message, reason: knotResult.reason, leg: "knot", timings, graphCacheHit, graphDiagnostics }, { status: 404 });
     }
 
     let actualExtraM: number | undefined;
@@ -213,11 +219,11 @@ export async function POST(req: NextRequest) {
     mark("lastMile");
 
     if ("reason" in lastMileResult) {
-      return NextResponse.json({ error: lastMileResult.message, reason: lastMileResult.reason, leg: "lastMile", timings, graphCacheHit }, { status: 502 });
+      return NextResponse.json({ error: lastMileResult.message, reason: lastMileResult.reason, leg: "lastMile", timings, graphCacheHit, graphDiagnostics }, { status: 502 });
     }
 
     mark("responseReady");
-    return NextResponse.json({ knotLeg: knotResult, lastMileLeg: lastMileResult, actualExtraM, timings, graphCacheHit, requestId });
+    return NextResponse.json({ knotLeg: knotResult, lastMileLeg: lastMileResult, actualExtraM, timings, graphCacheHit, graphDiagnostics, requestId });
   } catch (err) {
     return NextResponse.json(
       { error: "Route-naar-bestemming-berekening mislukt.", details: err instanceof Error ? err.message : String(err), timings },

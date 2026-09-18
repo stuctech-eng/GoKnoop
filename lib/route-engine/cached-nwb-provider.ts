@@ -60,6 +60,7 @@ type CachedGraphEntry = {
   graph: CombinedGraph;
   nwbDatasetVersionId: string | null;
   loadedAt: number;
+  bridgesPresent: boolean;
 };
 
 const moduleCache = new Map<string, CachedGraphEntry>();
@@ -79,7 +80,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minuten -- eerste, voorzichtige waarde,
 
 const CONNECTOR_SEARCH_TOLERANCE_M = 20;
 
-export type CachedCombinedGraphResult = { graph: CombinedGraph; nwbDatasetVersionId: string | null; cacheHit: boolean };
+export type CachedCombinedGraphResult = { graph: CombinedGraph; nwbDatasetVersionId: string | null; cacheHit: boolean; bridgesPresent: boolean };
 
 export function clearGraphCache(): number {
   const size = moduleCache.size;
@@ -104,7 +105,7 @@ export async function loadCachedCombinedGraph(
   const cached = moduleCache.get(cacheKey);
   if (cached && Date.now() - cached.loadedAt < CACHE_TTL_MS) {
     reportProgress("latest", "loadCachedCombinedGraph: CACHE HIT, klaar", { cacheAgeMs: Date.now() - cached.loadedAt });
-    return { graph: cached.graph, nwbDatasetVersionId: cached.nwbDatasetVersionId, cacheHit: true };
+    return { graph: cached.graph, nwbDatasetVersionId: cached.nwbDatasetVersionId, cacheHit: true, bridgesPresent: cached.bridgesPresent };
   }
   if (cached) {
     reportProgress("latest", "loadCachedCombinedGraph: CACHE VERLOPEN (TTL), opnieuw opbouwen", { cacheAgeMs: Date.now() - cached.loadedAt });
@@ -241,7 +242,8 @@ export async function loadCachedCombinedGraph(
     reportProgress("latest", label, extra)
   );
   reportProgress("latest", "loadCachedCombinedGraph: buildValidatedCombinedGraph teruggekeerd -- volledig klaar");
-  moduleCache.set(cacheKey, { graph, nwbDatasetVersionId, loadedAt: Date.now() });
+  const bridgesPresent = selectedBridges.length > 0;
+  moduleCache.set(cacheKey, { graph, nwbDatasetVersionId, loadedAt: Date.now(), bridgesPresent });
 
-  return { graph, nwbDatasetVersionId, cacheHit: false };
+  return { graph, nwbDatasetVersionId, cacheHit: false, bridgesPresent };
 }

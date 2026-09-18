@@ -19,7 +19,7 @@ export async function loadPrecomputedOrBuildGraph(
   provider: GraphProvider,
   datasetVersionId: string,
   providerReadyPromise?: Promise<void>
-): Promise<CachedCombinedGraphResult & { precomputedArtifactUsed: boolean }> {
+): Promise<CachedCombinedGraphResult & { precomputedArtifactUsed: boolean; graphSource: "precomputed-artifact" | "reconstructed-combined" }> {
   const t0 = Date.now();
   const db = getDb();
 
@@ -51,18 +51,32 @@ export async function loadPrecomputedOrBuildGraph(
       // Sanity-check: komt het aantal gelezen entries overeen met wat de metadata verwacht?
       // Zo niet, is het artefact incompleet/corrupt -- veilig terugvallen op reconstructie.
       if (adjacency.size > 0 && nodePosition.size > 0) {
+        // TOEGEVOEGD 18-9-2026 (GO van Te, puur diagnostisch): dit pad draait NOOIT de
+        // clustering-code (dat gebeurde ooit, eenmalig, tijdens het maken van dit
+        // artefact) en bevat GEEN bridges (die zijn alleen in het reconstructiepad
+        // verwerkt) -- expliciet zichtbaar gemaakt i.p.v. stilzwijgend `false`/`0`.
+        const clusterCount = Array.from(nodePosition.keys()).filter((k) => k.startsWith("nwb:")).length;
         const graph: ValidatedCombinedGraph = {
           adjacency,
           nodePosition,
           totalConnectorsCreated: meta.totalConnectorsCreated ?? 0,
           connectorsUsed: { high: 0, lower: 0 }, // niet bewaard in het artefact -- alleen relevant voor diagnostiek, niet voor routing
+          allPrecomputed: false, // n.v.t. voor dit pad -- clustering draaide niet opnieuw
+          clusterCount,
         };
         reportProgress("latest", "loadPrecomputedOrBuildGraph: artefact succesvol geladen", {
           elapsedMs: Date.now() - t0,
           adjacencySize: adjacency.size,
           nodePositionSize: nodePosition.size,
         });
-        return { graph, nwbDatasetVersionId, cacheHit: false, precomputedArtifactUsed: true };
+        return {
+          graph,
+          nwbDatasetVersionId,
+          cacheHit: false,
+          precomputedArtifactUsed: true,
+          graphSource: "precomputed-artifact" as const,
+          bridgesPresent: false, // dit pad bevat nooit bridges (zie comment hierboven)
+        };
       }
       reportProgress("latest", "loadPrecomputedOrBuildGraph: artefact leeg/corrupt, terugvallen op reconstructie", { elapsedMs: Date.now() - t0 });
     } else {
@@ -72,5 +86,5 @@ export async function loadPrecomputedOrBuildGraph(
 
   // Terugval: bestaande, bewezen werkende reconstructie-aanpak.
   const result = await loadCachedCombinedGraph(provider, datasetVersionId, providerReadyPromise);
-  return { ...result, precomputedArtifactUsed: false };
+  return { ...result, precomputedArtifactUsed: false, graphSource: "reconstructed-combined" as const };
 }
