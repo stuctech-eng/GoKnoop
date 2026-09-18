@@ -1,4 +1,5 @@
 import { getDb, getLastDbInitBreakdown } from "@/lib/firebase-admin";
+import { FieldPath } from "firebase-admin/firestore";
 import { buildValidatedCombinedGraph, type CombinedGraph, type SlimNwbSegment, type ValidatedConnectorInput } from "@/lib/nwb-analysis/combined-graph";
 import { reportProgress } from "@/lib/diagnostics/report-progress";
 import { BridgeAugmentedGraphProvider, selectTopBridgesPerNode } from "./bridge-augmented-graph-provider";
@@ -127,11 +128,24 @@ export async function loadCachedCombinedGraph(
     // nodig) -- nu parallel i.p.v. na elkaar. Bewezen via /api/admin/timing-
     // breakdown: batches-fetch alleen al 4.240ms, was voorheen sequentieel
     // vóór de connectoren-fetch (334ms) -- nu overlappend.
+    //
+    // HERZIEN 17-9-2026 (root-cause-onderzoek "Volendam->Hoorn soms wel/niet"):
+    // `.get()` zonder `.orderBy()` geeft Firestore GEEN garantie op stabiele
+    // documentvolgorde tussen aanroepen. Wiskundig gecontroleerd dat de
+    // clustering zelf (union-find) ORDE-ONAFHANKELIJK is voor eenzelfde
+    // puntenset -- dat verklaart de wisselvalligheid dus NIET. Wel toegevoegd:
+    // (1) expliciete `.orderBy(FieldPath.documentId())` zodat elke aanroep
+    // gegarandeerd exact dezelfde documenten in dezelfde volgorde binnenkrijgt
+    // -- sluit een hele klasse potentiële Firestore-consistentie-varianten uit;
+    // (2) een HARDE controle die LUIDRUCHTIG faalt (i.p.v. stilzwijgend door
+    // te bouwen) als het aantal opgehaalde batch-documenten niet overeenkomt
+    // met wat eerder in DEZELFDE aanvraag als "compleet" is vastgesteld --
+    // voorheen kon een onvolledige fetch nergens gezien worden, nu wel.
     const tFetch = Date.now();
     const connectorsKey = `${nwbDatasetVersionId}_${datasetVersionId}`;
     const [batchesSnap, connectorsSnap] = await Promise.all([
-      db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").get(),
-      db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").get(),
+      db.collection("nwbSegments").doc(nwbDatasetVersionId).collection("batches").orderBy(FieldPath.documentId()).get(),
+      db.collection("nwbConnectors").doc(connectorsKey).collection("connectors").orderBy(FieldPath.documentId()).get(),
     ]);
     reportProgress("latest", "loadCachedCombinedGraph: batches + connectoren parallel opgehaald (fetch)", {
       aantalBatchDocumenten: batchesSnap.docs.length,
@@ -150,6 +164,24 @@ export async function loadCachedCombinedGraph(
       aantalConnectoren: validatedConnectors.length,
       parseMs: Date.now() - tParse,
     });
+
+    // HARDE CONTROLE, 17-9-2026: eerder bekende, stabiele aantallen (131.882
+    // segmenten, 3.171 connectoren) zijn hier bewust als ondergrens vastgelegd.
+    // Een duidelijk lagere telling wijst op een onvolledige Firestore-fetch --
+    // dat mag nooit stilzwijgend een kapotte/onvolledige graaf opleveren.
+    // Bewust EXPLICIET falen (foutmelding met de echte aantallen erin) i.p.v.
+    // stilzwijgend doorbouwen -- exact het principe dat de rest van dit project
+    // al overal toepast bij fouten zichtbaar maken.
+    const MIN_VERWACHTE_SEGMENTEN = 130000;
+    const MIN_VERWACHTE_CONNECTOREN = 3000;
+    if (nwbSegments.length < MIN_VERWACHTE_SEGMENTEN || validatedConnectors.length < MIN_VERWACHTE_CONNECTOREN) {
+      throw new Error(
+        `Onvolledige NWB-data opgehaald: ${nwbSegments.length} segmenten (verwacht >=${MIN_VERWACHTE_SEGMENTEN}), ` +
+          `${validatedConnectors.length} connectoren (verwacht >=${MIN_VERWACHTE_CONNECTOREN}). ` +
+          `Batch-documenten: ${batchesSnap.docs.length}. Dit wijst op een onvolledige Firestore-fetch -- ` +
+          `bewust geharde stop i.p.v. stilzwijgend een mogelijk kapotte graaf bouwen.`
+      );
+    }
   }
 
   // TOEGEVOEGD 12-9-2026, timing-audit: pas HIER wachten op de GoKnoop-
