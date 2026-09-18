@@ -64,6 +64,19 @@ type CachedGraphEntry = {
 
 const moduleCache = new Map<string, CachedGraphEntry>();
 
+// TOEGEVOEGD 18-9-2026 (root-cause-onderzoek, vervolg): `moduleCache` had tot nu toe
+// GEEN vervaltijd en GEEN bridge-versie in de sleutel (bekende beperking, al eerder
+// genoemd bij de bridge-integratie zelf). Bij >20 deployments op één dag kunnen oude en
+// nieuwe Vercel-instances een tijd naast elkaar draaien; een instance die zijn cache
+// bouwde vóór een latere wijziging (bridges, volgorde-fixes) blijft die oude graaf
+// anders voor onbepaalde tijd hergebruiken. Resultaat: identieke aanvragen, wisselend
+// resultaat, afhankelijk van welke instance toevallig bedient -- precies het patroon dat
+// vandaag herhaaldelijk is waargenomen bij overigens identieke Volendam->Hoorn- en
+// Amsterdam->Hilversum-aanvragen. Een bescheiden vervaltijd dwingt elke instance af en
+// toe een verse graaf te bouwen, zodat een verouderde cache nooit onbeperkt blijft
+// hangen. Geen architectuurwijziging -- alleen een grens op iets dat voorheen onbegrensd was.
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minuten -- eerste, voorzichtige waarde, niet eerder gemeten
+
 const CONNECTOR_SEARCH_TOLERANCE_M = 20;
 
 export type CachedCombinedGraphResult = { graph: CombinedGraph; nwbDatasetVersionId: string | null; cacheHit: boolean };
@@ -89,9 +102,12 @@ export async function loadCachedCombinedGraph(
 
   const cacheKey = `${datasetVersionId}__${nwbDatasetVersionId ?? "none"}`;
   const cached = moduleCache.get(cacheKey);
-  if (cached) {
-    reportProgress("latest", "loadCachedCombinedGraph: CACHE HIT, klaar");
+  if (cached && Date.now() - cached.loadedAt < CACHE_TTL_MS) {
+    reportProgress("latest", "loadCachedCombinedGraph: CACHE HIT, klaar", { cacheAgeMs: Date.now() - cached.loadedAt });
     return { graph: cached.graph, nwbDatasetVersionId: cached.nwbDatasetVersionId, cacheHit: true };
+  }
+  if (cached) {
+    reportProgress("latest", "loadCachedCombinedGraph: CACHE VERLOPEN (TTL), opnieuw opbouwen", { cacheAgeMs: Date.now() - cached.loadedAt });
   }
   reportProgress("latest", "loadCachedCombinedGraph: cache miss, ruwe data laden");
 
