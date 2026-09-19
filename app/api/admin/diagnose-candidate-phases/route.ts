@@ -3,6 +3,7 @@ import { getDb } from "@/lib/firebase-admin";
 import { CachedGraphProvider } from "@/lib/route-engine/cached-graph-provider";
 import { loadPrecomputedOrBuildGraph } from "@/lib/route-engine/load-precomputed-graph";
 import { computeRouteWithFallback, type RouteToPointWithFallbackResult, type RouteToPointFallbackFailure } from "@/lib/route-engine/route-to-point-fallback";
+import { computeCombinedRoute } from "@/lib/route-engine/combined-route-engine";
 import type { LoopStartCandidate } from "@/lib/route-engine/loop-route-generator";
 
 export const maxDuration = 30;
@@ -51,6 +52,8 @@ type CandidateDiagnostic = {
   distanceM?: number;
   selectedStartNodeId?: string;
   selectedCandidateRank?: number;
+  bestOriginNodeId?: string | null;
+  bestOriginDistanceM?: number | null;
   elapsedMs: number;
   exception?: { message: string; stack?: string };
 };
@@ -122,6 +125,27 @@ async function runDiagnosis(originCandidateNodeIds: string[], destinationCandida
       if (result && "ok" in result) {
         // RouteToPointFallbackFailure -- message bevat al de onderliggende reden (zie classifyFailure).
         const classified = classifyFailure(result.message);
+
+        // TOEGEVOEGD 19-9-2026 (GO van Te, puur diagnostisch, geen gedragswijziging): bij een
+        // Fase-2-falen bevat de bestaande returnwaarde niet WELKE herkomstkandidaat won (Fase 1
+        // koos 'm intern, maar geeft dat bij falen niet door). Dit herhaalt hier alleen de
+        // GOEDKOPE Fase-1-vergelijking zelf, met `computeCombinedRoute` -- exact dezelfde
+        // functie die Fase 1 intern al gebruikt -- puur om de winnaar zichtbaar te maken voor
+        // verder onderzoek (bijv. diagnose-edge-breakdown). Geen nieuwe beslissing, geen
+        // wijziging aan welke kandidaat "wint" -- alleen dezelfde, al bestaande vergelijking
+        // hier nogmaals uitgevoerd en ditmaal gerapporteerd.
+        let bestOriginNodeId: string | null = null;
+        let bestOriginDistanceM: number | null = null;
+        if (classified.phase1Succeeded) {
+          for (const candidate of fromCandidates) {
+            const cheapResult = computeCombinedRoute(graph, candidate.logicalNodeId, toNodeId);
+            if (cheapResult.ok && (bestOriginDistanceM === null || cheapResult.distanceM < bestOriginDistanceM)) {
+              bestOriginDistanceM = cheapResult.distanceM;
+              bestOriginNodeId = candidate.logicalNodeId;
+            }
+          }
+        }
+
         candidates.push({
           index: i,
           toNode: toNodeId,
@@ -129,6 +153,8 @@ async function runDiagnosis(originCandidateNodeIds: string[], destinationCandida
           phase2: { started: classified.phase2Started, succeeded: classified.phase2Started ? false : null, reason: classified.phase2Reason },
           final: { accepted: false, reason: result.message },
           elapsedMs,
+          bestOriginNodeId,
+          bestOriginDistanceM,
         });
         continue;
       }
