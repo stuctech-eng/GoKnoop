@@ -26,13 +26,36 @@ export const dynamic = "force-dynamic";
  *   2. GoKnoop-node -> huidige clusterrepresentant (graph.nodePosition, zoals productie 'm nu gebruikt)
  *   3. verschil tussen 1 en 2 (moet overeenkomen met de eerder gemeten +25,71m / +12,65m)
  *
- * GET /api/admin/diagnose-connector-distance-origin?key=<DEBUG_SECRET>
+ * GET /api/admin/diagnose-connector-distance-origin?key=<DEBUG_SECRET>&targets=<goknoopNodeId>|<clusterNodeId>|<expectedGraphDistanceM>|<expectedDiffM>,...
+ *
+ * HERZIEN 19-9-2026 (GO van Te, generalisatie voor Lochem/rondje): oorspronkelijk
+ * hardcoded op de 2 Volendam-hops. Nu generiek via de `targets`-queryparameter --
+ * zelfde logica, dupliceert niets, alleen de hardcoded lijst vervangen door invoer.
+ * Zonder `targets` valt terug op de eerder bewezen 2 Volendam-hops (ongewijzigd
+ * reproduceerbaar).
  */
 
-const TARGETS = [
-  { label: "hop4", goknoopNodeId: "IzVQHoyBNiAZQ1Ss8yhQ", clusterNodeId: "nwb:23832", expectedGraphDistanceM: 4.1212530379506696, expectedDiffM: 25.710674053684247 },
-  { label: "hop52", goknoopNodeId: "4TebNUQu8QVISxRNzj72", clusterNodeId: "nwb:46988", expectedGraphDistanceM: 1.4030992276429382, expectedDiffM: 12.647387837443945 },
-] as const;
+type Target = { label: string; goknoopNodeId: string; clusterNodeId: string; expectedGraphDistanceM: number; expectedDiffM: number };
+
+const DEFAULT_TARGETS: Target[] = [
+  { label: "volendam-hop4", goknoopNodeId: "IzVQHoyBNiAZQ1Ss8yhQ", clusterNodeId: "nwb:23832", expectedGraphDistanceM: 4.1212530379506696, expectedDiffM: 25.710674053684247 },
+  { label: "volendam-hop52", goknoopNodeId: "4TebNUQu8QVISxRNzj72", clusterNodeId: "nwb:46988", expectedGraphDistanceM: 1.4030992276429382, expectedDiffM: 12.647387837443945 },
+];
+
+function parseTargets(raw: string): Target[] | null {
+  const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const targets: Target[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const fields = parts[i].split("|");
+    if (fields.length !== 4) return null;
+    const [goknoopNodeId, clusterNodeId, expectedGraphDistanceMStr, expectedDiffMStr] = fields;
+    const expectedGraphDistanceM = Number(expectedGraphDistanceMStr);
+    const expectedDiffM = Number(expectedDiffMStr);
+    if (!goknoopNodeId || !clusterNodeId || Number.isNaN(expectedGraphDistanceM) || Number.isNaN(expectedDiffM)) return null;
+    targets.push({ label: `target${i}`, goknoopNodeId, clusterNodeId, expectedGraphDistanceM, expectedDiffM });
+  }
+  return targets;
+}
 
 function distanceOf(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
@@ -45,6 +68,18 @@ export async function GET(req: NextRequest) {
     if (key !== debugSecret) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+  }
+
+  const targetsParam = req.nextUrl.searchParams.get("targets");
+  let targets: Target[];
+  if (targetsParam) {
+    const parsed = parseTargets(targetsParam);
+    if (!parsed || parsed.length === 0) {
+      return NextResponse.json({ error: "Ongeldig 'targets'-formaat. Verwacht: goknoopNodeId|clusterNodeId|expectedGraphDistanceM|expectedDiffM, kommagescheiden voor meerdere." }, { status: 400 });
+    }
+    targets = parsed;
+  } else {
+    targets = DEFAULT_TARGETS;
   }
 
   try {
@@ -83,7 +118,7 @@ export async function GET(req: NextRequest) {
       for (const seg of data.segments) segmentsById.set(seg.id, seg);
     }
 
-    const results = TARGETS.map((target) => {
+    const results = targets.map((target) => {
       const goknoopNode = provider.getNode(target.goknoopNodeId);
       const clusterPos = graph.nodePosition.get(target.clusterNodeId);
 
