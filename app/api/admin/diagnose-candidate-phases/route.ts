@@ -32,6 +32,14 @@ export const dynamic = "force-dynamic";
  *
  * POST /api/admin/diagnose-candidate-phases?key=<DEBUG_SECRET>
  * Body: { originCandidateNodeIds: string[], destinationCandidateNodeIds: string[] }
+ *
+ * TOEGEVOEGD 19-9-2026 (GO van Te, iPhone-first): ook als GET met kommagescheiden
+ * queryparameters, zodat dit -- net als de bestaande debug-tools -- rechtstreeks
+ * als link in Safari geopend kan worden, zonder een aparte POST-tool nodig te
+ * hebben. Beide varianten roepen dezelfde, hieronder gedeelde kernfunctie aan --
+ * geen dubbele implementatie.
+ *
+ * GET /api/admin/diagnose-candidate-phases?key=<DEBUG_SECRET>&origins=id1,id2,...&destinations=id1,id2,...
  */
 
 type CandidateDiagnostic = {
@@ -62,26 +70,7 @@ function classifyFailure(message: string): { phase1Succeeded: boolean; phase2Sta
   return { phase1Succeeded: false, phase2Started: false, phase2Reason: null };
 }
 
-export async function POST(req: NextRequest) {
-  const debugSecret = process.env.DEBUG_SECRET;
-  if (debugSecret) {
-    const key = req.nextUrl.searchParams.get("key");
-    if (key !== debugSecret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
-
-  let body: { originCandidateNodeIds?: string[]; destinationCandidateNodeIds?: string[] };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
-  }
-  const { originCandidateNodeIds, destinationCandidateNodeIds } = body;
-  if (!originCandidateNodeIds?.length || !destinationCandidateNodeIds?.length) {
-    return NextResponse.json({ error: "originCandidateNodeIds en destinationCandidateNodeIds zijn verplicht." }, { status: 400 });
-  }
-
+async function runDiagnosis(originCandidateNodeIds: string[], destinationCandidateNodeIds: string[]): Promise<NextResponse> {
   const fromCandidates: LoopStartCandidate[] = originCandidateNodeIds.map((logicalNodeId) => ({ logicalNodeId }));
 
   try {
@@ -191,4 +180,52 @@ export async function POST(req: NextRequest) {
       { status: 502 }
     );
   }
+}
+
+function checkKey(req: NextRequest): NextResponse | null {
+  const debugSecret = process.env.DEBUG_SECRET;
+  if (debugSecret) {
+    const key = req.nextUrl.searchParams.get("key");
+    if (key !== debugSecret) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+  return null;
+}
+
+export async function POST(req: NextRequest) {
+  const unauthorized = checkKey(req);
+  if (unauthorized) return unauthorized;
+
+  let body: { originCandidateNodeIds?: string[]; destinationCandidateNodeIds?: string[] };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
+  }
+  const { originCandidateNodeIds, destinationCandidateNodeIds } = body;
+  if (!originCandidateNodeIds?.length || !destinationCandidateNodeIds?.length) {
+    return NextResponse.json({ error: "originCandidateNodeIds en destinationCandidateNodeIds zijn verplicht." }, { status: 400 });
+  }
+
+  return runDiagnosis(originCandidateNodeIds, destinationCandidateNodeIds);
+}
+
+export async function GET(req: NextRequest) {
+  const unauthorized = checkKey(req);
+  if (unauthorized) return unauthorized;
+
+  const originsParam = req.nextUrl.searchParams.get("origins");
+  const destinationsParam = req.nextUrl.searchParams.get("destinations");
+  if (!originsParam || !destinationsParam) {
+    return NextResponse.json({ error: "Queryparameters 'origins' en 'destinations' zijn verplicht (kommagescheiden node-ID's)." }, { status: 400 });
+  }
+
+  const originCandidateNodeIds = originsParam.split(",").map((id) => id.trim()).filter(Boolean);
+  const destinationCandidateNodeIds = destinationsParam.split(",").map((id) => id.trim()).filter(Boolean);
+  if (!originCandidateNodeIds.length || !destinationCandidateNodeIds.length) {
+    return NextResponse.json({ error: "'origins' en 'destinations' bevatten geen bruikbare node-ID's." }, { status: 400 });
+  }
+
+  return runDiagnosis(originCandidateNodeIds, destinationCandidateNodeIds);
 }
