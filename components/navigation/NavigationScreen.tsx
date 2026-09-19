@@ -62,7 +62,7 @@ import { RerouteContextTracker } from "@/lib/navigation/reroute/reroute-context-
 import { performReroute } from "@/lib/navigation/reroute/perform-reroute";
 import { HttpRouteEngineClient } from "@/lib/navigation/reroute/http-route-engine-client";
 import type { GraphEdge, Route, Point } from "@/lib/route-engine/types";
-import type { NavigationState } from "@/lib/navigation/types";
+import type { NavigationState, MatchedPosition } from "@/lib/navigation/types";
 
 // BELANGRIJK (6-9-2026, zie LiveLocationScreen.tsx voor de volledige toelichting):
 // Leaflet raakt browser-globals aan op het MOMENT VAN IMPORTEREN, niet pas bij
@@ -509,12 +509,29 @@ export default function NavigationScreen({
     let currentEdges: readonly GraphEdge[] = edges;
     let currentNodeSequence: readonly string[] = nodeSequence;
     let currentNodeDisplayNumbers: readonly string[] = nodeDisplayNumbers;
-    let detector = new DeviationDetector(model.geometry, stateMachine, clock, {
-      deviationThresholdM: 20,
-      accuracyThresholdM: 25,
-      gpsTimeoutMs: 10000,
-      matchOptions: { baseWindowM: 100, windowMarginPerMps: 10, weights: { distance: 1, heading: 0.1, continuity: 0.5 } },
-    });
+    // LOOP-START ANCHORING (19-9-2026, GO van Te -- zie deviation-detector.ts voor de
+    // volledige toelichting/root-cause). Een rondje (lib/route-engine/loop-route-
+    // generator.ts) heeft per constructie hetzelfde start- als eindknooppunt, dus
+    // nodeSequence[0] === nodeSequence[laatste] is hier de exacte, betrouwbare test --
+    // geen schatting, geen aparte "is dit een rondje"-vlag nodig die apart bijgehouden
+    // moet worden. Voor elke normale A->B-route is dit altijd false, dus initialMatch
+    // blijft daar exact zoals voorheen: null.
+    const isLoopRoute = nodeSequence.length > 1 && nodeSequence[0] === nodeSequence[nodeSequence.length - 1];
+    const loopStartAnchor: MatchedPosition | null = isLoopRoute
+      ? { segmentIndex: 0, segmentT: 0, point: model.geometry[0], perpendicularDistanceM: 0, cumulativeDistanceM: 0 }
+      : null;
+    let detector = new DeviationDetector(
+      model.geometry,
+      stateMachine,
+      clock,
+      {
+        deviationThresholdM: 20,
+        accuracyThresholdM: 25,
+        gpsTimeoutMs: 10000,
+        matchOptions: { baseWindowM: 100, windowMarginPerMps: 10, weights: { distance: 1, heading: 0.1, continuity: 0.5 } },
+      },
+      loopStartAnchor
+    );
     const controller = new NavigationSessionController(detector, stateMachine, clock, ARRIVAL_CONFIRM_DURATION_MS);
 
     // Reroute-machinerie (13-9-2026): hergebruikt uitsluitend bestaande, al-geteste

@@ -4,7 +4,7 @@ import type { DeviationDetectorOptions } from "./deviation-detector";
 import { NavigationStateMachine } from "../session/navigation-state-machine";
 import { ManualNavigationClock } from "../clock/navigation-clock";
 import { rdToWgs84 } from "../../route-engine/coordinate-transform";
-import type { GpsSample } from "../types";
+import type { GpsSample, MatchedPosition } from "../types";
 import type { Point } from "../../route-engine/types";
 
 const CONFIRM_MS = 5000;
@@ -222,5 +222,104 @@ describe("DeviationDetector — het bevestigingsvenster is leidend, geen directe
     const outcome = detector.process(sampleAt(veryFar));
     expect(outcome.action).toBe("reported_deviation");
     expect(stateMachine.getState()).toBe("POSSIBLE_DEVIATION"); // NIET OFF_ROUTE, ondanks de extreme afstand
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// LOOP-START ANCHORING (19-9-2026, GO van Te). Root-cause: een rondje
+// (lib/route-engine/loop-route-generator.ts) heeft per constructie hetzelfde
+// start- als eindknooppunt -- de eerste en laatste geometriepunten vallen
+// LETTERLIJK samen. Vierkante lus (400m omtrek), start/eind op (0,0):
+//
+//   (0,100) ── (100,100)
+//      │            │
+//   (0,0)  ──── (100,0)
+//
+// seg0: (0,0)->(0,100)      [begin van de route]
+// seg1: (0,100)->(100,100)
+// seg2: (100,100)->(100,0)
+// seg3: (100,0)->(0,0)      [einde van de route -- eindigt op HETZELFDE punt als seg0 begint]
+// ──────────────────────────────────────────────────────────────────────────
+const LOOP_GEOMETRY: Point[] = [
+  { x: 0, y: 0 },
+  { x: 0, y: 100 },
+  { x: 100, y: 100 },
+  { x: 100, y: 0 },
+  { x: 0, y: 0 },
+];
+const LOOP_TOTAL_LENGTH_M = 400;
+// Punt vlak bij de gedeelde hoek (0,0), zo gekozen dat de projectie op seg3 (t≈0.99,
+// perpendiculaire afstand 0.5m) daadwerkelijk dichterbij ligt dan de geklemde projectie
+// op seg0 (t=0, perpendiculaire afstand ≈1.12m) -- geen toevallige gelijkstand, een
+// echte, strikt kleinere kosten voor het VERKEERDE (laatste) segment.
+const LOOP_START_AREA_SAMPLE: Point = { x: 1, y: -0.5 };
+
+function loopSetup(initialMatch: MatchedPosition | null = null) {
+  const clock = new ManualNavigationClock(0);
+  const stateMachine = new NavigationStateMachine({ deviationConfirmDurationMs: CONFIRM_MS, rerouteCooldownMs: COOLDOWN_MS });
+  stateMachine.start();
+  const detector = new DeviationDetector(LOOP_GEOMETRY, stateMachine, clock, makeOptions(), initialMatch);
+  return { clock, stateMachine, detector };
+}
+
+describe("DeviationDetector — 9. loop-start anchoring (root-cause-bewijs + fix)", () => {
+  it("BUG-REPRODUCTIE: zonder anchor kan de allereerste match van een rondje op het LAATSTE segment landen i.p.v. het eerste", () => {
+    const { detector } = loopSetup(null); // ongewijzigd oud gedrag (geen initialMatch meegegeven)
+    const outcome = detector.process(sampleAt(LOOP_START_AREA_SAMPLE));
+    expect(outcome.action).toBe("reported_on_route"); // ruim binnen de deviationThreshold, dus geaccepteerd als "op de route"
+    if (outcome.action !== "reported_on_route") throw new Error("onbereikbaar -- type-guard voor TS");
+    // Het bewijs van de bug: de match landt vlak vóór het EINDE van de lus (cumulatief ~399
+    // van de 400m), niet bij het begin -- exact het mechanisme dat checkArrival() in
+    // NavigationScreen.tsx direct zou laten vuren (remainingDistanceM zou ~1m zijn, ruim
+    // onder ARRIVAL_AT_END_THRESHOLD_M=25).
+    expect(outcome.matchedPosition.segmentIndex).toBe(3); // het laatste segment, niet segment 0
+    expect(outcome.matchedPosition.cumulativeDistanceM).toBeGreaterThan(LOOP_TOTAL_LENGTH_M - 5);
+  });
+
+  it("FIX: met een loop-start-anchor kiest de allereerste match altijd het BEGIN van de route, zelfde bug-positie", () => {
+    const anchor: MatchedPosition = { segmentIndex: 0, segmentT: 0, point: LOOP_GEOMETRY[0], perpendicularDistanceM: 0, cumulativeDistanceM: 0 };
+    const { detector } = loopSetup(anchor);
+    const outcome = detector.process(sampleAt(LOOP_START_AREA_SAMPLE)); // exact dezelfde positie als de bug-reproductietest hierboven
+    expect(outcome.action).toBe("reported_on_route");
+    if (outcome.action !== "reported_on_route") throw new Error("onbereikbaar -- type-guard voor TS");
+    // Met de anchor gebruikt matchPosition() zijn bestaande vensterlogica (rond
+    // cumulativeDistanceM=0), waardoor het verre, verkeerde laatste segment nooit als
+    // kandidaat meedoet -- de match blijft bij het begin, ver van "bijna aangekomen".
+    expect(outcome.matchedPosition.segmentIndex).toBe(0);
+    expect(outcome.matchedPosition.cumulativeDistanceM).toBeLessThan(5);
+  });
+
+  it("FIX: na de verankerde eerste match werkt de normale, ongewijzigde matcher gewoon door voor volgende samples", () => {
+    const anchor: MatchedPosition = { segmentIndex: 0, segmentT: 0, point: LOOP_GEOMETRY[0], perpendicularDistanceM: 0, cumulativeDistanceM: 0 };
+    const { detector } = loopSetup(anchor);
+    detector.process(sampleAt(LOOP_START_AREA_SAMPLE));
+    // Een volgende sample, duidelijk verderop langs seg0 -- geen speciale behandeling meer nodig,
+    // dit is precies de bestaande, ongewijzigde matcher-logica (venster rond de vorige match).
+    const further = detector.process(sampleAt({ x: 0, y: 40 }));
+    expect(further.action).toBe("reported_on_route");
+    if (further.action !== "reported_on_route") throw new Error("onbereikbaar -- type-guard voor TS");
+    expect(further.matchedPosition.segmentIndex).toBe(0);
+    expect(further.matchedPosition.cumulativeDistanceM).toBeCloseTo(40, 0);
+  });
+
+  it("A→B-REGRESSIE: initialMatch=null (standaardwaarde) op een normale, niet-lus-route geeft EXACT hetzelfde resultaat als de bestaande setup() zonder 5e argument", () => {
+    // STRAIGHT_GEOMETRY is GEEN lus (begin (0,0) ≠ eind (0,1000)) -- representatief voor elke
+    // normale A->B-route. Vergelijkt een expliciete `null` (nieuwe, optionele parameter) met
+    // het geheel weglaten ervan (bestaande aanroepstijl, gebruikt door setup() hierboven).
+    const explicitNull = (() => {
+      const clock = new ManualNavigationClock(0);
+      const stateMachine = new NavigationStateMachine({ deviationConfirmDurationMs: CONFIRM_MS, rerouteCooldownMs: COOLDOWN_MS });
+      stateMachine.start();
+      return new DeviationDetector(STRAIGHT_GEOMETRY, stateMachine, clock, makeOptions(), null);
+    })();
+    const omitted = setup().detector; // bestaande 4-argumenten-aanroep, ongewijzigd
+
+    const samplePoint = { x: 3, y: 500 }; // willekeurig punt dicht bij de route, binnen de deviationThreshold
+    const a = explicitNull.process(sampleAt(samplePoint));
+    const b = omitted.process(sampleAt(samplePoint));
+    expect(a.action).toBe(b.action);
+    if (a.action === "reported_on_route" && b.action === "reported_on_route") {
+      expect(a.matchedPosition).toEqual(b.matchedPosition);
+    }
   });
 });

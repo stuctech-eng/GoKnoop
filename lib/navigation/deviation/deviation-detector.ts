@@ -35,6 +35,28 @@ import { NavigationStateMachine, InvalidNavigationTransitionError } from "../ses
  * implementatiestap 9 ("GPS_LOST/PERMISSION_DENIED/PAUSED/ARRIVED-
  * afhandeling"). Deze module zorgt er wel voor dat een GPS-signaalverlies
  * nooit tot een valse afwijkingsmelding leidt (zie `process()`).
+ *
+ * LOOP-START ANCHORING (19-9-2026, GO van Te, root-cause bewezen in
+ * lib/route-engine/loop-route-generator.ts: een rondje heeft per constructie
+ * route.nodes[0] === route.nodes[laatste], dus het eerste en laatste
+ * geometriepunt vallen LETTERLIJK samen). Zonder ingreep zou de ALLEREERSTE
+ * match van een sessie (previousMatch === null in candidate-matcher.ts ->
+ * geen venster, alle segmenten kandidaat) op dat samenvalpunt kunnen landen
+ * op het LAATSTE segment i.p.v. het eerste -- remainingDistanceM zou dan
+ * meteen ~0 zijn en de sessie zou direct ARRIVED worden, nog vóór er
+ * gereden is (zie decisions-and-calibration.md voor de volledige analyse).
+ *
+ * DE FIX zit uitsluitend HIER, als optionele constructor-parameter
+ * (`initialMatch`, standaard `null` = exact het oude gedrag): de aanroeper
+ * (NavigationScreen.tsx) bepaalt of de huidige route een lus is en geeft in
+ * dat geval een synthetische match op segment 0 mee. Die wordt vervolgens
+ * als previousMatch aan matchPosition() doorgegeven bij de eerste
+ * process()-aanroep -- daardoor gebruikt de matcher zijn AL BESTAANDE,
+ * ONGEWIJZIGDE venster-logica (selectCandidateSegments, alleen segmenten
+ * dicht bij de vorige cumulatieve afstand) in plaats van de vensterloze
+ * "alle segmenten"-modus. Geen wijziging aan candidate-matcher.ts zelf, dus
+ * generieke matching-logica en normale A->B-navigatie (waar dit argument
+ * altijd null blijft) zijn op geen enkele manier geraakt.
  */
 
 export type DeviationDetectorOptions = {
@@ -58,15 +80,24 @@ export type DeviationOutcome =
 
 export class DeviationDetector {
   private readonly fixEvaluator: GpsFixEvaluator;
-  private lastMatch: MatchedPosition | null = null;
+  private lastMatch: MatchedPosition | null;
 
   constructor(
     private readonly geometry: readonly Point[],
     private readonly stateMachine: NavigationStateMachine,
     private readonly clock: NavigationClock,
-    private readonly options: DeviationDetectorOptions
+    private readonly options: DeviationDetectorOptions,
+    /**
+     * Loop-start anchoring (zie klasse-doc-comment hierboven). Standaard
+     * `null` -- exact het oude gedrag (vensterloze eerste match), voor elke
+     * bestaande aanroeper ongewijzigd. Alleen de aanroeper die weet dat de
+     * huidige route een lus is, geeft hier bewust een synthetische match
+     * (typisch segment 0, cumulativeDistanceM 0) mee.
+     */
+    initialMatch: MatchedPosition | null = null
   ) {
     this.fixEvaluator = new GpsFixEvaluator(clock, { accuracyThresholdM: options.accuracyThresholdM });
+    this.lastMatch = initialMatch;
   }
 
   /**
