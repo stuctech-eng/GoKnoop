@@ -69,6 +69,16 @@ export async function GET(req: NextRequest) {
 
     // Per hop: graaf-opgeslagen distanceM (waar Dijkstra op koos) opzoeken in graph.adjacency,
     // naast de geometrie-opgeloste distanceM (geometryResult.edges, zelfde volgorde/index).
+    //
+    // HERZIEN 19-9-2026 (GO van Te, meetmethode-correctie): bij parallelle edges tussen
+    // hetzelfde (from, to, source) -- die kunnen bestaan, zie dijkstra.ts's eigen commentaar
+    // over parallelle edges -- pakte de eerste versie zomaar de eerste match, niet per se
+    // dezelfde die Dijkstra daadwerkelijk koos. Dijkstra kiest per hop altijd de GOEDKOOPSTE
+    // edge tussen twee vaste nodes (een duurdere parallel kan nooit op het kortste pad zitten
+    // tussen diezelfde twee nodes) -- dus nu expliciet de edge met de LAAGSTE distanceM onder
+    // de matches geselecteerd, wat voor edges van hetzelfde `source` (dus dezelfde kostenfactor)
+    // gelijk is aan de laagste effectieve kosten. Zelfde selectiecriterium als Dijkstra, geen
+    // eigen nieuwe aanname.
     const hops: Record<string, unknown>[] = [];
     let sumGraphDistanceM = 0;
     let sumGeometryDistanceM = 0;
@@ -78,8 +88,11 @@ export async function GET(req: NextRequest) {
       const toStep = dijkstraResult.steps[i];
       const geometryEdge = geometryResult.edges[i - 1];
 
-      const candidateEdges = graph.adjacency.get(fromStep.nodeId) ?? [];
-      const matchingGraphEdge = candidateEdges.find((e) => e.to === toStep.nodeId && e.source === toStep.edgeSource);
+      const candidateEdges = (graph.adjacency.get(fromStep.nodeId) ?? []).filter((e) => e.to === toStep.nodeId && e.source === toStep.edgeSource);
+      const matchingGraphEdge = candidateEdges.reduce<(typeof candidateEdges)[number] | undefined>(
+        (min, e) => (min === undefined || e.distanceM < min.distanceM ? e : min),
+        undefined
+      );
 
       const graphDistanceM = matchingGraphEdge?.distanceM ?? null;
       const geometryDistanceM = geometryEdge?.distanceM ?? null;
@@ -95,12 +108,16 @@ export async function GET(req: NextRequest) {
         edgeSource: toStep.edgeSource,
         nwbSegmentId: toStep.nwbSegmentId ?? null,
         edgeId: geometryEdge?.id ?? null,
+        parallelCandidateCount: candidateEdges.length,
         graphAdjacencyMatchFound: !!matchingGraphEdge,
         graphDistanceM,
         geometryDistanceM,
         diffM,
       });
     }
+
+    const graphSumDijkstraDiffM = sumGraphDistanceM - dijkstraResult.distanceM;
+    const GRAPH_SUM_VERIFICATION_TOLERANCE_M = 0.01;
 
     return NextResponse.json({
       datasetVersionId,
@@ -113,6 +130,8 @@ export async function GET(req: NextRequest) {
       sumGraphDistanceM,
       sumGeometryDistanceM,
       totalDiffM: sumGeometryDistanceM - sumGraphDistanceM,
+      graphSumDijkstraDiffM,
+      graphSumMatchesDijkstraTotal: Math.abs(graphSumDijkstraDiffM) <= GRAPH_SUM_VERIFICATION_TOLERANCE_M,
       hopCount: hops.length,
       hops,
     });
