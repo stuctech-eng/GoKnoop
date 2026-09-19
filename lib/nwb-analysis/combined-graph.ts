@@ -399,11 +399,47 @@ export async function buildCombinedGraph(
  * nabijheid. Alleen niet-afgewezen kandidaten (high/lower) worden als
  * daadwerkelijke connector-edge toegevoegd -- elke edge draagt zijn
  * confidence-niveau mee voor latere rapportage.
+ *
+ * ROOT-CAUSE-FIX 19-9-2026 (GO van Te, structurele connector/cluster-
+ * mismatch -- numeriek bewezen voor drie onafhankelijke casussen: Volendam,
+ * Lochem, "Terug naar start", zie decisions-and-calibration.md). `c.distanceM`
+ * is bij connector-generatie berekend tegen het RUWE, individuele
+ * NWB-segment-eindpunt (`connector-candidates.ts`) -- maar de edge zelf
+ * wordt hier verbonden aan `nwbNodeId`, de gedeelde CLUSTERREPRESENTANT
+ * (`findNwbClusterNodeId`), niet aan dat oorspronkelijke eindpunt. Die twee
+ * posities kunnen tientallen meters uiteenlopen zodra meerdere, net niet
+ * identieke eindpunten in dezelfde cluster samenkomen. Omdat
+ * `buildCombinedRouteGeometry` de connector-afstand WEL al correct berekent
+ * (rechte lijn tussen de GoKnoop-node en `nodePosition.get(nwbNodeId)`, dus
+ * tegen de clusterrepresentant), ontstond een structurele inconsistentie
+ * tussen Dijkstra's gewicht (Fase 1, gebaseerd op `c.distanceM`) en de
+ * daadwerkelijk opgebouwde geometrie (Fase 2) -- exact wat de
+ * distance-invariant (combined-route-engine.ts) hoorde te vangen, en deed.
+ *
+ * DE FIX: de canonical coordinate van een connector is de clusterrepresentant
+ * in `nodePosition`, live geëvalueerd bij ELKE graafopbouw -- nooit een vooraf
+ * opgeslagen afstand. Het edge-gewicht wordt daarom hier opnieuw berekend
+ * (`distanceOf`), EXACT dezelfde bron en berekening als Fase 2 al gebruikte,
+ * zodat beide fasen per constructie overeenkomen en nooit meer uiteen kunnen
+ * lopen -- ook niet als clustering tussen twee graafopbouwen verschuift.
+ * `c.distanceM` (Firestore, `nwbConnectors`) blijft ONGEWIJZIGD bestaan en
+ * blijft zinvol als validatiesignaal bij connector-generatie (parallel-check,
+ * confidence-classificatie in connector-candidates.ts) -- die rol is lokaal
+ * en tijdstip-onafhankelijk, en wordt door deze fix niet geraakt. Alleen het
+ * hergebruik van die waarde als ROUTERINGSGEWICHT vervalt hier.
+ *
+ * Geen Firestore-migratie nodig: dit raakt uitsluitend hoe de graaf wordt
+ * OPGEBOUWD, niet de opgeslagen brondata zelf. `precompute-full-graph-v2.ts`
+ * roept dezelfde functie aan, dus een eventueel al bestaand vooraf-berekend
+ * artefact krijgt deze fix pas na een nieuwe precompute-run.
  */
 export type ValidatedConnectorInput = {
   goknoopNodeId: string;
   nwbSegmentId: string;
   nwbEndpoint: "from" | "to";
+  /** Afstand tot het oorspronkelijke NWB-eindpunt, bij generatie berekend --
+   * uitsluitend een validatiesignaal (zie connector-candidates.ts), GEEN
+   * routeringsgewicht (zie root-cause-fix hierboven). */
   distanceM: number;
   confidence: "high" | "lower";
 };
@@ -411,6 +447,10 @@ export type ValidatedConnectorInput = {
 export type ValidatedCombinedGraph = CombinedGraph & {
   connectorsUsed: { high: number; lower: number };
 };
+
+function distanceOf(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
 
 export async function buildValidatedCombinedGraph(
   provider: GraphProvider,
@@ -424,15 +464,31 @@ export async function buildValidatedCombinedGraph(
   const tConnectors = Date.now();
   let highCount = 0;
   let lowerCount = 0;
+  let skippedNoGoknoopNode = 0;
   for (const c of validatedConnectors) {
     const nwbNodeId = findNwbClusterNodeId(c.nwbSegmentId, c.nwbEndpoint);
     if (!nodePosition.has(nwbNodeId)) continue; // NWB-segment viel buiten Set B na classificatie -- veilig overslaan
-    addEdge(c.goknoopNodeId, nwbNodeId, { to: nwbNodeId, distanceM: c.distanceM, source: "connector" });
-    addEdge(nwbNodeId, c.goknoopNodeId, { to: c.goknoopNodeId, distanceM: c.distanceM, source: "connector" });
+    const goknoopNode = provider.getNode(c.goknoopNodeId);
+    if (!goknoopNode) {
+      skippedNoGoknoopNode++; // zou niet moeten gebeuren (connector verwijst naar onbekende GoKnoop-node) -- veilig overslaan, niet aannemen
+      continue;
+    }
+    const clusterPos = nodePosition.get(nwbNodeId)!;
+    // ROOT-CAUSE-FIX 19-9-2026: live herberekend tegen de huidige clusterrepresentant,
+    // i.p.v. de bij generatie opgeslagen `c.distanceM` (zie toelichting hierboven).
+    const edgeDistanceM = distanceOf(goknoopNode, clusterPos);
+    addEdge(c.goknoopNodeId, nwbNodeId, { to: nwbNodeId, distanceM: edgeDistanceM, source: "connector" });
+    addEdge(nwbNodeId, c.goknoopNodeId, { to: c.goknoopNodeId, distanceM: edgeDistanceM, source: "connector" });
     if (c.confidence === "high") highCount++;
     else lowerCount++;
   }
-  onProgress?.("buildValidatedCombinedGraph: connectoren verwerkt", { elapsedMs: Date.now() - tConnectors, aantalConnectoren: validatedConnectors.length, highCount, lowerCount });
+  onProgress?.("buildValidatedCombinedGraph: connectoren verwerkt", {
+    elapsedMs: Date.now() - tConnectors,
+    aantalConnectoren: validatedConnectors.length,
+    highCount,
+    lowerCount,
+    skippedNoGoknoopNode,
+  });
 
   return { adjacency, nodePosition, totalConnectorsCreated: highCount + lowerCount, connectorsUsed: { high: highCount, lower: lowerCount }, allPrecomputed, clusterCount };
 }

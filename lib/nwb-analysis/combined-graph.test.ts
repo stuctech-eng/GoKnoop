@@ -320,8 +320,13 @@ describe("dijkstraWithCostModel + makeCostFn (Fase 5 -- empirisch kostenmodel)",
       ["3", [goknoopEdge2]],
     ]);
     const provider = new FakeGraphProvider(nodes, edges);
-    // NWB-pad: rechtstreeks van 1 naar 3, 35km werkelijk, via connectors op afstand 0 (voor een schoon, exact narekenbaar scenario).
-    const nwbSegments: SlimNwbSegment[] = [{ id: "shortcut", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: 100 }, to: { x: 35000, y: 100 }, lengthM: 35000 }];
+    // NWB-pad: rechtstreeks van 1 naar 3, 35km werkelijk. De segment-eindpunten liggen
+    // exact op de coördinaten van de bijbehorende GoKnoop-nodes (i.p.v. er 100m/~5001m
+    // vandaan, zoals vóór de root-cause-fix van 19-9-2026) -- na die fix wordt de
+    // connector-afstand live uit de coördinaten herberekend (zie combined-graph.ts),
+    // dus moet de fixture zelf geometrisch consistent zijn met de declared `distanceM: 0`
+    // om nog steeds een schoon, exact narekenbaar scenario te zijn.
+    const nwbSegments: SlimNwbSegment[] = [{ id: "shortcut", bstCode: "FP", wegnummer: null, straatnaam: null, from: { x: 0, y: 0 }, to: { x: 40000, y: 0 }, lengthM: 35000 }];
     const validatedConnectors: ValidatedConnectorInput[] = [
       { goknoopNodeId: "1", nwbSegmentId: "shortcut", nwbEndpoint: "from", distanceM: 0, confidence: "high" },
       { goknoopNodeId: "3", nwbSegmentId: "shortcut", nwbEndpoint: "to", distanceM: 0, confidence: "high" },
