@@ -29,6 +29,8 @@ type ViaKnooppuntenResult = {
   segmentSources: ("cache" | "ors")[];
 };
 
+type TooManyError = { error: string; reason: "too_many_knooppunten"; knooppuntenCount: number; limit: number; nodeIds: string[]; displayNumbers: string[] };
+
 const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY;
 const CARTO_RASTER_URL = CARTO_API_KEY
   ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${CARTO_API_KEY}`
@@ -43,6 +45,7 @@ export default function BikeRouteKnooppuntenDebugPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ViaKnooppuntenResult | null>(null);
+  const [tooManySequence, setTooManySequence] = useState<TooManyError | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -63,6 +66,7 @@ export default function BikeRouteKnooppuntenDebugPage() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setTooManySequence(null);
 
     try {
       const res = await fetch("/api/route/via-knooppunten", {
@@ -72,6 +76,9 @@ export default function BikeRouteKnooppuntenDebugPage() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.reason === "too_many_knooppunten") {
+          setTooManySequence(data as TooManyError);
+        }
         setError(data.error ?? `HTTP ${res.status}`);
         return;
       }
@@ -142,6 +149,35 @@ export default function BikeRouteKnooppuntenDebugPage() {
       {error && (
         <div style={{ background: "#fdecea", color: "#b00020", padding: 12, borderRadius: 8, marginBottom: 12, fontSize: 14 }}>
           {error}
+        </div>
+      )}
+
+      {tooManySequence && (
+        <div style={{ marginBottom: 16 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
+            Gevonden knooppuntvolgorde ({tooManySequence.knooppuntenCount} knooppunten, geen ORS-aanroepen gedaan)
+          </h2>
+          <p style={{ fontSize: 13, color: "#555", marginBottom: 8 }}>
+            Vergelijk deze reeks met de officiële knooppuntenkaart om te zien of dit een zinnig-maar-lang pad is
+            (bijv. een gat in het netwerk waar Dijkstra omheen moet) of een onlogische omweg.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {tooManySequence.displayNumbers.map((num, i) => (
+              <span
+                key={i}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  background: "#fdecea",
+                  border: "1px solid #b00020",
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                {i + 1}. {num}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 

@@ -76,7 +76,15 @@ export async function POST(req: NextRequest) {
   );
 
   if ("reason" in result) {
-    return NextResponse.json({ error: JSON.stringify(result), ...result }, { status: 502 });
+    if (result.reason === "too_many_knooppunten") {
+      // 422, geen serverfout: een bewust geweigerde, te lange reeks -- de volgorde zelf komt
+      // gewoon mee voor inspectie (zie de toelichting in route-via-knooppunten.ts).
+      return NextResponse.json(
+        { error: `Te veel knooppunten (${result.knooppuntenCount}, limiet ${result.limit}).`, ...result },
+        { status: 422 }
+      );
+    }
+    return NextResponse.json({ error: result.message, ...result }, { status: 502 });
   }
 
   return NextResponse.json({

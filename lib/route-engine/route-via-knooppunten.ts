@@ -45,7 +45,22 @@ export type ViaKnooppuntenResult = {
 
 export type ViaKnooppuntenError =
   | { reason: "dijkstra_failed"; message: string }
-  | { reason: "too_many_knooppunten"; knooppuntenCount: number; limit: number }
+  | {
+      reason: "too_many_knooppunten";
+      knooppuntenCount: number;
+      limit: number;
+      /**
+       * TOEGEVOEGD (n.a.v. Volendam->Hoorn: 29 knooppunten, "kan niet kloppen" t.o.v. de
+       * officiële kaart) -- de volledige reeks WEL teruggeven, puur ter inspectie. Geen
+       * enkele ORS-aanroep gedaan voor deze reeks (de grens bestaat juist om dat te
+       * voorkomen) -- dit kost dus niets, en maakt het mogelijk de reeks naast de
+       * officiële kaart te leggen om vast te stellen of dit een zinnig-maar-lang pad is
+       * (bijv. een bekend gat in de pure knooppuntengraaf, zie de toelichting bovenaan
+       * dit bestand) of een echte fout.
+       */
+      nodeIds: string[];
+      displayNumbers: string[];
+    }
   | { reason: "segment_failed"; fromNodeId: string; toNodeId: string; message: string };
 
 function sleep(ms: number): Promise<void> {
@@ -65,11 +80,11 @@ export async function routeViaKnooppunten(
   }
   const nodeIds = dijkstraResult.nodes;
 
-  if (nodeIds.length > MAX_KNOOPPUNTEN_PER_ROUTE) {
-    return { reason: "too_many_knooppunten", knooppuntenCount: nodeIds.length, limit: MAX_KNOOPPUNTEN_PER_ROUTE };
-  }
-
   const displayNumbers = nodeIds.map((id) => provider.getNode(id)?.displayNumber ?? "?");
+
+  if (nodeIds.length > MAX_KNOOPPUNTEN_PER_ROUTE) {
+    return { reason: "too_many_knooppunten", knooppuntenCount: nodeIds.length, limit: MAX_KNOOPPUNTEN_PER_ROUTE, nodeIds, displayNumbers };
+  }
 
   // Stap 2: per opeenvolgend paar het echte fietspad ophalen -- cache eerst, anders ORS (functie 1).
   const router = new LocalBikeRouter(new OpenRouteServiceAdapter());
