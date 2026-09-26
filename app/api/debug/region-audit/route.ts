@@ -32,6 +32,12 @@ const DEFAULT_REGIONS: NamedRegion[] = [
   { label: "Amsterdam-centrum (rond De Ruijterkade/NDSM/Buiksloterweg)", minLat: 52.36, minLon: 4.87, maxLat: 52.405, maxLon: 4.935 },
   { label: "Referentiegebied Volendam/Edam (bevestigd goed werkend)", minLat: 52.48, minLon: 4.98, maxLat: 52.52, maxLon: 5.06 },
   { label: "Overgangsgebied Amsterdam-Noord/Waterland", minLat: 52.4, minLon: 4.95, maxLat: 52.44, maxLon: 5.05 },
+  // TOEGEVOEGD 19-9-2026 (functie 2, "algemeen bang voor structurele gaten", GO van Te):
+  // de kuststrook Volendam->Hoorn waar functie 2's pure-Dijkstra een grote omweg via
+  // Alkmaar bleek te nemen i.p.v. de directe kust. Als standaardregio toegevoegd i.p.v.
+  // als losse query-param, omdat een lange JSON-query-string op mobiel Safari tijdens
+  // kopiëren/plakken corrumpeerde ("Unexpected end of JSON input").
+  { label: "Kuststrook Volendam-Hoorn (functie-2-omweg-onderzoek)", minLat: 52.49, minLon: 5.03, maxLat: 52.65, maxLon: 5.15 },
 ];
 
 type RdBbox = { minX: number; minY: number; maxX: number; maxY: number };
