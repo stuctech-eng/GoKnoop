@@ -49,7 +49,8 @@ import { BrowserGeolocationSource } from "@/lib/navigation/gps-sources/browser-g
 import { buildRouteProgressModel, calculateProgress, calculateNextNodeInfo } from "@/lib/navigation/progress/route-progress-model";
 import { distanceBetween, bearingDegrees } from "@/lib/navigation/matching/geometry";
 import { determinePreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
-import { selectHeadingDeg, smoothHeadingDeg, relativeAngleDeg } from "@/lib/navigation/direction/relative-direction";
+import { selectHeadingDeg, smoothHeadingDeg, relativeAngleDeg, classifyDirection } from "@/lib/navigation/direction/relative-direction";
+import type { RelativeDirection } from "@/lib/navigation/direction/relative-direction";
 import type { PreNavigationPhase } from "@/lib/navigation/session/pre-navigation-phase";
 import { wgs84ToRd, rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
 import type { PhysicalAnchor } from "@/lib/navigation/physical-anchor";
@@ -139,6 +140,19 @@ const RECENT_ROUTE_MEMORY_M = 250;
 // door `deviationConfirmDurationMs`/`GpsFixEvaluator` opgevangen, hier ongewijzigd).
 const REROUTE_RETRY_BACKOFF_MS = 5000;
 
+// Apple-stijl navigatiefase (19-9-2026, "Apple-style fietsnavigatie"): Nederlandse
+// weergavelabels voor de al bestaande, al geteste `classifyDirection()` (relative-direction.ts)
+// -- puur presentatie, GEEN nieuwe richtingslogica. Hergebruikt exact dezelfde
+// relatieve hoek die de bestaande pijl al gebruikte (arrowDeg hieronder).
+const DIRECTION_LABEL: Record<RelativeDirection, string> = {
+  RECHTDOOR: "Rechtdoor",
+  LICHT_LINKS: "Licht links",
+  LINKS: "Linksaf",
+  LICHT_RECHTS: "Licht rechts",
+  RECHTS: "Rechtsaf",
+  ACHTERUIT: "Keer om",
+};
+
 // Statusweergave per NavigationState (stap 12.6) -- puur weergave, geen nieuwe
 // navigatielogica. Beknopte, niet-alarmistische labels (ontwerpregel: afwijking
 // duidelijk maar niet alarmistisch tonen).
@@ -179,19 +193,15 @@ export type NavigationScreenProps = {
   /** Aangeroepen wanneer de gebruiker de navigatie expliciet verlaat/stopt. */
   onExit?: () => void;
   /**
-   * Aangeroepen als de gebruiker vanuit Start Guidance (fase B, bij het
-   * startpunt) de rijrichting wil omkeren -- de aanroeper (app/page.tsx)
-   * keert de route om (`reverseLoopCandidate`) en de nieuwe `edges`/
-   * `nodeSequence`-props zorgen (via de `key`-gebaseerde remount in
-   * app/page.tsx) voor een schone herstart van deze sessie. Alleen getoond
-   * als deze prop is meegegeven (niet op de debugpagina).
-   */
-  onReverseDirection?: () => void;
-  /**
    * FASE 5 (sectie 9.18): aangeroepen als de gebruiker "↩️ Back to Start" indrukt tijdens
    * NAVIGATING. De aanroeper (app/page.tsx) berekent beide benen (knooppunten-terugweg +
    * laatste-stukje-naar-parkeerplaats) en remount dit component met het eerste been als
-   * nieuwe actieve route (zelfde `key`-gebaseerde mechanisme als `onReverseDirection`).
+   * nieuwe actieve route (zelfde `key`-gebaseerde mechanisme dat voorheen ook
+   * `onReverseDirection` gebruikte -- die prop is op 19-9-2026 verwijderd, sectie 7 van de
+   * "Apple-stijl fietsnavigatie"-fase: geen handmatige linksom/rechtsom-keuze meer in de
+   * actieve navigatieflow. `reverseLoopCandidate()` zelf in app/page.tsx blijft intact en
+   * wordt nog gebruikt bij het vooraf bekijken/kiezen van een rondje, vóór het starten van
+   * de navigatie -- dat valt buiten "actieve navigatie" en is bewust ongemoeid gelaten).
    * Alleen getoond als zowel deze prop als een vastgelegd `physicalStart` beschikbaar zijn.
    */
   /**
@@ -250,7 +260,6 @@ export default function NavigationScreen({
   nodeDisplayNumbers,
   datasetVersionId,
   onExit,
-  onReverseDirection,
   lastMileInfo,
   onPause,
   startInProgress,
@@ -258,6 +267,19 @@ export default function NavigationScreen({
   initialElapsedRideTimeS,
 }: NavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  /**
+   * Apple-stijl heading-up (19-9-2026): Leaflet zelf kan geen kaart roteren (vandaar de
+   * eerdere, bewuste keuze om rotatie los te laten bij de Leaflet-migratie, zie
+   * leaflet-migration-plan.md/de "Kaartrotatie zelf is losgelaten"-comments hieronder).
+   * Dit is een losse, OVERGROTE (150%) DOM-wrapper ROND `containerRef`, geclipt door een
+   * omsluitende `overflow:hidden`-div (zie de render hieronder) -- puur CSS-transform,
+   * raakt Leaflet's eigen pixel-/latlng-rekenwerk op geen enkele manier aan (Leaflet blijft
+   * intern gewoon noord-boven; alleen de VISUELE presentatie draait mee). Bewust een ref +
+   * directe DOM-mutatie (`style.transform`), niet React-state -- zelfde imperatieve stijl
+   * als de bestaande marker-updates hierboven/hieronder (`positionMarkerRef.current.setLatLng`),
+   * om een React-render per GPS-sample te vermijden.
+   */
+  const mapRotateWrapperRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const routeToStartLayerRef = useRef<L.Polyline | null>(null);
   const routeLineLayerRef = useRef<L.Polyline | null>(null);
@@ -284,6 +306,17 @@ export default function NavigationScreen({
   const hasFitBoundsToStartRef = useRef(false);
   /** Meest recente live positie -- gebruikt door de Back to Start-knop (sectie 9.18). */
   const lastSampleRef = useRef<{ lat: number; lon: number } | null>(null);
+  /**
+   * GPS-follow (19-9-2026, "Apple-stijl fietsnavigatie", sectie 3): of de kaart automatisch
+   * de GPS-positie blijft volgen. Een ref (voor de synchrone check binnen de GPS-sample-
+   * handler, geen stale closure) EN React-state (om de "Volg mij"-knop te tonen/verbergen) --
+   * bewust hetzelfde duale patroon als elders in dit bestand waar zowel een directe check als
+   * een zichtbare UI-toestand nodig is. Handmatig pannen (Leaflet's eigen `dragstart`-event,
+   * uitsluitend gebruikersinitiatie, nooit door onze eigen `panTo`/`flyTo`) zet 'm op false;
+   * de knop zet 'm terug op true en centreert direct opnieuw.
+   */
+  const isFollowingRef = useRef(true);
+  const [isFollowing, setIsFollowing] = useState(true);
   /**
    * BUGFIX (30-8-2026, "hervat rit werkt alleen als de navigatie begonnen is"): houdt bij of
    * de matching daadwerkelijk gestart is (fase C bereikt) op het moment van pauzeren. Nodig
@@ -376,6 +409,16 @@ export default function NavigationScreen({
       });
 
       L.control.zoom({ position: "topright" }).addTo(map);
+
+      // GPS-follow onderbreken bij handmatig pannen (19-9-2026, sectie 3). Leaflet's eigen
+      // `dragstart` vuurt uitsluitend bij een daadwerkelijke gebruikersdrag (muis/touch via de
+      // Draggable-handler) -- NOOIT bij onze eigen programmatische `panTo`/`flyTo` hieronder,
+      // dus geen risico dat de eigen navigatiebeweging zichzelf per ongeluk als "handmatig"
+      // aanmerkt.
+      map.on("dragstart", () => {
+        isFollowingRef.current = false;
+        setIsFollowing(false);
+      });
 
       const tileLayer = L.tileLayer(CARTO_RASTER_URL, {
         attribution: CARTO_ATTRIBUTION,
@@ -901,7 +944,9 @@ export default function NavigationScreen({
           if (selectedHeading !== null) {
             smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
           }
-          map.panTo([sample.lat, sample.lon], { animate: true, duration: EASE_DURATION_MS / 1000 });
+          if (isFollowingRef.current) {
+            map.panTo([sample.lat, sample.lon], { animate: true, duration: EASE_DURATION_MS / 1000 });
+          }
         }
 
         appendLog(`onderweg naar startpunt, nog ${Math.round(distanceToStartM)}m`);
@@ -955,11 +1000,15 @@ export default function NavigationScreen({
         const progress = calculateProgress(model, outcome.matchedPosition);
         const info = calculateNextNodeInfo(model, progress, outcome.matchedPosition, currentNodeDisplayNumbers as string[]);
 
-        // Zoom-inzoomen (sectie 6C/6G): UITSLUITEND tijdens NAVIGATING zoomt de kaart
-        // dichterbij. Kaartrotatie zelf is losgelaten (Leaflet, blijft noord-boven, zie
-        // leaflet-migration-plan.md) -- de heading-berekening blijft wel ongewijzigd
-        // doorlopen, puur voor de richtingpijl hieronder (die was en blijft relatief
-        // t.o.v. de eigen rijrichting, onafhankelijk van of de kaart zelf meedraait).
+        // Zoom-inzoomen (sectie 6C/6G) + HEADING-UP ROTATIE HERSTELD (19-9-2026, "Apple-stijl
+        // fietsnavigatie", sectie 2): UITSLUITEND tijdens NAVIGATING zoomt de kaart dichterbij
+        // ÉN draait de kaart mee met de rijrichting -- fase A/B blijven bewust noordgericht
+        // (ongewijzigd, zie hierboven/de `else`-tak). De eerdere beperking ("Leaflet kan niet
+        // roteren") is nog steeds waar voor Leaflet's EIGEN coördinatenwiskunde -- opgelost via
+        // een losse CSS-transform-wrapper (`mapRotateWrapperRef`, zie de component-doc-comment
+        // bij die ref hierboven), niet door Leaflet zelf te patchen. De heading-berekening was
+        // en blijft exact dezelfde, ongewijzigde functies (`selectHeadingDeg`/`smoothHeadingDeg`)
+        // -- nu gebruikt voor ZOWEL de kaartrotatie ALS de richtingpijl, in plaats van alleen de pijl.
         if (currentPhase === "NAVIGATING") {
           const selectedHeading = selectHeadingDeg(
             { gpsHeadingDeg: sample.headingDeg, speedMps: sample.speedMps, previousStableHeadingDeg: smoothedHeadingRef.current },
@@ -969,8 +1018,20 @@ export default function NavigationScreen({
             smoothedHeadingRef.current = smoothHeadingDeg(smoothedHeadingRef.current, selectedHeading, HEADING_SMOOTHING_ALPHA);
           }
           const map = mapRef.current;
-          if (map) {
+          if (map && isFollowingRef.current) {
             map.flyTo([markerLat, markerLon], NAVIGATION_ZOOM, { animate: true, duration: EASE_DURATION_MS / 1000 });
+          }
+          // Kaart roteren zodat de rijrichting boven staat (heading-up): roteer de VISUELE
+          // wrapper met -heading (CSS `rotate()` is met de klok mee positief; -heading draait
+          // 'm precies zo ver terug dat de rijrichting naar boven komt te staan). Bij het
+          // ONTBREKEN van een betrouwbare heading (`smoothedHeadingRef.current === null`,
+          // bijv. vlak na wisselen van fase B->C vóórdat er weer een betrouwbare sample was):
+          // BEWUST de wrapper met rust laten (geen `rotate(0deg)`-terugval hier) -- dat zou de
+          // kaart bij elke korte onderbreking laten terugspringen naar noord-boven en meteen
+          // weer terugdraaien zodra de heading terugkomt, precies het "nerveuze"/springerige
+          // gedrag dat sectie 2 expliciet uitsluit. De laatst bekende rotatie blijft dus staan.
+          if (mapRotateWrapperRef.current && smoothedHeadingRef.current !== null) {
+            mapRotateWrapperRef.current.style.transform = `rotate(${-smoothedHeadingRef.current}deg)`;
           }
           // Richtingpijl RELATIEF t.o.v. de eigen rijrichting (0° = rechtdoor/boven) --
           // deze berekening was en blijft onafhankelijk van kaartrotatie (zie hierboven).
@@ -978,9 +1039,14 @@ export default function NavigationScreen({
             smoothedHeadingRef.current !== null ? relativeAngleDeg(info.bearingToNextNodeDeg, smoothedHeadingRef.current) : 0;
           setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: arrowDeg });
         } else {
-          // Fase B (Start Guidance): absolute bearing blijft correct (kaart was en blijft
-          // altijd noord-boven, geen rotatie meer om "terug te zetten").
+          // Fase B (Start Guidance): absolute bearing, kaart expliciet terug naar noord-boven
+          // (alleen bereikt vóórdat NAVIGATING voor het eerst begint in deze sessie, zie de
+          // `return` in fase A hierboven -- een sessie die eenmaal navigeert en kortstondig
+          // terugvalt op fase B door een tijdelijk onbetrouwbare snelheid, zou anders bij elke
+          // wisseling zichtbaar terug- en weer vooruitspringen; dat gedrag is voor déze fase
+          // (nog) niet apart uitgewerkt, zie het eindrapport onder "buiten scope").
           smoothedHeadingRef.current = null;
+          if (mapRotateWrapperRef.current) mapRotateWrapperRef.current.style.transform = "rotate(0deg)";
           setNextNode({ nodeId: info.nextNodeId, distanceM: info.distanceToNextNodeM, bearingDeg: info.bearingToNextNodeDeg });
         }
 
@@ -1064,8 +1130,73 @@ export default function NavigationScreen({
       <style>{`.leaflet-top.leaflet-right { top: 68px !important; }`}</style>
 
       {/* Zie LiveLocationScreen.tsx voor de volledige toelichting: isoleert Leaflet's
-          interne stapel-volgorde zodat die niet meer over de eigen UI heen schildert. */}
-      <div ref={containerRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
+          interne stapel-volgorde zodat die niet meer over de eigen UI heen schildert.
+
+          Apple-stijl heading-up (19-9-2026, sectie 2): buitenste div clipt (overflow:hidden)
+          terug tot het zichtbare scherm; de binnenste `mapRotateWrapperRef`-div is 150% groot
+          (in elke dimensie, ruim voldoende marge -- de lange diagonaal van het scherm zelf bij
+          een willekeurige rotatiehoek blijft ruim binnen 150%) en gecentreerd, zodat ELKE
+          rotatiehoek nog steeds volledig met kaarttegels gevuld scherm oplevert, nooit een
+          zwarte hoek. `containerRef` (waar Leaflet daadwerkelijk op mount, ongewijzigd) vult op
+          zijn beurt die overgrote wrapper volledig. Leaflet zelf blijft intern gewoon
+          noord-boven rekenen (pixel<->latlng-conversie raakt dit niet) -- alleen de VISUELE
+          laag draait, via `mapRotateWrapperRef.current.style.transform` (zie de GPS-sample-
+          handler hierboven). */}
+      <div style={{ position: "absolute", inset: 0, overflow: "hidden", zIndex: 0 }}>
+        <div
+          ref={mapRotateWrapperRef}
+          style={{
+            position: "absolute",
+            top: "-25%",
+            left: "-25%",
+            width: "150%",
+            height: "150%",
+            transformOrigin: "center center",
+            transition: `transform ${EASE_DURATION_MS}ms ease`,
+          }}
+        >
+          <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
+        </div>
+      </div>
+
+      {/* GPS-follow (sectie 3): "Volg mij"-knop, alleen zichtbaar ná handmatig pannen. Geen
+          overbodige permanente kaartknop -- verschijnt uitsluitend wanneer follow daadwerkelijk
+          onderbroken is. */}
+      {!isFollowing && (
+        <button
+          onClick={() => {
+            isFollowingRef.current = true;
+            setIsFollowing(true);
+            const map = mapRef.current;
+            const last = lastSampleRef.current;
+            if (map && last) {
+              map.flyTo([last.lat, last.lon], phase === "NAVIGATING" ? NAVIGATION_ZOOM : map.getZoom(), {
+                animate: true,
+                duration: EASE_DURATION_MS / 1000,
+              });
+            }
+          }}
+          style={{
+            position: "absolute",
+            bottom: 96,
+            right: 12,
+            zIndex: 5,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "10px 16px",
+            borderRadius: 999,
+            border: "none",
+            background: "#085041",
+            color: "#FFFFFF",
+            fontSize: 14,
+            fontWeight: 700,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+          }}
+        >
+          <span style={{ fontSize: 16 }}>📍</span> Volg mij
+        </button>
+      )}
 
       {/* Top bar: exit-knop links, Start/Stop rechts -- vaste hoogte, geen overlap met wat eronder komt. */}
       <div
@@ -1344,62 +1475,35 @@ export default function NavigationScreen({
                     Knooppunt {nextNode.nodeId} · {Math.round(nextNode.distanceM)} m
                   </div>
                 )}
-                {onReverseDirection && (
-                  <button
-                    onClick={onReverseDirection}
-                    style={{
-                      marginTop: 12,
-                      background: "rgba(255,255,255,0.14)",
-                      color: "#FFFFFF",
-                      border: "none",
-                      borderRadius: 10,
-                      padding: "8px 14px",
-                      fontSize: 13,
-                      fontWeight: 600,
-                    }}
-                  >
-                    ↻ Andere kant op rijden
-                  </button>
-                )}
               </div>
             )}
 
             {phase === "NAVIGATING" && nextNode && (
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              // Apple-stijl informatiehiërarchie (19-9-2026, sectie 5): pijl + richtingwoord
+              // bovenaan (het belangrijkste -- wat moet ik doen), afstand direct eronder,
+              // knooppunt als kleine, secundaire regel. `nextNode.bearingDeg` is tijdens
+              // NAVIGATING al de RELATIEVE hoek (zie de GPS-sample-handler hierboven,
+              // ongewijzigd) -- `classifyDirection` is een bestaande, apart geteste pure
+              // functie (relative-direction.ts), hier voor het eerst ook als tekstlabel gebruikt
+              // i.p.v. alleen als pijlrotatie.
+              <div style={{ textAlign: "center" }}>
                 <div
                   style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 22,
-                    background: "#FFFFFF",
-                    color: "#085041",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                    fontSize: 17,
-                    fontWeight: 800,
-                  }}
-                >
-                  {nextNode.nodeId}
-                </div>
-                <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
-                  <div style={{ fontSize: 12, color: "#9FE1CB" }}>Volgend knooppunt</div>
-                  <div style={{ fontSize: 24, fontWeight: 800, color: "#FFFFFF", letterSpacing: -0.5 }}>
-                    {Math.round(nextNode.distanceM)} m
-                  </div>
-                </div>
-                <div
-                  style={{
-                    flexShrink: 0,
+                    display: "inline-block",
+                    marginBottom: 2,
                     transform: `rotate(${nextNode.bearingDeg}deg)`,
                     transition: "transform 0.3s ease",
                   }}
                 >
-                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M12 2L12 22M12 2L5 9M12 2L19 9" stroke="#FFFFFF" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#FFFFFF", letterSpacing: -0.5 }}>
+                  {DIRECTION_LABEL[classifyDirection(nextNode.bearingDeg)]}
+                </div>
+                <div style={{ fontSize: 15, color: "#9FE1CB", marginTop: 2 }}>{Math.round(nextNode.distanceM)} m</div>
+                <div style={{ fontSize: 12, color: "#9FE1CB", marginTop: 6, opacity: 0.85 }}>Knooppunt {nextNode.nodeId}</div>
               </div>
             )}
           </div>

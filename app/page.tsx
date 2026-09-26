@@ -1664,11 +1664,6 @@ export default function Home() {
                 setStep("detail");
               }
             }}
-            onReverseDirection={
-              activeBackToStartRoute || activeSavedRoute || !selectedLoop
-                ? undefined
-                : () => setSelectedLoop(reverseLoopCandidate(selectedLoop))
-            }
             onPause={handlePause}
             startInProgress={!!activeSavedRoute?.resumeContext?.skipToMatching}
             initialPhysicalStart={activeSavedRoute?.resumeContext?.physicalStart ?? undefined}
