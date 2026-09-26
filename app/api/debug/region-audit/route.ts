@@ -91,6 +91,14 @@ export async function GET(req: NextRequest) {
     const regionsParam = req.nextUrl.searchParams.get("regions");
     const regions: NamedRegion[] = regionsParam ? JSON.parse(regionsParam) : DEFAULT_REGIONS;
 
+    // TOEGEVOEGD 19-9-2026 ("ik wil dat je alles checkt", vervolg op de kuststrook-vondst:
+    // meerdere knooppunten delen hetzelfde weergavenummer als aparte records -- bijv. twee
+    // "63"'s -- en niet elk paar bleek verbonden). `nodeIds` (komma-gescheiden) vraagt
+    // EXACT deze knopen en hun edges op, los van een gebiedsgrens -- puur om gericht een
+    // specifiek vermoeden (twee kopieën van hetzelfde knooppunt, niet aan elkaar geknoopt)
+    // te bevestigen of te weerleggen, zonder een geschikte bbox te hoeven verzinnen.
+    const nodeIdsParam = req.nextUrl.searchParams.get("nodeIds");
+
     const [logicalNodesSnap, edgesSnap, sourceNodesSnap] = await Promise.all([
       db.collection("logicalNodes").where("datasetVersionId", "==", datasetVersionId).get(),
       db.collection("edges").where("datasetVersionId", "==", datasetVersionId).get(),
@@ -142,6 +150,46 @@ export async function GET(req: NextRequest) {
         endpointMatches: data.endpointMatches,
       };
     });
+
+    if (nodeIdsParam) {
+      const requestedIds = nodeIdsParam.split(",").map((s) => s.trim()).filter(Boolean);
+      const details = requestedIds.map((id) => {
+        const node = logicalNodes.find((n) => n.id === id);
+        if (!node) return { id, found: false as const };
+        const touchingNodeEdges = edges.filter((e) => e.fromLogicalNodeId === id || e.toLogicalNodeId === id);
+        return {
+          id,
+          found: true as const,
+          displayNumber: node.displayNumber || null,
+          xRd: node.x,
+          yRd: node.y,
+          edges: touchingNodeEdges.map((e) => {
+            const isFrom = e.fromLogicalNodeId === id;
+            const otherNodeId = isFrom ? e.toLogicalNodeId : e.fromLogicalNodeId;
+            const otherNode = otherNodeId ? logicalNodes.find((n) => n.id === otherNodeId) : null;
+            const unmatchedEnd = e.endpointMatches?.find(
+              (ep) => (isFrom ? ep.endpoint === "start" : ep.endpoint === "end") && ep.matchedSourceNodeId === null
+            );
+            return {
+              edgeId: e.id,
+              matchConfidence: e.matchConfidence,
+              otherNodeId: otherNodeId ?? null,
+              otherNodeDisplayNumber: otherNode?.displayNumber ?? null,
+              ...(unmatchedEnd
+                ? {
+                    unmatchedEndCoordRd: unmatchedEnd.sourceCoordinate,
+                    nearestRealSourceNodeDistanceM: (() => {
+                      const d = nearestSourceNodeDist(unmatchedEnd.sourceCoordinate);
+                      return d !== null ? Number(d.toFixed(1)) : null;
+                    })(),
+                  }
+                : {}),
+            };
+          }),
+        };
+      });
+      return NextResponse.json({ datasetVersionId, requestedNodeIds: requestedIds, nodeDetails: details });
+    }
 
     // Edge-count per logicalNode, alleen matched edges (zelfde definitie als de routing-graph).
     const edgeCountByNode = new Map<string, number>();
