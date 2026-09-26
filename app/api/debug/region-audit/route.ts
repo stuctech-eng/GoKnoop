@@ -118,6 +118,7 @@ export async function GET(req: NextRequest) {
     });
 
     type EdgeRow = {
+      id: string;
       matchConfidence: string;
       fromLogicalNodeId: string | null;
       toLogicalNodeId: string | null;
@@ -133,6 +134,7 @@ export async function GET(req: NextRequest) {
     const edges: EdgeRow[] = edgesSnap.docs.map((d) => {
       const data = d.data();
       return {
+        id: d.id,
         matchConfidence: data.matchConfidence,
         fromLogicalNodeId: data.fromLogicalNodeId ?? null,
         toLogicalNodeId: data.toLogicalNodeId ?? null,
@@ -223,10 +225,55 @@ export async function GET(req: NextRequest) {
       }
       inRegionDistances.sort((a, b) => a - b);
 
+      // VOLLEDIG overzicht per knooppunt (19-9-2026, "ik wil dat je alles checkt", GO van
+      // Te) -- niet langer alleen een samengevatte steekproef van lage-graad-knopen, maar
+      // ELK knooppunt in het gebied met ELKE edge die het raakt (gematcht EN niet-gematcht),
+      // zodat de hele keten in één keer te controleren is i.p.v. één losse vondst tegelijk.
+      // Alleen zinvol/veilig bij een klein aantal knopen in het gebied -- bij een groot
+      // gebied zou dit een onhandelbaar grote respons geven, dus een defensieve grens.
+      const nodeDetails =
+        nodesInRegion.length <= 40
+          ? nodesInRegion.map((node) => {
+              const touchingNodeEdges = edges.filter((e) => e.fromLogicalNodeId === node.id || e.toLogicalNodeId === node.id);
+              return {
+                id: node.id,
+                displayNumber: node.displayNumber || null,
+                edges: touchingNodeEdges.map((e) => {
+                  const isFrom = e.fromLogicalNodeId === node.id;
+                  const otherNodeId = isFrom ? e.toLogicalNodeId : e.fromLogicalNodeId;
+                  const otherNode = otherNodeId ? logicalNodes.find((n) => n.id === otherNodeId) : null;
+                  // Voor een niet-gematcht eindpunt: de ruwe brongeometrie-coördinaat en de
+                  // werkelijke afstand tot de dichtstbijzijnde sourceNode, ongeacht de
+                  // opgeslagen (mogelijk-null) distanceM -- zelfde methode als de bestaande
+                  // gapAnalysis hierboven, nu voor ELKE edge, niet alleen de lage-graad-steekproef.
+                  const unmatchedEnd = e.endpointMatches?.find(
+                    (ep) => (isFrom ? ep.endpoint === "start" : ep.endpoint === "end") && ep.matchedSourceNodeId === null
+                  );
+                  return {
+                    edgeId: e.id,
+                    matchConfidence: e.matchConfidence,
+                    otherNodeId: otherNodeId ?? null,
+                    otherNodeDisplayNumber: otherNode?.displayNumber ?? null,
+                    ...(unmatchedEnd
+                      ? {
+                          unmatchedEndCoordRd: unmatchedEnd.sourceCoordinate,
+                          nearestRealSourceNodeDistanceM: (() => {
+                            const d = nearestSourceNodeDist(unmatchedEnd.sourceCoordinate);
+                            return d !== null ? Number(d.toFixed(1)) : null;
+                          })(),
+                        }
+                      : {}),
+                  };
+                }),
+              };
+            })
+          : `Meer dan 40 knopen in dit gebied -- volledig overzicht overgeslagen (te groot).`;
+
       return {
         region: region.label,
         bboxWgs84: { minLat: region.minLat, minLon: region.minLon, maxLat: region.maxLat, maxLon: region.maxLon },
         logicalNodesInRegion: nodesInRegion.length,
+        nodeDetails,
         edgesTouchingRegion: touchingEdges.length,
         edgeConfidenceCounts: confidenceCounts,
         matchPercent: `${matchPercent}%`,
