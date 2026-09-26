@@ -126,4 +126,64 @@ describe("OpenRouteServiceAdapter", () => {
     const result = await adapter.route(ORIGIN, DESTINATION, "cycling");
     expect("reason" in result && result.reason).toBe("invalid_response");
   });
+
+  // TOEGEVOEGD 19-9-2026 ("normale fietsnavigatie via echte fietspaden", GO van Te):
+  // includeSteps -- puur additief, bestaande tests hierboven (allemaal zonder options,
+  // dus includeSteps default false) blijven ongewijzigd het bewijs dat het oude gedrag intact is.
+  it("stuurt instructions:false wanneer includeSteps niet gevraagd is (bestaand, ongewijzigd gedrag)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => geoJsonResponse(742, 180, [[5.1, 52.5], [5.11, 52.51]]) });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const adapter = new OpenRouteServiceAdapter("test-key");
+    const result = await adapter.route(ORIGIN, DESTINATION, "cycling");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.instructions).toBe(false);
+    expect("distanceM" in result && result.steps).toBeUndefined();
+  });
+
+  it("stuurt instructions:true en parseert steps uit properties.segments[].steps[] wanneer includeSteps gevraagd is", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        features: [
+          {
+            geometry: { coordinates: [[5.1, 52.5], [5.11, 52.51]] },
+            properties: {
+              summary: { distance: 742, duration: 180 },
+              segments: [
+                {
+                  steps: [
+                    { name: "Zeedijk", instruction: "Ga linksaf naar het pad", distance: 450 },
+                    { name: "Amsteldiep", instruction: "Ga rechtdoor", distance: 292 },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const adapter = new OpenRouteServiceAdapter("test-key");
+    const result = await adapter.route(ORIGIN, DESTINATION, "cycling", { includeSteps: true });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.instructions).toBe(true);
+    expect("distanceM" in result).toBe(true);
+    if ("distanceM" in result) {
+      expect(result.steps).toEqual([
+        { name: "Zeedijk", instruction: "Ga linksaf naar het pad", distanceM: 450 },
+        { name: "Amsteldiep", instruction: "Ga rechtdoor", distanceM: 292 },
+      ]);
+    }
+  });
+
+  it("geeft steps:[] terug (geen crash) wanneer includeSteps gevraagd is maar de respons geen segments bevat", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => geoJsonResponse(742, 180, [[5.1, 52.5], [5.11, 52.51]]), // geen properties.segments
+    }) as unknown as typeof fetch;
+    const adapter = new OpenRouteServiceAdapter("test-key");
+    const result = await adapter.route(ORIGIN, DESTINATION, "cycling", { includeSteps: true });
+    expect("distanceM" in result && result.steps).toEqual([]);
+  });
 });

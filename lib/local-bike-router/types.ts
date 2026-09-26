@@ -27,11 +27,32 @@ export type LatLon = { lat: number; lon: number };
  *  deur in het type, geen bouwopdracht om nu al te implementeren. */
 export type LocalBikeRoutingProfile = "cycling" | "foot";
 
+/**
+ * Eén afzonderlijke instructiestap binnen een route (19-9-2026, "normale fietsnavigatie
+ * via echte fietspaden"): straatnaam + korte afstand van die stap, direct uit ORS'
+ * eigen `segments[].steps[]` -- geen eigen straatnaam-afleiding, geen gok, alleen wat
+ * de routingdienst zelf teruggeeft.
+ */
+export type LocalBikeRouteStep = {
+  /** Straat-/padnaam zoals ORS 'm teruggeeft; kan leeg zijn (ORS geeft dan `-` terug voor naamloze paden). */
+  name: string;
+  instruction: string;
+  distanceM: number;
+};
+
 export type LocalBikeRouteResult = {
   /** WGS84, in rijrichting. */
   geometry: LatLon[];
   distanceM: number;
   durationS: number;
+  /**
+   * Optioneel: per-stap straatnamen/instructies, alleen gevuld als de aanroeper erom vraagt
+   * (zie `RoutingProvider.route`'s nieuwe `options`-parameter hieronder) -- bestaande, korte
+   * last-mile-aanroepen (parkeerplaats/Back to Start) vragen dit bewust NIET op, blijven dus
+   * exact zoals voorheen, geen extra ORS-responsdata om te verwerken voor een gebruik dat het
+   * toch niet nodig heeft.
+   */
+  steps?: LocalBikeRouteStep[];
 };
 
 export type LocalBikeRoutingError = {
@@ -47,5 +68,10 @@ export type LocalBikeRoutingError = {
  * de Route Engine (`computeRoute()`).
  */
 export interface RoutingProvider {
-  route(origin: LatLon, destination: LatLon, profile: LocalBikeRoutingProfile): Promise<LocalBikeRouteResult | LocalBikeRoutingError>;
+  route(
+    origin: LatLon,
+    destination: LatLon,
+    profile: LocalBikeRoutingProfile,
+    options?: { includeSteps?: boolean }
+  ): Promise<LocalBikeRouteResult | LocalBikeRoutingError>;
 }

@@ -1,11 +1,13 @@
 import type { LatLon, LocalBikeRoutingProfile, LocalBikeRouteResult, LocalBikeRoutingError, RoutingProvider } from "./types";
 
-function cacheKey(origin: LatLon, destination: LatLon, profile: LocalBikeRoutingProfile): string {
+function cacheKey(origin: LatLon, destination: LatLon, profile: LocalBikeRoutingProfile, includeSteps: boolean): string {
   // Afgerond op 5 decimalen (~1m precisie) -- voorkomt cache-missen door piepkleine
   // GPS-ruis tussen twee vrijwel identieke aanvragen, zonder merkbaar nauwkeurigheidsverlies
   // voor korte fietsstukjes.
   const r = (n: number) => n.toFixed(5);
-  return `${profile}:${r(origin.lat)},${r(origin.lon)}->${r(destination.lat)},${r(destination.lon)}`;
+  // `includeSteps` in de sleutel (19-9-2026): een cache-hit zonder steps mag niet stilzwijgend
+  // teruggegeven worden aan een aanroeper die wél steps nodig heeft.
+  return `${profile}:${includeSteps ? "steps" : "nosteps"}:${r(origin.lat)},${r(origin.lon)}->${r(destination.lat)},${r(destination.lon)}`;
 }
 
 /**
@@ -33,13 +35,15 @@ export class LocalBikeRouter {
   async route(
     origin: LatLon,
     destination: LatLon,
-    profile: LocalBikeRoutingProfile
+    profile: LocalBikeRoutingProfile,
+    options?: { includeSteps?: boolean }
   ): Promise<LocalBikeRouteResult | LocalBikeRoutingError> {
-    const key = cacheKey(origin, destination, profile);
+    const includeSteps = options?.includeSteps ?? false;
+    const key = cacheKey(origin, destination, profile, includeSteps);
     const cached = this.cache.get(key);
     if (cached) return cached;
 
-    const result = await this.provider.route(origin, destination, profile);
+    const result = await this.provider.route(origin, destination, profile, options);
     if (!("reason" in result)) {
       this.cache.set(key, result);
     }

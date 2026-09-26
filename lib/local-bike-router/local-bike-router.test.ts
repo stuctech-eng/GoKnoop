@@ -71,6 +71,26 @@ describe("LocalBikeRouter — caching (sectie 9.6, 'zo weinig mogelijk requests'
     await router.route({ lat: ORIGIN.lat + 0.000001, lon: ORIGIN.lon }, DESTINATION, "cycling"); // <1m verschil
     expect(provider.callCount).toBe(1);
   });
+
+  // TOEGEVOEGD 19-9-2026 ("normale fietsnavigatie via echte fietspaden", GO van Te):
+  // includeSteps hoort in de cache-key -- anders zou een aanroeper die steps nodig heeft per
+  // ongeluk een eerder, zonder-steps gecached resultaat terugkrijgen (of andersom).
+  it("mét en zonder includeSteps worden apart gecached (geen valse cache-hit tussen de twee)", async () => {
+    const provider = new FakeProvider(fakeSuccess());
+    const router = new LocalBikeRouter(provider);
+    await router.route(ORIGIN, DESTINATION, "cycling"); // includeSteps niet meegegeven -> false
+    await router.route(ORIGIN, DESTINATION, "cycling", { includeSteps: true });
+    expect(provider.callCount).toBe(2);
+    expect(router.cacheSize()).toBe(2);
+  });
+
+  it("herhaalde aanvragen met dezelfde includeSteps:true treffen wél dezelfde cache-entry", async () => {
+    const provider = new FakeProvider(fakeSuccess());
+    const router = new LocalBikeRouter(provider);
+    await router.route(ORIGIN, DESTINATION, "cycling", { includeSteps: true });
+    await router.route(ORIGIN, DESTINATION, "cycling", { includeSteps: true });
+    expect(provider.callCount).toBe(1);
+  });
 });
 
 describe("LocalBikeRouter — Fase 4-scenario's (parking ↔ startknooppunt, sectie 9.12)", () => {

@@ -55,8 +55,10 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
   async route(
     origin: LatLon,
     destination: LatLon,
-    profile: LocalBikeRoutingProfile
+    profile: LocalBikeRoutingProfile,
+    options?: { includeSteps?: boolean }
   ): Promise<LocalBikeRouteResult | LocalBikeRoutingError> {
+    const includeSteps = options?.includeSteps ?? false;
     const orsProfile = ORS_PROFILE_MAP[profile];
     const url = `${this.baseUrl}/${orsProfile}/geojson`;
 
@@ -91,12 +93,17 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
           "Content-Type": "application/json",
           Authorization: this.apiKey,
         },
-        // [lon, lat]-volgorde, zie klasse-commentaar hierboven.
+        // [lon, lat]-volgorde, zie klasse-commentaar hierboven. `instructions` staat bij ORS
+        // standaard al aan, maar hier EXPLICIET meegestuurd (19-9-2026, "normale fietsnavigatie")
+        // zodat dit niet stilzwijgend van ORS' eigen default afhangt -- alleen aangevraagd
+        // wanneer de aanroeper `includeSteps` vraagt, om de bestaande, lichte last-mile-aanroepen
+        // niet onnodig zwaarder te maken.
         body: JSON.stringify({
           coordinates: [
             [origin.lon, origin.lat],
             [destination.lon, destination.lat],
           ],
+          instructions: includeSteps,
         }),
         signal: controller.signal,
       });
@@ -138,7 +145,12 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
     const feature = (data as { features?: unknown[] })?.features?.[0] as
       | {
           geometry?: { coordinates?: [number, number][] };
-          properties?: { summary?: { distance?: number; duration?: number } };
+          properties?: {
+            summary?: { distance?: number; duration?: number };
+            // ORS' eigen, gedocumenteerde vorm: één of meer segmenten (bij één origin/destination-
+            // paar altijd exact één), elk met een lijst stappen (straatnaam + instructie + afstand).
+            segments?: { steps?: { name?: string; instruction?: string; distance?: number }[] }[];
+          };
         }
       | undefined;
 
@@ -152,10 +164,23 @@ export class OpenRouteServiceAdapter implements RoutingProvider {
       return { reason: "invalid_response", message: "OpenRouteService-respons had niet de verwachte vorm (geen summary.distance/duration)." };
     }
 
+    let steps: import("./types").LocalBikeRouteStep[] | undefined;
+    if (includeSteps) {
+      // Platgeslagen over alle segmenten (bij een simpel origin->destination-paar is dat er maar
+      // één, maar niet aangenomen -- ORS' eigen structuur gevolgd zoals ze 'm teruggeeft).
+      const rawSteps = feature?.properties?.segments?.flatMap((seg) => seg.steps ?? []) ?? [];
+      steps = rawSteps.map((s) => ({
+        name: s.name ?? "",
+        instruction: s.instruction ?? "",
+        distanceM: typeof s.distance === "number" ? s.distance : 0,
+      }));
+    }
+
     return {
       geometry: coordinates.map(([lon, lat]) => ({ lat, lon })),
       distanceM: summary.distance,
       durationS: summary.duration,
+      ...(steps ? { steps } : {}),
     };
   }
 }
