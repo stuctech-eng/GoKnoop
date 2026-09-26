@@ -29,7 +29,15 @@ type ViaKnooppuntenResult = {
   segmentSources: ("cache" | "ors")[];
 };
 
-type TooManyError = { error: string; reason: "too_many_knooppunten"; knooppuntenCount: number; limit: number; nodeIds: string[]; displayNumbers: string[] };
+type TooManyError = {
+  error: string;
+  reason: "too_many_knooppunten";
+  knooppuntenCount: number;
+  limit: number;
+  nodeIds: string[];
+  displayNumbers: string[];
+  positions: LatLon[];
+};
 
 const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY;
 const CARTO_RASTER_URL = CARTO_API_KEY
@@ -77,7 +85,35 @@ export default function BikeRouteKnooppuntenDebugPage() {
       const data = await res.json();
       if (!res.ok) {
         if (data.reason === "too_many_knooppunten") {
-          setTooManySequence(data as TooManyError);
+          const tooMany = data as TooManyError;
+          setTooManySequence(tooMany);
+
+          const map = await ensureMap();
+          if (map) {
+            const L = await import("leaflet");
+            for (const layer of layersRef.current) layer.remove();
+            const newLayers: L.Layer[] = [];
+
+            const latLngs: L.LatLngTuple[] = tooMany.positions.map((p) => [p.lat, p.lon]);
+            // Rechte lijnen tussen opeenvolgende knooppunten (GEEN echte fietspad-geometrie --
+            // die is hier bewust niet opgehaald, dat kost immers ORS-aanroepen). Puur om
+            // richting/volgorde in één oogopslag te zien, niet om het exacte fietspad te tonen.
+            const line = L.polyline(latLngs, { color: "#b00020", weight: 3, dashArray: "6 6" }).addTo(map);
+            newLayers.push(line);
+            latLngs.forEach((pos, i) => {
+              const marker = L.marker(pos, {
+                icon: L.divIcon({
+                  className: "",
+                  html: `<div style="background:#b00020;color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4);">${i + 1}</div>`,
+                  iconSize: [26, 26],
+                  iconAnchor: [13, 13],
+                }),
+              }).addTo(map);
+              newLayers.push(marker);
+            });
+            layersRef.current = newLayers;
+            map.fitBounds(line.getBounds(), { padding: [32, 32] });
+          }
         }
         setError(data.error ?? `HTTP ${res.status}`);
         return;
@@ -158,8 +194,9 @@ export default function BikeRouteKnooppuntenDebugPage() {
             Gevonden knooppuntvolgorde ({tooManySequence.knooppuntenCount} knooppunten, geen ORS-aanroepen gedaan)
           </h2>
           <p style={{ fontSize: 13, color: "#555", marginBottom: 8 }}>
-            Vergelijk deze reeks met de officiële knooppuntenkaart om te zien of dit een zinnig-maar-lang pad is
-            (bijv. een gat in het netwerk waar Dijkstra omheen moet) of een onlogische omweg.
+            De genummerde rode stippen hieronder op de kaart tonen de volgorde met rechte
+            lijnen ertussen (geen echte fietspad-geometrie, puur om richting te zien) — zo is in
+            één oogopslag te zien of dit een zinnig-maar-lang pad is of een terugkerende beweging.
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {tooManySequence.displayNumbers.map((num, i) => (

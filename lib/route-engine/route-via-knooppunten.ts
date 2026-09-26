@@ -60,6 +60,8 @@ export type ViaKnooppuntenError =
        */
       nodeIds: string[];
       displayNumbers: string[];
+      /** Coördinaten per stap, in dezelfde volgorde -- zodat het pad daadwerkelijk op een kaart getekend kan worden i.p.v. alleen als losse nummers. */
+      positions: LatLon[];
     }
   | { reason: "segment_failed"; fromNodeId: string; toNodeId: string; message: string };
 
@@ -83,7 +85,11 @@ export async function routeViaKnooppunten(
   const displayNumbers = nodeIds.map((id) => provider.getNode(id)?.displayNumber ?? "?");
 
   if (nodeIds.length > MAX_KNOOPPUNTEN_PER_ROUTE) {
-    return { reason: "too_many_knooppunten", knooppuntenCount: nodeIds.length, limit: MAX_KNOOPPUNTEN_PER_ROUTE, nodeIds, displayNumbers };
+    const positions = nodeIds.map((id) => {
+      const node = provider.getNode(id);
+      return node ? rdToWgs84(node.x, node.y) : { lat: 0, lon: 0 }; // node zou hier altijd moeten bestaan (kwam net uit dezelfde provider); 0,0 puur als laatste redmiddel, geen crash
+    });
+    return { reason: "too_many_knooppunten", knooppuntenCount: nodeIds.length, limit: MAX_KNOOPPUNTEN_PER_ROUTE, nodeIds, displayNumbers, positions };
   }
 
   // Stap 2: per opeenvolgend paar het echte fietspad ophalen -- cache eerst, anders ORS (functie 1).
