@@ -24,6 +24,11 @@ export const dynamic = "force-dynamic";
  * `/api/route/to-destination` (het oude NWB/connector-systeem) blijft ongewijzigd
  * ernaast bestaan, wordt hier niet aangeraakt.
  *
+ * UITGEBREID (landelijke connected-components-analyse: 1.111 losse componenten in de
+ * pure knooppuntengraaf): valt automatisch terug op functie 1 (directe ORS-route) als
+ * de gevonden knooppuntvolgorde een onredelijke omweg blijkt (zie `evaluateDetour()` in
+ * route-via-knooppunten.ts) -- zichtbaar in de response via `usedDirectFallback`/`detourRatio`.
+ *
  * Gebruikt bewust de LICHTE `CachedGraphProvider` (uitsluitend het officiële
  * knooppuntennetwerk uit Firestore) -- GEEN `loadPrecomputedOrBuildGraph`/NWB-laag.
  */

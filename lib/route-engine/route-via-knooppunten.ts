@@ -23,12 +23,34 @@ import type { LatLon, LocalBikeRouteStep } from "@/lib/local-bike-router/types";
  *   teruggegeven wordt i.p.v. een trage of afgekapte berekening;
  * - een PERMANENTE cache (Firestore, `knot-segment-cache.ts`) per knooppuntpaar --
  *   een pauze is alleen nodig vóór een ECHTE ORS-aanroep, nooit bij een cache-hit.
+ *
+ * OMWEG-DETECTIE + TERUGVAL (19-9-2026, vervolg op het Volendam-Hoorn-onderzoek en de
+ * landelijke connected-components/detour-detector-analyse): de pure knooppuntengraaf
+ * bleek landelijk 1.111 losse componenten te hebben (76,1% in één "vasteland", de rest
+ * verspreid, o.a. door echte gaten in de `fietsnetwerken_vrij`-brondata). In plaats van
+ * elk gat afzonderlijk handmatig te vinden en te patchen (niet haalbaar op deze schaal,
+ * en risicovol om blind op te schalen), controleert deze functie ZELF of de gevonden
+ * Dijkstra-route een onredelijke omweg is (padafstand t.o.v. de hemelsbrede afstand
+ * tussen begin- en eindknooppunt). Bij een onredelijke omweg: NIET de slechte route
+ * presenteren, maar automatisch terugvallen op functie 1 (directe ORS-route tussen
+ * dezelfde twee knooppunten) -- dezelfde, al bewezen werkende motor, nu ingezet als
+ * vangnet voor precies de zwakte die we in de pure graaf hebben blootgelegd. Dit lost
+ * het probleem "overal waar nodig" op zonder de landelijke brondata te hoeven repareren.
  */
 
 /** Boven dit aantal knooppunten in de kortste route: expliciete afwijzing, geen poging. */
 export const MAX_KNOOPPUNTEN_PER_ROUTE = 20;
 /** Zelfde, empirisch bevestigd veilige pauze als het eerdere bridge-generatie-werk. */
 const ORS_CALL_DELAY_MS = 1600;
+/**
+ * Boven deze verhouding (padafstand / hemelsbrede afstand) wordt de Dijkstra-route als
+ * onredelijke omweg beschouwd -- terugval naar functie 1. Een normale fietsroute (bochten,
+ * geen rechte lijn) zit doorgaans ruim onder 1,4x; de Volendam-Hoorn-omweg zat rond de
+ * 2,5-3x. 1,8 is een bewust ruime marge (nooit een normale, licht kronkelende route
+ * onterecht afwijzen), niet een precies gekalibreerde grens -- instelbaar mocht praktijk
+ * anders uitwijzen.
+ */
+const DETOUR_RATIO_THRESHOLD = 1.8;
 
 export type KnotSegmentSource = "cache" | "ors";
 
@@ -41,6 +63,15 @@ export type ViaKnooppuntenResult = {
   steps: LocalBikeRouteStep[];
   /** Per tussenstap: kwam dit uit de permanente cache, of is het net bij ORS opgehaald? Puur ter observatie/diagnose. */
   segmentSources: KnotSegmentSource[];
+  /**
+   * true als de pure knooppuntengraaf een onredelijke omweg opleverde en er daarom
+   * automatisch is teruggevallen op functie 1 (directe ORS-route) i.p.v. de omweg te
+   * presenteren. `detourRatio` is de verhouding die de terugval veroorzaakte (of, als
+   * geen terugval nodig was, de verhouding die WEL gemeten werd -- altijd aanwezig,
+   * puur ter transparantie/diagnose).
+   */
+  usedDirectFallback: boolean;
+  detourRatio: number;
 };
 
 export type ViaKnooppuntenError =
@@ -69,6 +100,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Pure omweg-beslissing (19-9-2026) -- losgetrokken uit `routeViaKnooppunten` zodat dit,
+ * de kern van de hele oplossing, apart en zonder Firestore/ORS getest kan worden. Geeft
+ * ook `ratio` terug (niet alleen een boolean) zodat de aanroeper 'm kan tonen/loggen.
+ * `straightLineM === 0` (zelfde punt tweemaal, of coördinaten ontbraken) wordt bewust NOOIT
+ * als omweg aangemerkt -- delen door nul zou een oneindige/zinloze verhouding geven.
+ */
+export function evaluateDetour(
+  pathDistanceM: number,
+  straightLineM: number,
+  threshold: number = DETOUR_RATIO_THRESHOLD
+): { isDetour: boolean; ratio: number } {
+  if (straightLineM <= 0) return { isDetour: false, ratio: 1 };
+  const ratio = pathDistanceM / straightLineM;
+  return { isDetour: ratio > threshold, ratio };
+}
+
 export async function routeViaKnooppunten(
   provider: GraphProvider,
   datasetVersionId: string,
@@ -81,8 +129,45 @@ export async function routeViaKnooppunten(
     return { reason: "dijkstra_failed", message: dijkstraResult.message };
   }
   const nodeIds = dijkstraResult.nodes;
-
   const displayNumbers = nodeIds.map((id) => provider.getNode(id)?.displayNumber ?? "?");
+
+  // OMWEG-CHECK (zie de bestandsdocumentatie hierboven) -- EERST, vóór de knooppunten-
+  // limiet en vóór enige ORS-aanroep: kost niets (Dijkstra's eigen totale afstand is er
+  // al, de hemelsbrede afstand is een simpele berekening), en voorkomt dat we tijd/ORS-
+  // budget besteden aan een pad dat we toch gaan verwerpen.
+  const fromNodeForRatio = provider.getNode(fromNodeId);
+  const toNodeForRatio = provider.getNode(toNodeId);
+  const straightLineM =
+    fromNodeForRatio && toNodeForRatio ? Math.hypot(fromNodeForRatio.x - toNodeForRatio.x, fromNodeForRatio.y - toNodeForRatio.y) : 0;
+  const { isDetour, ratio: detourRatio } = evaluateDetour(dijkstraResult.distanceM, straightLineM);
+
+  if (isDetour) {
+    // Terugval naar functie 1: dezelfde, al bewezen werkende motor, nu rechtstreeks tussen
+    // de twee knooppunten zelf (niet de adressen -- dat blijft de verantwoordelijkheid van
+    // de aanroeper/API-laag, deze functie kent alleen knooppunt-ID's).
+    const fromWgs84 = rdToWgs84(fromNodeForRatio!.x, fromNodeForRatio!.y);
+    const toWgs84 = rdToWgs84(toNodeForRatio!.x, toNodeForRatio!.y);
+    const router = new LocalBikeRouter(new OpenRouteServiceAdapter());
+    const direct = await router.route({ lat: fromWgs84.lat, lon: fromWgs84.lon }, { lat: toWgs84.lat, lon: toWgs84.lon }, "cycling", {
+      includeSteps: true,
+    });
+    if ("reason" in direct) {
+      // Zelfs de terugval lukte niet -- dan is er echt iets mis (geen fietsverbinding
+      // tussen deze twee punten volgens ORS zelf), geen reden om alsnog de omweg te tonen.
+      return { reason: "segment_failed", fromNodeId, toNodeId, message: `Omweg gedetecteerd (${detourRatio.toFixed(1)}x) en terugval naar functie 1 mislukte ook: ${direct.message}` };
+    }
+    return {
+      nodeIds: [fromNodeId, toNodeId],
+      displayNumbers: [displayNumbers[0], displayNumbers[displayNumbers.length - 1]],
+      geometry: direct.geometry,
+      distanceM: direct.distanceM,
+      durationS: direct.durationS,
+      steps: direct.steps ?? [],
+      segmentSources: ["ors"],
+      usedDirectFallback: true,
+      detourRatio: Number(detourRatio.toFixed(2)),
+    };
+  }
 
   if (nodeIds.length > MAX_KNOOPPUNTEN_PER_ROUTE) {
     const positions = nodeIds.map((id) => {
@@ -154,5 +239,7 @@ export async function routeViaKnooppunten(
     durationS: combinedDurationS,
     steps: combinedSteps,
     segmentSources,
+    usedDirectFallback: false,
+    detourRatio: Number(detourRatio.toFixed(2)),
   };
 }

@@ -27,6 +27,8 @@ type ViaKnooppuntenResult = {
   durationS: number;
   steps: Step[];
   segmentSources: ("cache" | "ors")[];
+  usedDirectFallback: boolean;
+  detourRatio: number;
 };
 
 type TooManyError = {
@@ -222,6 +224,13 @@ export default function BikeRouteKnooppuntenDebugPage() {
 
       {result && (
         <div>
+          {result.usedDirectFallback && (
+            <div style={{ background: "#fff4e0", color: "#8a5a00", padding: 12, borderRadius: 8, marginBottom: 12, fontSize: 14 }}>
+              ⚠️ De knooppuntengraaf gaf een onredelijke omweg ({result.detourRatio}x de hemelsbrede afstand) — automatisch
+              teruggevallen op de directe fietsroute (functie 1) tussen {result.displayNumbers[0]} en{" "}
+              {result.displayNumbers[result.displayNumbers.length - 1]}.
+            </div>
+          )}
           <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 14 }}>
             <div>
               <strong>{(result.distanceM / 1000).toFixed(1)} km</strong>
