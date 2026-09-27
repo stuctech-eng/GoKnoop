@@ -40,7 +40,12 @@ import type { LatLon, LocalBikeRouteResult, LocalBikeRouteStep } from "@/lib/loc
  * opgesplitst tot zinloze losse enkele-hop-overbruggingen.
  */
 
-/** Boven dit aantal knooppunten in de kortste route: expliciete afwijzing, geen poging. */
+/**
+ * Boven dit aantal DAADWERKELIJK benodigde stappen -- geteld NA de verdeel-en-heers-planning
+ * (elke knot-chain-hop of elke directe overbrugging telt als 1), NIET het ruwe, ongefilterde
+ * aantal Dijkstra-knooppunten -- expliciete afwijzing, geen poging. Een route met bijv. 29
+ * ruwe knooppunten maar slechts 3 echte stappen na overbrugging wordt dus WEL geprobeerd.
+ */
 export const MAX_KNOOPPUNTEN_PER_ROUTE = 20;
 /** Zelfde, empirisch bevestigd veilige pauze als het eerdere bridge-generatie-werk. */
 const ORS_CALL_DELAY_MS = 1600;
@@ -203,14 +208,6 @@ export async function routeViaKnooppunten(
   const nodeIds = dijkstraResult.nodes;
   const displayNumbers = nodeIds.map((id) => provider.getNode(id)?.displayNumber ?? "?");
 
-  if (nodeIds.length > MAX_KNOOPPUNTEN_PER_ROUTE) {
-    const positions = nodeIds.map((id) => {
-      const node = provider.getNode(id);
-      return node ? rdToWgs84(node.x, node.y) : { lat: 0, lon: 0 };
-    });
-    return { reason: "too_many_knooppunten", knooppuntenCount: nodeIds.length, limit: MAX_KNOOPPUNTEN_PER_ROUTE, nodeIds, displayNumbers, positions };
-  }
-
   const straightLineFn = (aId: string, bId: string): number => {
     const a = provider.getNode(aId);
     const b = provider.getNode(bId);
@@ -228,6 +225,29 @@ export async function routeViaKnooppunten(
 
   const overallDetourRatio = evaluateDetour(dijkstraResult.distanceM, straightLineFn(fromNodeId, toNodeId)).ratio;
   const plan = planSegments(nodeIds, hopDistancesM, straightLineFn);
+
+  // GRENSCONTROLE (19-9-2026, herpositioneerd n.a.v. live test): EERST plannen, DAN pas de
+  // grens toepassen -- en wel op het daadwerkelijke aantal benodigde stappen NA overbrugging
+  // (elke knot-chain van k knooppunten = k-1 stappen, elke direct-bridge = 1 stap), niet op
+  // het ruwe, ongefilterde Dijkstra-knooppuntaantal. Eerder stond deze check vóór het plannen
+  // en verwierp daardoor precies de gevallen (zoals Volendam-Hoorn, 29 ruwe knooppunten maar
+  // na overbrugging maar een handvol echte stappen) die de hele overbruggingslogica juist
+  // moest oplossen.
+  const totalRealSteps = plan.reduce((sum, part) => sum + (part.type === "knot-chain" ? part.nodeIds.length - 1 : 1), 0);
+  if (totalRealSteps > MAX_KNOOPPUNTEN_PER_ROUTE) {
+    const positions = nodeIds.map((id) => {
+      const node = provider.getNode(id);
+      return node ? rdToWgs84(node.x, node.y) : { lat: 0, lon: 0 };
+    });
+    return {
+      reason: "too_many_knooppunten",
+      knooppuntenCount: totalRealSteps,
+      limit: MAX_KNOOPPUNTEN_PER_ROUTE,
+      nodeIds,
+      displayNumbers,
+      positions,
+    };
+  }
 
   const router = new LocalBikeRouter(new OpenRouteServiceAdapter());
   let combinedGeometry: LatLon[] = [];
