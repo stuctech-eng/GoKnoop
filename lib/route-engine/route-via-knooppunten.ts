@@ -86,13 +86,48 @@ export type PlannedSegment =
  * in tests met simpele, ingebakken coördinaten te verifiëren is zonder een provider te
  * hoeven bouwen.
  */
+/**
+ * TWEEDE, PRINCIPIËLERE CORRECTIE (19-9-2026, live-test-correctie #2): de eerste correctie
+ * (alle splitsingspunten proberen i.p.v. blind het midden) loste het "verkeerde splitsings-
+ * punt"-probleem op, maar onthulde een dieperliggende, fundamentelere fout: het vergelijken
+ * van een DEELSTUK met zijn EIGEN twee uiteinden (bijv. "is B->D krom t.o.v. de rechte lijn
+ * B-D") kan een omweg naar een intrinsiek ver punt principieel niet herkennen -- gemeten
+ * vanaf dat verre punt zélf lijkt elke helft "redelijk recht", ook al was het bezoeken van
+ * dat punt zelf de hele omweg. Bevestigd met een test die exact het live-gevonden
+ * Volendam-Hoorn-patroon nabootst (splitsing op het verste punt van een V-vormige omweg).
+ *
+ * DE FIX: niet meer vragen "is dit deelstuk krom", maar "boekt dit knooppunt daadwerkelijk
+ * vooruitgang richting de bestemming, of niet". Eén vaste referentie (de hemelsbrede afstand
+ * van elk knooppunt tot de ECHTE, uiteindelijke bestemming -- nooit een tussentijds,
+ * verschuivend deelstuk-uiteinde) i.p.v. recursief opnieuw-gedefinieerde deel-uiteinden.
+ * Een knooppunt is "op de frontier" (boekt vooruitgang) als het een NIEUW minimum bereikt in
+ * die afstand; knooppunten die geen nieuw minimum bereiken, boeken geen echte vooruitgang --
+ * ze horen bij een heen-en-weer-beweging. Tussen twee niet-aangrenzende frontier-knopen wordt
+ * uitsluitend overbrugd als dat stuk zelf ook daadwerkelijk krom blijkt (dezelfde
+ * `evaluateDetour`, nu correct toegepast op een betekenisvol stuk).
+ */
 export function planSegments(
   nodeIds: string[],
   hopDistancesM: number[],
   straightLineM: (fromId: string, toId: string) => number,
   threshold: number = DETOUR_RATIO_THRESHOLD
 ): PlannedSegment[] {
-  if (nodeIds.length < 2) return [];
+  const n = nodeIds.length;
+  if (n < 2) return [];
+
+  const destinationId = nodeIds[n - 1];
+  const h: number[] = nodeIds.map((id) => straightLineM(id, destinationId));
+
+  const isFrontier: boolean[] = new Array(n).fill(false);
+  isFrontier[0] = true;
+  isFrontier[n - 1] = true;
+  let runningMin = h[0];
+  for (let i = 1; i < n - 1; i++) {
+    if (h[i] < runningMin) {
+      isFrontier[i] = true;
+      runningMin = h[i];
+    }
+  }
 
   function pathDistance(startIdx: number, endIdx: number): number {
     let sum = 0;
@@ -100,47 +135,33 @@ export function planSegments(
     return sum;
   }
 
-  function plan(startIdx: number, endIdx: number): PlannedSegment[] {
-    const { isDetour } = evaluateDetour(pathDistance(startIdx, endIdx), straightLineM(nodeIds[startIdx], nodeIds[endIdx]), threshold);
-    if (!isDetour) {
-      return [{ type: "knot-chain", nodeIds: nodeIds.slice(startIdx, endIdx + 1) }];
-    }
-    if (endIdx - startIdx <= 1) {
-      // Eén enkele, echte edge, toch als omweg gemarkeerd (zeldzaam -- een bochtig
-      // fysiek pad) -- niets meer te splitsen, overbrug 'm rechtstreeks.
-      const { ratio } = evaluateDetour(pathDistance(startIdx, endIdx), straightLineM(nodeIds[startIdx], nodeIds[endIdx]), threshold);
-      return [{ type: "direct-bridge", fromNodeId: nodeIds[startIdx], toNodeId: nodeIds[endIdx], skippedNodeIds: [], ratio }];
-    }
+  const frontierIndices: number[] = [];
+  for (let i = 0; i < n; i++) if (isFrontier[i]) frontierIndices.push(i);
 
-    const mid = Math.floor((startIdx + endIdx) / 2);
-    const left = evaluateDetour(pathDistance(startIdx, mid), straightLineM(nodeIds[startIdx], nodeIds[mid]), threshold);
-    const right = evaluateDetour(pathDistance(mid, endIdx), straightLineM(nodeIds[mid], nodeIds[endIdx]), threshold);
+  const segments: PlannedSegment[] = [];
+  let chainStart = 0;
 
-    if (!left.isDetour && !right.isDetour) {
-      return [...plan(startIdx, mid), ...plan(mid, endIdx)];
-    }
-    if (left.isDetour && !right.isDetour) {
-      return [...plan(startIdx, mid), { type: "knot-chain", nodeIds: nodeIds.slice(mid, endIdx + 1) }];
-    }
-    if (!left.isDetour && right.isDetour) {
-      return [{ type: "knot-chain", nodeIds: nodeIds.slice(startIdx, mid + 1) }, ...plan(mid, endIdx)];
-    }
-    // Beide helften nog steeds een omweg -- verder splitsen isoleert het probleem niet
-    // beter, dus dit hele stuk in één keer overbruggen i.p.v. zinloos door te blijven
-    // splitsen tot losse, nutteloze enkele-hop-overbruggingen.
-    const { ratio } = evaluateDetour(pathDistance(startIdx, endIdx), straightLineM(nodeIds[startIdx], nodeIds[endIdx]), threshold);
-    return [
-      {
-        type: "direct-bridge",
-        fromNodeId: nodeIds[startIdx],
-        toNodeId: nodeIds[endIdx],
-        skippedNodeIds: nodeIds.slice(startIdx + 1, endIdx),
-        ratio,
-      },
-    ];
+  for (let f = 0; f < frontierIndices.length - 1; f++) {
+    const p = frontierIndices[f];
+    const q = frontierIndices[f + 1];
+    if (q === p + 1) continue; // aangrenzend, gewoon een normale hop binnen de lopende chain
+
+    const { isDetour, ratio } = evaluateDetour(pathDistance(p, q), straightLineM(nodeIds[p], nodeIds[q]), threshold);
+    if (!isDetour) continue; // toch geen echte omweg (zeldzaam) -- gewoon in de chain laten
+
+    segments.push({ type: "knot-chain", nodeIds: nodeIds.slice(chainStart, p + 1) });
+    segments.push({
+      type: "direct-bridge",
+      fromNodeId: nodeIds[p],
+      toNodeId: nodeIds[q],
+      skippedNodeIds: nodeIds.slice(p + 1, q),
+      ratio,
+    });
+    chainStart = q;
   }
+  segments.push({ type: "knot-chain", nodeIds: nodeIds.slice(chainStart, n) });
 
-  return plan(0, nodeIds.length - 1);
+  return segments;
 }
 
 export type ViaKnooppuntenResult = {
