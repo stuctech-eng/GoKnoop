@@ -87,24 +87,22 @@ export type PlannedSegment =
  * hoeven bouwen.
  */
 /**
- * TWEEDE, PRINCIPIËLERE CORRECTIE (19-9-2026, live-test-correctie #2): de eerste correctie
- * (alle splitsingspunten proberen i.p.v. blind het midden) loste het "verkeerde splitsings-
- * punt"-probleem op, maar onthulde een dieperliggende, fundamentelere fout: het vergelijken
- * van een DEELSTUK met zijn EIGEN twee uiteinden (bijv. "is B->D krom t.o.v. de rechte lijn
- * B-D") kan een omweg naar een intrinsiek ver punt principieel niet herkennen -- gemeten
- * vanaf dat verre punt zélf lijkt elke helft "redelijk recht", ook al was het bezoeken van
- * dat punt zelf de hele omweg. Bevestigd met een test die exact het live-gevonden
- * Volendam-Hoorn-patroon nabootst (splitsing op het verste punt van een V-vormige omweg).
+ * DERDE, MEEST ROBUUSTE CORRECTIE (19-9-2026, live-test-correctie #3): zowel de eerste
+ * correctie (alle splitsingspunten proberen) als de tweede (frontier/vooruitgang-t.o.v.-
+ * bestemming) bleken op de echte Volendam-Hoorn-route alsnog tekortschieten -- de omweg via
+ * Alkmaar beweegt namelijk OP GEEN ENKEL PUNT daadwerkelijk weg van Hoorn (beide liggen
+ * ruwweg noordwaarts vanaf Volendam), dus de frontier-aanpak zag nergens een terugval, ook al
+ * kost de omweg wel degelijk veel te veel meters per stap. Bevestigd met een live-test:
+ * "knot-chain: 99 -> 59 (29 knooppunten)" -- de HELE, overduidelijk kromme route bleef
+ * ongesplitst, exact het gedrag dat deze correctie moet verhelpen.
  *
- * DE FIX: niet meer vragen "is dit deelstuk krom", maar "boekt dit knooppunt daadwerkelijk
- * vooruitgang richting de bestemming, of niet". Eén vaste referentie (de hemelsbrede afstand
- * van elk knooppunt tot de ECHTE, uiteindelijke bestemming -- nooit een tussentijds,
- * verschuivend deelstuk-uiteinde) i.p.v. recursief opnieuw-gedefinieerde deel-uiteinden.
- * Een knooppunt is "op de frontier" (boekt vooruitgang) als het een NIEUW minimum bereikt in
- * die afstand; knooppunten die geen nieuw minimum bereiken, boeken geen echte vooruitgang --
- * ze horen bij een heen-en-weer-beweging. Tussen twee niet-aangrenzende frontier-knopen wordt
- * uitsluitend overbrugd als dat stuk zelf ook daadwerkelijk krom blijkt (dezelfde
- * `evaluateDetour`, nu correct toegepast op een betekenisvol stuk).
+ * DE FIX: geen aanname meer over richting, monotone vooruitgang, of een vast splitsingspunt.
+ * Exhaustief ELK denkbaar deelstuk (elk paar knooppunten i<j binnen de reeks) direct tegen
+ * zijn EIGEN hemelsbrede afstand afzetten, en het deelstuk met de HOOGSTE omweg-verhouding
+ * (het meest overduidelijk kromme) als eerste overbruggen. Daarna hetzelfde herhalen op de
+ * twee overgebleven stukken (vóór en ná de overbrugging) tot nergens meer een deelstuk de
+ * drempel overschrijdt. n is hier altijd klein (nooit meer dan enkele tientallen
+ * knooppunten), dus een O(n²)-zoektocht per niveau is verwaarloosbaar.
  */
 export function planSegments(
   nodeIds: string[],
@@ -115,53 +113,46 @@ export function planSegments(
   const n = nodeIds.length;
   if (n < 2) return [];
 
-  const destinationId = nodeIds[n - 1];
-  const h: number[] = nodeIds.map((id) => straightLineM(id, destinationId));
+  const prefix: number[] = [0];
+  for (let i = 0; i < hopDistancesM.length; i++) prefix.push(prefix[i] + hopDistancesM[i]);
+  const pathDistance = (i: number, j: number) => prefix[j] - prefix[i];
 
-  const isFrontier: boolean[] = new Array(n).fill(false);
-  isFrontier[0] = true;
-  isFrontier[n - 1] = true;
-  let runningMin = h[0];
-  for (let i = 1; i < n - 1; i++) {
-    if (h[i] < runningMin) {
-      isFrontier[i] = true;
-      runningMin = h[i];
+  function plan(startIdx: number, endIdx: number): PlannedSegment[] {
+    if (endIdx - startIdx <= 1) {
+      return [{ type: "knot-chain", nodeIds: nodeIds.slice(startIdx, endIdx + 1) }];
     }
-  }
 
-  function pathDistance(startIdx: number, endIdx: number): number {
-    let sum = 0;
-    for (let i = startIdx; i < endIdx; i++) sum += hopDistancesM[i];
-    return sum;
-  }
+    let worstI = -1;
+    let worstJ = -1;
+    let worstRatio = threshold; // alleen kandidaten die de drempel daadwerkelijk overschrijden tellen mee
+    for (let i = startIdx; i < endIdx; i++) {
+      for (let j = i + 1; j <= endIdx; j++) {
+        const { ratio } = evaluateDetour(pathDistance(i, j), straightLineM(nodeIds[i], nodeIds[j]), threshold);
+        if (ratio > worstRatio) {
+          worstRatio = ratio;
+          worstI = i;
+          worstJ = j;
+        }
+      }
+    }
 
-  const frontierIndices: number[] = [];
-  for (let i = 0; i < n; i++) if (isFrontier[i]) frontierIndices.push(i);
+    if (worstI === -1) {
+      return [{ type: "knot-chain", nodeIds: nodeIds.slice(startIdx, endIdx + 1) }];
+    }
 
-  const segments: PlannedSegment[] = [];
-  let chainStart = 0;
-
-  for (let f = 0; f < frontierIndices.length - 1; f++) {
-    const p = frontierIndices[f];
-    const q = frontierIndices[f + 1];
-    if (q === p + 1) continue; // aangrenzend, gewoon een normale hop binnen de lopende chain
-
-    const { isDetour, ratio } = evaluateDetour(pathDistance(p, q), straightLineM(nodeIds[p], nodeIds[q]), threshold);
-    if (!isDetour) continue; // toch geen echte omweg (zeldzaam) -- gewoon in de chain laten
-
-    segments.push({ type: "knot-chain", nodeIds: nodeIds.slice(chainStart, p + 1) });
-    segments.push({
+    const before = worstI > startIdx ? plan(startIdx, worstI) : [];
+    const after = worstJ < endIdx ? plan(worstJ, endIdx) : [];
+    const bridge: PlannedSegment = {
       type: "direct-bridge",
-      fromNodeId: nodeIds[p],
-      toNodeId: nodeIds[q],
-      skippedNodeIds: nodeIds.slice(p + 1, q),
-      ratio,
-    });
-    chainStart = q;
+      fromNodeId: nodeIds[worstI],
+      toNodeId: nodeIds[worstJ],
+      skippedNodeIds: nodeIds.slice(worstI + 1, worstJ),
+      ratio: Number(worstRatio.toFixed(2)),
+    };
+    return [...before, bridge, ...after];
   }
-  segments.push({ type: "knot-chain", nodeIds: nodeIds.slice(chainStart, n) });
 
-  return segments;
+  return plan(0, n - 1);
 }
 
 export type ViaKnooppuntenResult = {

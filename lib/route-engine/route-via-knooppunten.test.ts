@@ -65,7 +65,7 @@ describe("evaluateDetour", () => {
   });
 });
 
-describe("planSegments — frontier-gebaseerde planner (19-9-2026, tweede, principiëlere correctie)", () => {
+describe("planSegments — exhaustieve worst-pair-first planner (19-9-2026, derde, meest robuuste correctie)", () => {
   it("een volledig schone route (afstand-tot-bestemming daalt overal) blijft één ongesplitste knot-chain", () => {
     const nodeIds = ["A", "B", "C", "D"];
     const hops = [100, 100, 100];
@@ -143,14 +143,17 @@ describe("planSegments — frontier-gebaseerde planner (19-9-2026, tweede, princ
     ]);
   });
 
-  it("een kleine, onschuldige dip in afstand-tot-bestemming die zelf NIET krom genoeg is, wordt gewoon in de chain gelaten (geen onnodige overbrugging)", () => {
-    // B is geen nieuw minimum t.o.v. A dus niet-frontier, maar het A->C-stuk is nauwelijks
-    // langer dan de rechte lijn -- geen reden om te overbruggen.
+  it("een lichtjes kronkelend, maar overal redelijk direct pad wordt gewoon in één chain gelaten (geen onnodige overbrugging)", () => {
+    // A=(0,0) B=(110,10) C=(220,0) -- B ligt net iets naast de rechte lijn A-C, een heel
+    // normale, lichte bocht. Elk deelstuk (A-B, B-C, A-C) blijft ruim onder de drempel.
+    const pos: Record<string, [number, number]> = { A: [0, 0], B: [110, 10], C: [220, 0] };
     const nodeIds = ["A", "B", "C"];
-    const hops = [110, 110]; // A-B, B-C, totaal 220
-    const distToC: Record<string, number> = { A: 200, B: 210, C: 0 }; // B iets verder van C dan A -- niet-frontier
-    const straightLine = (a: string, b: string) => (b === "C" ? distToC[a] : Math.abs(distToC[a] - distToC[b]));
-    // straightLine(A,C) = 200; pathDistance(A,C) = 220; ratio = 1.1 -> ruim onder de drempel.
+    const straightLine = (a: string, b: string) => {
+      const [ax, ay] = pos[a];
+      const [bx, by] = pos[b];
+      return Math.hypot(ax - bx, ay - by);
+    };
+    const hops = [straightLine("A", "B"), straightLine("B", "C")]; // de hops volgen hier exact de rechte stukjes, dus per definitie geen omweg
     const plan = planSegments(nodeIds, hops, straightLine);
     expect(plan).toEqual([{ type: "knot-chain", nodeIds: ["A", "B", "C"] }]);
   });
