@@ -66,6 +66,13 @@ export async function GET(req: NextRequest) {
     const nodeIds: string[] = logicalNodesSnap.docs.map((d) => d.id);
     const idToIndex: Record<string, number> = {};
     nodeIds.forEach((id, i) => (idToIndex[id] = i));
+    // TOEGEVOEGD 19-9-2026 ("alles controleren en checken", stap 1 van 2, GO van Te):
+    // per node displayNumber/displayRegio bijhouden, zodat de losse groepjes hieronder
+    // concreet te tonen zijn (welke knooppunten, niet alleen hoeveel).
+    const nodeInfo: { displayNumber: string | null; displayRegio: string | null }[] = logicalNodesSnap.docs.map((d) => {
+      const data = d.data();
+      return { displayNumber: data.displayNumber ?? null, displayRegio: data.displayRegio ?? null };
+    });
 
     const degree: number[] = new Array(nodeIds.length).fill(0);
     const uf = new UnionFind(nodeIds.length);
@@ -94,6 +101,26 @@ export async function GET(req: NextRequest) {
       componentSizes[root] = (componentSizes[root] || 0) + 1;
     }
     const sortedComponents = Object.values(componentSizes).sort((a, b) => b - a);
+
+    // TOEGEVOEGD 19-9-2026 ("alles controleren en checken", stap 1 van 2): niet alleen de
+    // top-10 als kaal getal, maar ALLE componenten BUITEN het grootste ("vasteland")
+    // concreet oplijsten met hun knooppuntnummers/regio's -- dat is precies waarmee stap 2
+    // (per gat beoordelen of er een echte, ontbrekende verbinding hoort te zijn) moet beginnen.
+    const nodesByRoot = new Map<number, number[]>();
+    for (let i = 0; i < nodeIds.length; i++) {
+      const root = uf.find(i);
+      const arr = nodesByRoot.get(root);
+      if (arr) arr.push(i);
+      else nodesByRoot.set(root, [i]);
+    }
+    const largestRootSize = Math.max(...Array.from(nodesByRoot.values()).map((arr) => arr.length));
+    const allComponentsExceptLargest = Array.from(nodesByRoot.values())
+      .filter((arr) => arr.length !== largestRootSize)
+      .map((indices) => ({
+        size: indices.length,
+        nodes: indices.map((i) => ({ id: nodeIds[i], displayNumber: nodeInfo[i].displayNumber, displayRegio: nodeInfo[i].displayRegio })),
+      }))
+      .sort((a, b) => b.size - a.size);
 
     const isolatedCount = degree.filter((d) => d === 0).length;
     const deadEndCount = degree.filter((d) => d === 1).length;
@@ -135,6 +162,7 @@ export async function GET(req: NextRequest) {
         deadEndNodes: deadEndCount,
         wellConnectedNodes: wellConnectedCount,
       },
+      allComponentsExceptLargest,
       compositeClusterDiagnostic: {
         sizeHistogram: clusterSizeHistogram,
         largeClusterThreshold,
