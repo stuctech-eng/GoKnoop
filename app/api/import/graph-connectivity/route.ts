@@ -114,12 +114,38 @@ export async function GET(req: NextRequest) {
       else nodesByRoot.set(root, [i]);
     }
     const largestRootSize = Math.max(...Array.from(nodesByRoot.values()).map((arr) => arr.length));
-    const allComponentsExceptLargest = Array.from(nodesByRoot.values())
-      .filter((arr) => arr.length !== largestRootSize)
-      .map((indices) => ({
-        size: indices.length,
-        nodes: indices.map((i) => ({ id: nodeIds[i], displayNumber: nodeInfo[i].displayNumber, displayRegio: nodeInfo[i].displayRegio })),
-      }))
+    const componentsExceptLargest = Array.from(nodesByRoot.values()).filter((arr) => arr.length !== largestRootSize);
+
+    // TOEGEVOEGD 19-9-2026, korter gemaakt op verzoek van Te (de volledige lijst met lange
+    // ID's was te veel om te lezen): eerst een histogram (alleen aantallen), en dan --
+    // uitsluitend voor groepjes vanaf `minComponentSize` (instelbaar, standaard 5) -- de
+    // KORTE weergave: displayNumbers + unieke regio's, GEEN lange interne ID's meer (die
+    // zijn voor een overzicht niet leesbaar en alleen relevant voor een gerichte
+    // vervolgopvraging, niet voor dit eerste overzicht).
+    const sizeBuckets: [string, (n: number) => boolean][] = [
+      ["1 (volledig geïsoleerd)", (n) => n === 1],
+      ["2-3", (n) => n >= 2 && n <= 3],
+      ["4-9", (n) => n >= 4 && n <= 9],
+      ["10-49", (n) => n >= 10 && n <= 49],
+      ["50-199", (n) => n >= 50 && n <= 199],
+      ["200+", (n) => n >= 200],
+    ];
+    const componentSizeHistogram: Record<string, number> = {};
+    for (const [label, test] of sizeBuckets) {
+      componentSizeHistogram[label] = componentsExceptLargest.filter((arr) => test(arr.length)).length;
+    }
+
+    const minComponentSize = parseInt(req.nextUrl.searchParams.get("minComponentSize") || "5", 10);
+    const namedComponentsAboveThreshold = componentsExceptLargest
+      .filter((arr) => arr.length >= minComponentSize)
+      .map((indices) => {
+        const regios = Array.from(new Set(indices.map((i) => nodeInfo[i].displayRegio).filter(Boolean)));
+        return {
+          size: indices.length,
+          regios,
+          displayNumbers: indices.map((i) => nodeInfo[i].displayNumber).filter(Boolean),
+        };
+      })
       .sort((a, b) => b.size - a.size);
 
     const isolatedCount = degree.filter((d) => d === 0).length;
@@ -162,7 +188,9 @@ export async function GET(req: NextRequest) {
         deadEndNodes: deadEndCount,
         wellConnectedNodes: wellConnectedCount,
       },
-      allComponentsExceptLargest,
+      componentSizeHistogram,
+      minComponentSize,
+      namedComponentsAboveThreshold,
       compositeClusterDiagnostic: {
         sizeHistogram: clusterSizeHistogram,
         largeClusterThreshold,
