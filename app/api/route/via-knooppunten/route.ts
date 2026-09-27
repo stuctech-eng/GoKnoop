@@ -25,9 +25,11 @@ export const dynamic = "force-dynamic";
  * ernaast bestaan, wordt hier niet aangeraakt.
  *
  * UITGEBREID (landelijke connected-components-analyse: 1.111 losse componenten in de
- * pure knooppuntengraaf): valt automatisch terug op functie 1 (directe ORS-route) als
- * de gevonden knooppuntvolgorde een onredelijke omweg blijkt (zie `evaluateDetour()` in
- * route-via-knooppunten.ts) -- zichtbaar in de response via `usedDirectFallback`/`detourRatio`.
+ * pure knooppuntengraaf): als de gevonden knooppuntvolgorde ergens een onredelijke omweg
+ * blijkt, wordt NIET de hele reis naar functie 1 teruggeworpen -- verdeel-en-heers
+ * (`planSegments()`) isoleert het kleinst mogelijke, coherente omweg-stuk en overbrugt
+ * uitsluitend dát rechtstreeks; de rest van de reis blijft gewoon via de knooppunten
+ * lopen. Zichtbaar in de response via `usedDirectFallback`/`bridgedSpans`/`overallDetourRatio`.
  *
  * Gebruikt bewust de LICHTE `CachedGraphProvider` (uitsluitend het officiële
  * knooppuntennetwerk uit Firestore) -- GEEN `loadPrecomputedOrBuildGraph`/NWB-laag.

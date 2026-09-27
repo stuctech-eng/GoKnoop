@@ -28,7 +28,15 @@ type ViaKnooppuntenResult = {
   steps: Step[];
   segmentSources: ("cache" | "ors")[];
   usedDirectFallback: boolean;
-  detourRatio: number;
+  overallDetourRatio: number;
+  bridgedSpans: {
+    fromNodeId: string;
+    toNodeId: string;
+    fromDisplayNumber: string;
+    toDisplayNumber: string;
+    skippedNodeIds: string[];
+    ratio: number;
+  }[];
 };
 
 type TooManyError = {
@@ -226,9 +234,17 @@ export default function BikeRouteKnooppuntenDebugPage() {
         <div>
           {result.usedDirectFallback && (
             <div style={{ background: "#fff4e0", color: "#8a5a00", padding: 12, borderRadius: 8, marginBottom: 12, fontSize: 14 }}>
-              ⚠️ De knooppuntengraaf gaf een onredelijke omweg ({result.detourRatio}x de hemelsbrede afstand) — automatisch
-              teruggevallen op de directe fietsroute (functie 1) tussen {result.displayNumbers[0]} en{" "}
-              {result.displayNumbers[result.displayNumbers.length - 1]}.
+              ⚠️ {result.bridgedSpans.length === 1 ? "Eén stuk" : `${result.bridgedSpans.length} stukken`} van de knooppuntengraaf gaf een
+              onredelijke omweg — daar automatisch rechtstreeks overbrugd (functie 1), de rest van de reis loopt gewoon via de
+              knooppunten:
+              <ul style={{ margin: "6px 0 0 0", paddingLeft: 18 }}>
+                {result.bridgedSpans.map((s, i) => (
+                  <li key={i}>
+                    {s.fromDisplayNumber} → {s.toDisplayNumber} ({s.ratio}x
+                    {s.skippedNodeIds.length > 0 ? `, ${s.skippedNodeIds.length} knooppunt(en) overgeslagen` : ""})
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 14 }}>
