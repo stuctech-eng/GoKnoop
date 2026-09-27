@@ -170,6 +170,14 @@ export type ViaKnooppuntenError =
       nodeIds: string[];
       displayNumbers: string[];
       positions: LatLon[];
+      /**
+       * TOEGEVOEGD (live test bleef 28 i.p.v. minder na de overbruggingslogica -- niet
+       * aangenomen waarom, hier zichtbaar gemaakt): wat `planSegments()` daadwerkelijk
+       * besliste, puur ter diagnose. Als dit bijna allemaal (of allemaal) "knot-chain" is,
+       * heeft de verdeel-en-heers-aanpak geen enkel omweg-stuk kunnen isoleren voor deze
+       * specifieke route -- mogelijk de eerder gedocumenteerde V-vorm-beperking.
+       */
+      planSummary: { type: "knot-chain" | "direct-bridge"; size: number; fromDisplayNumber: string; toDisplayNumber: string; ratio?: number }[];
     }
   | { reason: "segment_failed"; fromNodeId: string; toNodeId: string; message: string };
 
@@ -239,6 +247,22 @@ export async function routeViaKnooppunten(
       const node = provider.getNode(id);
       return node ? rdToWgs84(node.x, node.y) : { lat: 0, lon: 0 };
     });
+    const planSummary = plan.map((part) =>
+      part.type === "knot-chain"
+        ? {
+            type: "knot-chain" as const,
+            size: part.nodeIds.length,
+            fromDisplayNumber: provider.getNode(part.nodeIds[0])?.displayNumber ?? "?",
+            toDisplayNumber: provider.getNode(part.nodeIds[part.nodeIds.length - 1])?.displayNumber ?? "?",
+          }
+        : {
+            type: "direct-bridge" as const,
+            size: part.skippedNodeIds.length + 2,
+            fromDisplayNumber: provider.getNode(part.fromNodeId)?.displayNumber ?? "?",
+            toDisplayNumber: provider.getNode(part.toNodeId)?.displayNumber ?? "?",
+            ratio: Number(part.ratio.toFixed(2)),
+          }
+    );
     return {
       reason: "too_many_knooppunten",
       knooppuntenCount: totalRealSteps,
@@ -246,6 +270,7 @@ export async function routeViaKnooppunten(
       nodeIds,
       displayNumbers,
       positions,
+      planSummary,
     };
   }
 

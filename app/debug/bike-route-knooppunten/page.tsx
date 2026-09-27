@@ -47,6 +47,7 @@ type TooManyError = {
   nodeIds: string[];
   displayNumbers: string[];
   positions: LatLon[];
+  planSummary: { type: "knot-chain" | "direct-bridge"; size: number; fromDisplayNumber: string; toDisplayNumber: string; ratio?: number }[];
 };
 
 const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY;
@@ -201,8 +202,19 @@ export default function BikeRouteKnooppuntenDebugPage() {
       {tooManySequence && (
         <div style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
-            Gevonden knooppuntvolgorde ({tooManySequence.knooppuntenCount} knooppunten, geen ORS-aanroepen gedaan)
+            Gevonden knooppuntvolgorde ({tooManySequence.knooppuntenCount} stappen ná planning, geen ORS-aanroepen gedaan)
           </h2>
+          <div style={{ background: "#f0f0f0", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 13 }}>
+            <strong>Wat de planner besliste:</strong>
+            <ul style={{ margin: "6px 0 0 0", paddingLeft: 18 }}>
+              {tooManySequence.planSummary.map((p, i) => (
+                <li key={i}>
+                  {p.type === "knot-chain" ? "🔗 knot-chain" : "⛓️‍💥 direct-bridge"}: {p.fromDisplayNumber} → {p.toDisplayNumber} ({p.size}{" "}
+                  knooppunten{p.ratio !== undefined ? `, ${p.ratio}x` : ""})
+                </li>
+              ))}
+            </ul>
+          </div>
           <p style={{ fontSize: 13, color: "#555", marginBottom: 8 }}>
             De genummerde rode stippen hieronder op de kaart tonen de volgorde met rechte
             lijnen ertussen (geen echte fietspad-geometrie, puur om richting te zien) — zo is in
