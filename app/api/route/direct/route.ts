@@ -24,7 +24,14 @@ export const dynamic = "force-dynamic";
  * functie als `/api/location/geocode`) -- geen tweede geocoding-implementatie.
  */
 export async function POST(req: NextRequest) {
-  let body: { originPlaceName?: string; originLat?: number; originLon?: number; destinationPlaceName?: string };
+  let body: {
+    originPlaceName?: string;
+    originLat?: number;
+    originLon?: number;
+    destinationPlaceName?: string;
+    destinationLat?: number;
+    destinationLon?: number;
+  };
   try {
     body = await req.json();
   } catch {
@@ -34,10 +41,12 @@ export async function POST(req: NextRequest) {
   // TOEGEVOEGD (koppeling met de hoofd-app, "Fase B"): de bestaande "route naar een adres"-
   // flow gebruikt de live GPS-positie als herkomst, geen getypte plaatsnaam -- optioneel
   // originLat/originLon toestaan om die direct te gebruiken, geen overbodige geocode-stap.
-  const { originPlaceName, originLat, originLon, destinationPlaceName } = body;
-  if ((!originPlaceName && (originLat == null || originLon == null)) || !destinationPlaceName) {
+  const { originPlaceName, originLat, originLon, destinationPlaceName, destinationLat, destinationLon } = body;
+  const hasOrigin = originPlaceName || (originLat != null && originLon != null);
+  const hasDestination = destinationPlaceName || (destinationLat != null && destinationLon != null);
+  if (!hasOrigin || !hasDestination) {
     return NextResponse.json(
-      { error: "originPlaceName (of originLat+originLon) en destinationPlaceName zijn verplicht." },
+      { error: "origin (plaatsnaam of lat+lon) en destination (plaatsnaam of lat+lon) zijn verplicht." },
       { status: 400 }
     );
   }
@@ -50,7 +59,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Kon herkomst '${originPlaceName}' niet vinden.`, leg: "origin" }, { status: 404 });
   }
 
-  const destination = await geocodePlaceName(destinationPlaceName);
+  // TOEGEVOEGD ("aanrijroute naar het beginpunt van een berekende route", 19-9-2026): de
+  // bestemming kan nu ook direct als coördinaat gegeven worden -- nodig om naar het EXACTE
+  // beginpunt van een al berekende route te routeren, dat is geen adres om te geocoderen.
+  const destination =
+    destinationLat != null && destinationLon != null
+      ? { lat: destinationLat, lon: destinationLon, displayName: "Routestart" }
+      : await geocodePlaceName(destinationPlaceName!);
   if (!destination) {
     return NextResponse.json({ error: `Kon bestemming '${destinationPlaceName}' niet vinden.`, leg: "destination" }, { status: 404 });
   }

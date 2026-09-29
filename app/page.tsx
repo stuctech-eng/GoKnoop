@@ -13,7 +13,7 @@ import { getSavedRoutes, saveRoute, deleteSavedRoute, defaultSavedRouteName, typ
 import { getSharedRoutes, recordSharedRoute, updateSharedWith, type SharedRouteRecord } from "@/lib/history/shared-routes-store";
 import { encodeRouteShareCode, decodeRouteShareCode, buildShareUrl } from "@/lib/sharing/route-share-link";
 import { pickNamingPoints, makeNameUnique } from "@/lib/naming/route-naming";
-import { rdToWgs84 } from "@/lib/route-engine/coordinate-transform";
+import { rdToWgs84, wgs84ToRd } from "@/lib/route-engine/coordinate-transform";
 import { getPausedRide, savePausedRide, clearPausedRide, type PausedRideSnapshot } from "@/lib/navigation/paused-ride-store";
 import PauseScreen from "@/components/navigation/PauseScreen";
 import type { GraphEdge } from "@/lib/route-engine/types";
@@ -746,11 +746,62 @@ export default function Home() {
             return;
           }
 
+          // TOEGEVOEGD ("van mijn locatie moet ik naar de route toe, die moet hij ook
+          // berekenen", live-feedback van Te, 19-9-2026): de route zelf begint terecht op
+          // het echte fietspad (functie 1) of het dichtstbijzijnde knooppunt (functie 2) --
+          // maar dat is niet noodzakelijk exact waar de fietser fysiek staat. Als dat
+          // verschil noemenswaardig is, wordt er nu een aparte aanrijroute berekend (via
+          // dezelfde functie 1) van de werkelijke GPS-positie naar het exacte beginpunt van
+          // de hoofdroute, en naadloos ervoor geplakt -- de navigatie wordt dan één
+          // doorlopend geheel, van waar je nu staat tot aan de bestemming. Bewust GEEN aparte
+          // "fase" (zoals het oude systeem had) -- simpelweg twee stukken geometrie/afstand/
+          // duur/stappen samengevoegd, RouteNavigationSession kent maar één, doorlopende route.
+          const APPROACH_THRESHOLD_M = 30;
+          let combinedGeometry = data.geometry as { lat: number; lon: number }[];
+          let combinedDistanceM = data.distanceM as number;
+          let combinedDurationS = data.durationS as number;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let combinedSteps = (data.steps ?? []) as any[];
+
+          const actualPos = { lat: position.coords.latitude, lon: position.coords.longitude };
+          const routeStart = combinedGeometry[0];
+          if (routeStart) {
+            const a = wgs84ToRd(actualPos.lat, actualPos.lon);
+            const b = wgs84ToRd(routeStart.lat, routeStart.lon);
+            const gapM = Math.hypot(a.x - b.x, a.y - b.y);
+            if (gapM > APPROACH_THRESHOLD_M) {
+              try {
+                const approachRes = await fetch("/api/route/direct", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    originLat: actualPos.lat,
+                    originLon: actualPos.lon,
+                    destinationLat: routeStart.lat,
+                    destinationLon: routeStart.lon,
+                  }),
+                });
+                if (approachRes.ok) {
+                  const approachData = await approachRes.json();
+                  combinedGeometry = [...approachData.geometry, ...combinedGeometry.slice(1)];
+                  combinedDistanceM = approachData.distanceM + combinedDistanceM;
+                  combinedDurationS = approachData.durationS + combinedDurationS;
+                  combinedSteps = [...(approachData.steps ?? []), ...combinedSteps];
+                }
+                // Bij falen: bewust GEEN harde fout -- de hoofdroute is nog steeds bruikbaar,
+                // alleen zonder aanrijstukje. Niet de hele flow laten stuklopen op iets
+                // aanvullends.
+              } catch {
+                // Zelfde reden: aanrijroute is aanvullend, geen harde afhankelijkheid.
+              }
+            }
+          }
+
           const route: NavigationRoute = {
-            geometry: data.geometry,
-            distanceM: data.distanceM,
-            durationS: data.durationS,
-            steps: data.steps ?? [],
+            geometry: combinedGeometry,
+            distanceM: combinedDistanceM,
+            durationS: combinedDurationS,
+            steps: combinedSteps,
           };
           setNewRoutePreview({
             route,
