@@ -52,10 +52,18 @@ export type RouteNavigationScreenProps = {
   route: NavigationRoute;
   /** Bijv. "Volendam → Hoorn" -- puur weergave. */
   routeLabel?: string;
+  /**
+   * Index in route.geometry waar de aanrijroute (van de werkelijke startlocatie naar het
+   * beginpunt van de eigenlijke route) ophoudt -- undefined = geen aanrijroute. Puur voor
+   * de weergave: de aanrijroute wordt gestippeld/grijs getekend, de eigenlijke route in de
+   * vertrouwde volle groene lijn (live-feedback: "door gekraste moet weg" -- zag er
+   * onbedoeld uit als een rare tak IN de route, doordat beide als één lijn getekend werden).
+   */
+  approachGeometryEndIndex?: number;
   onExit: () => void;
 };
 
-export default function RouteNavigationScreen({ route, routeLabel, onExit }: RouteNavigationScreenProps) {
+export default function RouteNavigationScreen({ route, routeLabel, approachGeometryEndIndex, onExit }: RouteNavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRotateWrapperRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -117,8 +125,19 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
       L.tileLayer(CARTO_RASTER_URL, { attribution: CARTO_ATTRIBUTION, subdomains: CARTO_SUBDOMAINS, maxZoom: 20 }).addTo(map);
 
       const latLngs: L.LatLngTuple[] = route.geometry.map((p) => [p.lat, p.lon]);
-      const line = L.polyline(latLngs, { color: ROUTE_COLOR, weight: 5, lineJoin: "round", lineCap: "round" }).addTo(map);
-      map.fitBounds(line.getBounds(), { padding: [40, 40] });
+      // Aanrijroute apart en gestippeld/grijs tekenen, de eigenlijke route in de vertrouwde
+      // volle groene lijn -- zelfde reden/stijl als RouteNavPreview in app/page.tsx.
+      const splitIdx = approachGeometryEndIndex;
+      let bounds: L.LatLngBounds;
+      if (splitIdx && splitIdx > 0 && splitIdx < latLngs.length) {
+        L.polyline(latLngs.slice(0, splitIdx), { color: "#5b7280", weight: 4, dashArray: "2 10", lineCap: "round" }).addTo(map);
+        L.polyline(latLngs.slice(splitIdx - 1), { color: ROUTE_COLOR, weight: 5, lineJoin: "round", lineCap: "round" }).addTo(map);
+        bounds = L.polyline(latLngs).getBounds();
+      } else {
+        const line = L.polyline(latLngs, { color: ROUTE_COLOR, weight: 5, lineJoin: "round", lineCap: "round" }).addTo(map);
+        bounds = line.getBounds();
+      }
+      map.fitBounds(bounds, { padding: [40, 40] });
 
       const marker = L.circleMarker(latLngs[0], {
         radius: 9,

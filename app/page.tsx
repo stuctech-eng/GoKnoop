@@ -250,6 +250,8 @@ export default function Home() {
     label: string;
     usedDirectFallback?: boolean;
     bridgedSpansCount?: number;
+    /** Index in route.geometry waar de aanrijroute ophoudt en de eigenlijke route begint -- undefined = geen aanrijroute. */
+    approachGeometryEndIndex?: number;
   } | null>(null);
   /** "Plus lusje" (sectie 9.49, 30-8-2026): 0 = geen omweg, gewoon de kortste route. */
   const [extraKm, setExtraKm] = useState(0);
@@ -762,6 +764,12 @@ export default function Home() {
           let combinedDurationS = data.durationS as number;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           let combinedSteps = (data.steps ?? []) as any[];
+          // TOEGEVOEGD (live-feedback: "door gekraste moet weg" -- de aanrijroute zag er in
+          // de kaart onbedoeld uit als een rare tak IN de knooppuntenroute, omdat beide als
+          // één ononderbroken lijn getekend werden): index in `combinedGeometry` waar de
+          // aanrijroute ophoudt en de eigenlijke route begint -- zodat de kaart ze apart en
+          // in een andere stijl kan tekenen. `undefined` = geen aanrijroute nodig geweest.
+          let approachGeometryEndIndex: number | undefined;
 
           const actualPos = { lat: position.coords.latitude, lon: position.coords.longitude };
           const routeStart = combinedGeometry[0];
@@ -787,6 +795,7 @@ export default function Home() {
                   combinedDistanceM = approachData.distanceM + combinedDistanceM;
                   combinedDurationS = approachData.durationS + combinedDurationS;
                   combinedSteps = [...(approachData.steps ?? []), ...combinedSteps];
+                  approachGeometryEndIndex = approachData.geometry.length; // exclusief, index waar de hoofdroute begint
                 }
                 // Bij falen: bewust GEEN harde fout -- de hoofdroute is nog steeds bruikbaar,
                 // alleen zonder aanrijstukje. Niet de hele flow laten stuklopen op iets
@@ -808,6 +817,7 @@ export default function Home() {
             label: `Mijn locatie → ${data.destination?.displayName ?? newRouteDestinationInput}`,
             usedDirectFallback: data.usedDirectFallback,
             bridgedSpansCount: data.bridgedSpans?.length,
+            approachGeometryEndIndex,
           });
           setStep("routeNavPreview");
         } catch (err) {
@@ -1923,6 +1933,7 @@ export default function Home() {
           <RouteNavigationScreen
             route={newRoutePreview.route}
             routeLabel={newRoutePreview.label}
+            approachGeometryEndIndex={newRoutePreview.approachGeometryEndIndex}
             onExit={() => {
               setStep(null);
               setNewRoutePreview(null);
@@ -1947,7 +1958,13 @@ function RouteNavPreview({
   onBack,
   onStart,
 }: {
-  preview: { route: NavigationRoute; label: string; usedDirectFallback?: boolean; bridgedSpansCount?: number };
+  preview: {
+    route: NavigationRoute;
+    label: string;
+    usedDirectFallback?: boolean;
+    bridgedSpansCount?: number;
+    approachGeometryEndIndex?: number;
+  };
   onBack: () => void;
   onStart: () => void;
 }) {
@@ -1969,13 +1986,30 @@ function RouteNavPreview({
         map
       );
       const latLngs = preview.route.geometry.map((p) => [p.lat, p.lon] as [number, number]);
-      const line = L.polyline(latLngs, { color: "#085041", weight: 5 }).addTo(map);
-      map.fitBounds(line.getBounds(), { padding: [32, 32] });
+
+      // TOEGEVOEGD (live-feedback: "door gekraste moet weg" -- de aanrijroute zag er
+      // onbedoeld uit als een rare tak IN de knooppuntenroute, doordat beide als één
+      // ononderbroken lijn getekend werden): aanrijroute nu apart, gestippeld/grijs; de
+      // eigenlijke route in de vertrouwde volle groene lijn -- in één oogopslag te
+      // onderscheiden.
+      const splitIdx = preview.approachGeometryEndIndex;
+      let bounds: L.LatLngBounds;
+      if (splitIdx && splitIdx > 0 && splitIdx < latLngs.length) {
+        const approachLatLngs = latLngs.slice(0, splitIdx);
+        const mainLatLngs = latLngs.slice(splitIdx - 1); // laatste aanrij-punt herhaald zodat de lijnen naadloos aansluiten
+        L.polyline(approachLatLngs, { color: "#5b7280", weight: 4, dashArray: "2 10", lineCap: "round" }).addTo(map);
+        L.polyline(mainLatLngs, { color: "#085041", weight: 5, lineJoin: "round", lineCap: "round" }).addTo(map);
+        bounds = L.polyline(latLngs).getBounds();
+      } else {
+        const line = L.polyline(latLngs, { color: "#085041", weight: 5 }).addTo(map);
+        bounds = line.getBounds();
+      }
+      map.fitBounds(bounds, { padding: [32, 32] });
     })();
     return () => {
       cancelled = true;
     };
-  }, [mapEl, preview.route.geometry]);
+  }, [mapEl, preview.route.geometry, preview.approachGeometryEndIndex]);
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 900, background: "white", display: "flex", flexDirection: "column" }}>
