@@ -28,6 +28,14 @@ export type NavigationSampleInput = {
 export type NavigationUpdate = {
   progress: RouteProgress;
   maneuver: Maneuver | null;
+  /**
+   * TOEGEVOEGD (19-9-2026, live-feedback "Dit wil ik" + Apple Kaarten-referentiescreenshot):
+   * de manoeuvre NÁ `maneuver` -- puur ter weergave als tweede, kleinere regel onder de
+   * hoofdinstructie ("450m Keetzijde... daarna: linksaf"), zoals in de referentie. Zelfde
+   * `findNextManeuver`, gewoon een tweede keer aangeroepen vanaf het punt van de eerste
+   * manoeuvre -- geen nieuwe detectielogica.
+   */
+  nextManeuver: Maneuver | null;
   /** Gesmoothde rijrichting -- voor kaartrotatie, exact zoals de bestaande Apple-stijl-kaart 'm gebruikt. */
   smoothedHeadingDeg: number | null;
   /** Relatieve hoek van de manoeuvre t.o.v. de actuele rijrichting -- voor de pijl op het scherm (0 = rechtdoor/boven). */
@@ -78,6 +86,9 @@ export class RouteNavigationSession {
     }
 
     const maneuver = findNextManeuver(this.route.geometry, this.route.steps, progress.distanceAlongRouteM);
+    const nextManeuver = maneuver
+      ? findNextManeuver(this.route.geometry, this.route.steps, progress.distanceAlongRouteM + maneuver.distanceToManeuverM + 1)
+      : null;
 
     let maneuverArrowDeg = 0;
     if (maneuver && this.smoothedHeading !== null) {
@@ -105,6 +116,7 @@ export class RouteNavigationSession {
     return {
       progress,
       maneuver,
+      nextManeuver,
       smoothedHeadingDeg: this.smoothedHeading,
       maneuverArrowDeg,
       offRoute,

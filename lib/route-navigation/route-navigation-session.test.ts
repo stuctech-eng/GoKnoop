@@ -18,6 +18,16 @@ function straightRoute(lengthM: number): NavigationRoute {
   };
 }
 
+/** Route met twee opeenvolgende bochten: bij 500m (rechts) en bij 1000m (links). */
+function twoTurnsRoute(): NavigationRoute {
+  return {
+    geometry: [rdOffset(0, 0), rdOffset(500, 0), rdOffset(500, -500), rdOffset(0, -500)],
+    distanceM: 1500,
+    durationS: 375,
+    steps: [{ name: "Testweg", instruction: "Head east", distanceM: 1500 }],
+  };
+}
+
 describe("RouteNavigationSession", () => {
   it("geeft null terug voor een sample als de route zelf geen geldige progressie oplevert (bijv. lege geometrie)", () => {
     const session = new RouteNavigationSession({ geometry: [], distanceM: 0, durationS: 0, steps: [] });
@@ -78,6 +88,22 @@ describe("RouteNavigationSession", () => {
     const stoppedWithWildHeading = session.process({ position: rdOffset(105, 0), headingDeg: 270, speedMps: 0.1 }); // onder de standaard 0,5 m/s-drempel
     // Heading mag niet abrupt naar 270 gesprongen zijn -- de vorige, betrouwbare waarde blijft leidend.
     expect(stoppedWithWildHeading!.smoothedHeadingDeg).toBeCloseTo(moving!.smoothedHeadingDeg!, 0);
+  });
+
+  it("berekent nextManeuver als de manoeuvre NÁ de eerstvolgende manoeuvre (Apple-stijl 'daarna'-voorspelling)", () => {
+    const session = new RouteNavigationSession(twoTurnsRoute());
+    const update = session.process({ position: rdOffset(100, 0), headingDeg: 90, speedMps: 5 });
+    expect(update!.maneuver).not.toBeNull();
+    expect(update!.nextManeuver).not.toBeNull();
+    // De twee gevonden manoeuvres moeten verschillende bochten zijn (niet twee keer dezelfde).
+    expect(update!.maneuver!.atGeometryIndex).not.toBe(update!.nextManeuver!.atGeometryIndex);
+  });
+
+  it("nextManeuver is null als er geen manoeuvre gevonden wordt (niets om een 'daarna' voor te berekenen)", () => {
+    const session = new RouteNavigationSession(straightRoute(1000));
+    const update = session.process({ position: rdOffset(100, 0), headingDeg: 90, speedMps: 5 });
+    expect(update!.maneuver).toBeNull();
+    expect(update!.nextManeuver).toBeNull();
   });
 
   it("gebruikt de meegegeven, aangepaste opties i.p.v. de standaardwaarden wanneer expliciet gegeven", () => {

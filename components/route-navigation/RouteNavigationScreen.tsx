@@ -11,6 +11,12 @@
  * Kaart/CARTO/heading-up-rotatie/GPS-follow-patroon hergebruikt (als TECHNIEK, geen
  * gedeelde module) van `components/navigation/NavigationScreen.tsx` -- dat scherm zelf
  * blijft volledig ongewijzigd en is niet aangeraakt.
+ *
+ * VISUELE HERBOUW (19-9-2026, live-feedback "Dit wil ik" + Apple Kaarten-referentie-
+ * screenshot): kompaswidget, grote instructiekaart bovenaan (met een tweede regel die de
+ * daaropvolgende afslag alvast toont), een bovenbalk met aankomsttijd/duur/afstand, en
+ * ECHTE gesproken aankondigingen (Web Speech API) met een werkende mute-knop -- bewust geen
+ * nepknop zonder functie.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -32,12 +38,10 @@ const ROUTE_COLOR = "#085041";
 const NAVIGATION_ZOOM = 17.5;
 const EASE_DURATION_MS = 900;
 
-/** Ingeklapte hoogte van de bottom sheet, in pixels. */
-const SHEET_COLLAPSED_PX = 118;
-/** Aandeel van de schermhoogte dat de bottom sheet uitgeklapt inneemt. */
-const SHEET_EXPANDED_RATIO = 0.7;
-/** Voorbij dit aandeel van de sleepafstand snapt de sheet naar de andere stand. */
-const SHEET_SNAP_RATIO = 0.35;
+const BAR_COLLAPSED_PX = 84;
+const BAR_EXPANDED_RATIO = 0.55;
+const BAR_SNAP_RATIO = 0.35;
+const ANNOUNCE_DISTANCE_M = 150;
 
 const DIRECTION_LABEL: Record<RelativeDirection, string> = {
   RECHTDOOR: "Rechtdoor",
@@ -47,18 +51,18 @@ const DIRECTION_LABEL: Record<RelativeDirection, string> = {
   RECHTS: "Rechtsaf",
   ACHTERUIT: "Keer om",
 };
+const DIRECTION_SPOKEN: Record<RelativeDirection, string> = {
+  RECHTDOOR: "Blijf rechtdoor rijden",
+  LICHT_LINKS: "Houd links aan",
+  LINKS: "Ga linksaf",
+  LICHT_RECHTS: "Houd rechts aan",
+  RECHTS: "Ga rechtsaf",
+  ACHTERUIT: "Keer om",
+};
 
 export type RouteNavigationScreenProps = {
   route: NavigationRoute;
-  /** Bijv. "Volendam → Hoorn" -- puur weergave. */
   routeLabel?: string;
-  /**
-   * Index in route.geometry waar de aanrijroute (van de werkelijke startlocatie naar het
-   * beginpunt van de eigenlijke route) ophoudt -- undefined = geen aanrijroute. Puur voor
-   * de weergave: de aanrijroute wordt gestippeld/grijs getekend, de eigenlijke route in de
-   * vertrouwde volle groene lijn (live-feedback: "door gekraste moet weg" -- zag er
-   * onbedoeld uit als een rare tak IN de route, doordat beide als één lijn getekend werden).
-   */
   approachGeometryEndIndex?: number;
   onExit: () => void;
 };
@@ -66,6 +70,7 @@ export type RouteNavigationScreenProps = {
 export default function RouteNavigationScreen({ route, routeLabel, approachGeometryEndIndex, onExit }: RouteNavigationScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRotateWrapperRef = useRef<HTMLDivElement>(null);
+  const compassNeedleRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const positionMarkerRef = useRef<L.CircleMarker | null>(null);
   const sessionRef = useRef<RouteNavigationSession | null>(null);
@@ -74,45 +79,38 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
 
   const [isFollowing, setIsFollowing] = useState(true);
   const [update, setUpdate] = useState<NavigationUpdate | null>(null);
-  const [sheetExpanded, setSheetExpanded] = useState(false);
+  const [barExpanded, setBarExpanded] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const [muted, setMuted] = useState(false);
 
-  /**
-   * BUGFIX (live test: zwarte hoeken zichtbaar in de kaart tijdens rotatie): een vaste
-   * 150%-marge is bij een smal telefoonscherm ONVOLDOENDE -- de diagonaal (nodig om bij een
-   * willekeurige rotatiehoek alle hoeken te blijven bedekken) is voor een smal, hoog scherm
-   * veel groter dan 150% van de BREEDTE. Nu op basis van de werkelijke schermdiagonaal
-   * berekend (vierkante wrapper, zijde = diagonaal + marge), gegarandeerd voldoende bij elke
-   * rotatiehoek, ongeacht schermverhouding.
-   */
   const [mapWrapperSizePx, setMapWrapperSizePx] = useState(0);
 
-  // Sleepbare bottom sheet (live test: was een tik, moet een sleepgebaar zijn).
-  const [sheetHeightPx, setSheetHeightPx] = useState(SHEET_COLLAPSED_PX);
-  const expandedHeightPxRef = useRef(SHEET_COLLAPSED_PX);
+  const [barHeightPx, setBarHeightPx] = useState(BAR_COLLAPSED_PX);
+  const expandedHeightPxRef = useRef(BAR_COLLAPSED_PX);
   const dragStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
-  const [isDraggingSheet, setIsDraggingSheet] = useState(false);
+  const [isDraggingBar, setIsDraggingBar] = useState(false);
 
-  // Schermafmetingen meten -- voor zowel de kaartwrapper-diagonaal als de sheet-hoogte.
+  const announcedManeuverIndexRef = useRef<number | null>(null);
+  const mutedRef = useRef(false);
+  useEffect(() => {
+    mutedRef.current = muted;
+    if (muted && typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }, [muted]);
+
   useEffect(() => {
     function measure() {
       const w = window.innerWidth;
       const h = window.innerHeight;
-      // +40px marge bovenop de exacte diagonaal, puur als veiligheidsmarge (afronding/subpixels).
       setMapWrapperSizePx(Math.ceil(Math.sqrt(w * w + h * h)) + 40);
-      expandedHeightPxRef.current = Math.round(h * SHEET_EXPANDED_RATIO);
+      expandedHeightPxRef.current = Math.round(h * BAR_EXPANDED_RATIO);
     }
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
 
-  // Kaart + routepolyline eenmalig opzetten. Afhankelijk van `mapWrapperSizePx` (i.p.v. een
-  // vaste lege dependency-array) omdat `containerRef`'s div nu pas rendert zodra de
-  // schermdiagonaal gemeten is (zie het effect hierboven) -- zonder deze afhankelijkheid zou
-  // `containerRef.current` bij de allereerste render nog null zijn en de kaart nooit mounten.
-  // De `mapRef.current`-guard voorkomt dubbel mounten als dit effect door een latere resize
-  // nogmaals zou vuren.
   useEffect(() => {
     if (mapWrapperSizePx === 0 || !containerRef.current || mapRef.current) return;
     let cancelled = false;
@@ -125,8 +123,6 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
       L.tileLayer(CARTO_RASTER_URL, { attribution: CARTO_ATTRIBUTION, subdomains: CARTO_SUBDOMAINS, maxZoom: 20 }).addTo(map);
 
       const latLngs: L.LatLngTuple[] = route.geometry.map((p) => [p.lat, p.lon]);
-      // Aanrijroute apart en gestippeld/grijs tekenen, de eigenlijke route in de vertrouwde
-      // volle groene lijn -- zelfde reden/stijl als RouteNavPreview in app/page.tsx.
       const splitIdx = approachGeometryEndIndex;
       let bounds: L.LatLngBounds;
       if (splitIdx && splitIdx > 0 && splitIdx < latLngs.length) {
@@ -165,7 +161,6 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapWrapperSizePx]);
 
-  // GPS-sessie starten.
   useEffect(() => {
     sessionRef.current = new RouteNavigationSession(route);
 
@@ -186,6 +181,24 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
         setUpdate(result);
         setGpsError(null);
 
+        if (
+          result.maneuver &&
+          result.maneuver.distanceToManeuverM <= ANNOUNCE_DISTANCE_M &&
+          announcedManeuverIndexRef.current !== result.maneuver.atGeometryIndex &&
+          !mutedRef.current &&
+          typeof window !== "undefined" &&
+          window.speechSynthesis
+        ) {
+          announcedManeuverIndexRef.current = result.maneuver.atGeometryIndex;
+          const direction = classifyManeuverDirection(result.maneuver.turnAngleDeg);
+          const text = `Over ${Math.round(result.maneuver.distanceToManeuverM)} meter. ${DIRECTION_SPOKEN[direction]}${
+            result.maneuver.streetName ? `, naar ${result.maneuver.streetName}` : ""
+          }.`;
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = "nl-NL";
+          window.speechSynthesis.speak(utterance);
+        }
+
         const map = mapRef.current;
         const marker = positionMarkerRef.current;
         if (map && marker) {
@@ -195,8 +208,10 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
           if (isFollowingRef.current) {
             map.flyTo(matched, NAVIGATION_ZOOM, { animate: true, duration: EASE_DURATION_MS / 1000 });
           }
-          if (mapRotateWrapperRef.current && result.smoothedHeadingDeg !== null) {
-            mapRotateWrapperRef.current.style.transform = `rotate(${-result.smoothedHeadingDeg}deg)`;
+          if (result.smoothedHeadingDeg !== null) {
+            const rotation = `rotate(${-result.smoothedHeadingDeg}deg)`;
+            if (mapRotateWrapperRef.current) mapRotateWrapperRef.current.style.transform = rotation;
+            if (compassNeedleRef.current) compassNeedleRef.current.style.transform = rotation;
           }
         }
       },
@@ -213,6 +228,7 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
 
     return () => {
       if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+      if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -229,12 +245,42 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
     }
   }
 
-  const maneuverLabel = update?.maneuver ? DIRECTION_LABEL[classifyManeuverDirection(update.maneuver.turnAngleDeg)] : null;
+  function handleBarPointerDown(e: React.PointerEvent) {
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragStateRef.current = { startY: e.clientY, startHeight: barHeightPx };
+    setIsDraggingBar(true);
+  }
+  function handleBarPointerMove(e: React.PointerEvent) {
+    if (!dragStateRef.current) return;
+    const delta = dragStateRef.current.startY - e.clientY;
+    const next = Math.min(expandedHeightPxRef.current, Math.max(BAR_COLLAPSED_PX, dragStateRef.current.startHeight + delta));
+    setBarHeightPx(next);
+  }
+  function handleBarPointerUp() {
+    if (!dragStateRef.current) return;
+    const range = expandedHeightPxRef.current - BAR_COLLAPSED_PX;
+    const progress = range > 0 ? (barHeightPx - BAR_COLLAPSED_PX) / range : 0;
+    const snapExpanded = progress > BAR_SNAP_RATIO;
+    setBarHeightPx(snapExpanded ? expandedHeightPxRef.current : BAR_COLLAPSED_PX);
+    setBarExpanded(snapExpanded);
+    dragStateRef.current = null;
+    setIsDraggingBar(false);
+  }
+
+  const nextManeuverLabel = update?.nextManeuver ? DIRECTION_LABEL[classifyManeuverDirection(update.nextManeuver.turnAngleDeg)] : null;
+
+  let arrivalLabel = "--:--";
+  let etaMinutes: number | null = null;
+  if (update) {
+    const avgSpeedMps = route.durationS > 0 ? route.distanceM / route.durationS : 0;
+    const remainingS = avgSpeedMps > 0 ? update.progress.remainingDistanceM / avgSpeedMps : route.durationS;
+    etaMinutes = Math.max(0, Math.round(remainingS / 60));
+    const arrivalDate = new Date(Date.now() + remainingS * 1000);
+    arrivalLabel = arrivalDate.toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" });
+  }
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "#000" }}>
-      {/* Kaartlaag: geclipte, overgrote rotatiewrapper -- zelfde techniek als de bestaande
-          Apple-stijl-kaart (NavigationScreen.tsx), hier als losse, eigen implementatie. */}
       <div style={{ position: "absolute", inset: 0, overflow: "hidden", zIndex: 0 }}>
         {mapWrapperSizePx > 0 && (
           <div
@@ -256,32 +302,110 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
         )}
       </div>
 
-      {/* Sluitknop */}
       <button
         onClick={onExit}
         style={{
           position: "absolute",
           top: "calc(env(safe-area-inset-top, 0px) + 12px)",
           left: 12,
-          zIndex: 5,
-          width: 44,
-          height: 44,
-          borderRadius: 22,
+          zIndex: 6,
+          width: 40,
+          height: 40,
+          borderRadius: 20,
           border: "none",
-          background: "rgba(40,40,40,0.85)",
+          background: "rgba(30,30,30,0.7)",
           color: "#FFFFFF",
-          fontSize: 20,
+          fontSize: 18,
         }}
       >
         ✕
       </button>
 
+      {update && (update.maneuver || update.offRoute.isOffRoute) && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(env(safe-area-inset-top, 0px) + 8px)",
+            left: 12,
+            right: 12,
+            zIndex: 5,
+            borderRadius: 18,
+            overflow: "hidden",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+          }}
+        >
+          {update.offRoute.isOffRoute ? (
+            <div style={{ background: "#8a3b00", padding: "18px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ fontSize: 30 }}>⚠️</div>
+              <div>
+                <div style={{ color: "#FFFFFF", fontSize: 19, fontWeight: 800 }}>Je lijkt van de route af te zijn</div>
+                <div style={{ color: "#ffe0b3", fontSize: 13 }}>Controleer je positie op de kaart</div>
+              </div>
+            </div>
+          ) : (
+            update.maneuver && (
+              <>
+                <div style={{ background: "#1c2b24e6", padding: "16px 20px 14px", display: "flex", alignItems: "center", gap: 16 }}>
+                  <div style={{ flexShrink: 0, transform: `rotate(${update.maneuverArrowDeg}deg)`, transition: "transform 0.3s ease" }}>
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12 2L12 22M12 2L5 9M12 2L19 9" stroke="#FFFFFF" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 800, lineHeight: 1.1 }}>
+                      {Math.round(update.maneuver.distanceToManeuverM)} m
+                    </div>
+                    {update.maneuver.streetName && (
+                      <div style={{ color: "#b9c4bf", fontSize: 16, marginTop: 2 }}>{update.maneuver.streetName}</div>
+                    )}
+                    <div style={{ color: "#4ade80", fontSize: 14, fontWeight: 700, marginTop: 2 }}>Fietsroute</div>
+                  </div>
+                </div>
+                {update.nextManeuver && (
+                  <div style={{ background: "#0f1a15cc", padding: "10px 20px", display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ flexShrink: 0, transform: `rotate(${update.nextManeuver.turnAngleDeg}deg)` }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2L12 22M12 2L5 9M12 2L19 9" stroke="#cfd8d4" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </div>
+                    <div style={{ color: "#cfd8d4", fontSize: 14 }}>
+                      Daarna: {nextManeuverLabel}
+                      {update.nextManeuver.streetName ? ` naar ${update.nextManeuver.streetName}` : ""}
+                    </div>
+                  </div>
+                )}
+              </>
+            )
+          )}
+        </div>
+      )}
+
+      {!update && !gpsError && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(env(safe-area-inset-top, 0px) + 8px)",
+            left: 12,
+            right: 12,
+            zIndex: 5,
+            background: "#1c2b24e6",
+            borderRadius: 18,
+            padding: "16px 20px",
+            color: "#FFFFFF",
+            fontSize: 15,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+          }}
+        >
+          GPS zoeken...
+        </div>
+      )}
+
       {gpsError && (
         <div
           style={{
             position: "absolute",
-            top: "calc(env(safe-area-inset-top, 0px) + 12px)",
-            left: 68,
+            top: "calc(env(safe-area-inset-top, 0px) + 8px)",
+            left: 60,
             right: 12,
             zIndex: 5,
             background: "#b00020",
@@ -295,12 +419,37 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
         </div>
       )}
 
+      <div
+        style={{
+          position: "absolute",
+          left: 12,
+          bottom: barHeightPx + 16,
+          zIndex: 5,
+          width: 46,
+          height: 46,
+          borderRadius: 23,
+          background: "rgba(255,255,255,0.92)",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          transition: isDraggingBar ? "none" : "bottom 0.25s ease",
+        }}
+      >
+        <div ref={compassNeedleRef} style={{ transition: `transform ${EASE_DURATION_MS}ms ease` }}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L15 12L12 10L9 12L12 2Z" fill="#b00020" />
+            <path d="M12 22L9 12L12 14L15 12L12 22Z" fill="#8a8a8a" />
+          </svg>
+        </div>
+      </div>
+
       {!isFollowing && (
         <button
           onClick={handleRecenter}
           style={{
             position: "absolute",
-            bottom: sheetHeightPx + 20,
+            bottom: barHeightPx + 16,
             right: 12,
             zIndex: 5,
             display: "flex",
@@ -314,13 +463,33 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
             fontSize: 14,
             fontWeight: 700,
             boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
+            transition: isDraggingBar ? "none" : "bottom 0.25s ease",
           }}
         >
           <span style={{ fontSize: 16 }}>📍</span> Volg mij
         </button>
       )}
 
-      {/* Bottom sheet */}
+      <button
+        onClick={() => setMuted((v) => !v)}
+        aria-label={muted ? "Geluid aanzetten" : "Geluid uitzetten"}
+        style={{
+          position: "absolute",
+          top: update ? "calc(env(safe-area-inset-top, 0px) + 8px + 96px)" : "calc(env(safe-area-inset-top, 0px) + 64px)",
+          right: 12,
+          zIndex: 6,
+          width: 44,
+          height: 44,
+          borderRadius: 22,
+          border: "none",
+          background: "rgba(255,255,255,0.92)",
+          fontSize: 19,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+        }}
+      >
+        {muted ? "🔇" : "🔊"}
+      </button>
+
       <div
         style={{
           position: "absolute",
@@ -332,124 +501,74 @@ export default function RouteNavigationScreen({ route, routeLabel, approachGeome
           borderTopLeftRadius: 20,
           borderTopRightRadius: 20,
           boxShadow: "0 -4px 20px rgba(0,0,0,0.25)",
-          height: sheetHeightPx,
-          overflowY: sheetHeightPx > SHEET_COLLAPSED_PX + 20 ? "auto" : "hidden",
-          transition: isDraggingSheet ? "none" : "height 0.25s ease",
+          height: barHeightPx,
+          overflowY: barHeightPx > BAR_COLLAPSED_PX + 20 ? "auto" : "hidden",
+          transition: isDraggingBar ? "none" : "height 0.25s ease",
           paddingBottom: "env(safe-area-inset-bottom, 0px)",
           touchAction: "none",
         }}
       >
-        {/* BUGFIX-VERVOLG (live test: "nu alleen via dat streepje, kan het op het hele vak?"):
-            niet langer alleen de kleine handgreep sleepbaar, maar de VOLLEDIGE ingeklapte
-            kopbalk (handgreep + manoeuvre-/afwijkingsinfo samen) -- zelfde als bij Apple
-            Kaarten, waar het niet uitmaakt waar op de balk je je vinger zet. Het uitgeklapte
-            gedeelte eronder (statistieken, "Route beëindigen") blijft BEWUST niet sleepbaar,
-            anders zou scrollen en het indrukken van die knop breken. */}
         <div
-          onPointerDown={(e) => {
-            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-            dragStateRef.current = { startY: e.clientY, startHeight: sheetHeightPx };
-            setIsDraggingSheet(true);
-          }}
-          onPointerMove={(e) => {
-            if (!dragStateRef.current) return;
-            const delta = dragStateRef.current.startY - e.clientY; // omhoog slepen = positief = groter
-            const next = Math.min(
-              expandedHeightPxRef.current,
-              Math.max(SHEET_COLLAPSED_PX, dragStateRef.current.startHeight + delta)
-            );
-            setSheetHeightPx(next);
-          }}
-          onPointerUp={() => {
-            if (!dragStateRef.current) return;
-            const range = expandedHeightPxRef.current - SHEET_COLLAPSED_PX;
-            const progress = range > 0 ? (sheetHeightPx - SHEET_COLLAPSED_PX) / range : 0;
-            const snapExpanded = progress > SHEET_SNAP_RATIO;
-            setSheetHeightPx(snapExpanded ? expandedHeightPxRef.current : SHEET_COLLAPSED_PX);
-            setSheetExpanded(snapExpanded);
-            dragStateRef.current = null;
-            setIsDraggingSheet(false);
-          }}
+          onPointerDown={handleBarPointerDown}
+          onPointerMove={handleBarPointerMove}
+          onPointerUp={handleBarPointerUp}
           style={{ width: "100%", cursor: "grab" }}
-          aria-label={sheetExpanded ? "Sleep omlaag om in te klappen" : "Sleep omhoog om uit te klappen"}
+          aria-label={barExpanded ? "Sleep omlaag om in te klappen" : "Sleep omhoog om uit te klappen"}
         >
-          <div style={{ padding: "10px 0 4px" }}>
+          <div style={{ padding: "10px 0 6px" }}>
             <div style={{ width: 40, height: 5, borderRadius: 3, background: "#d0d0d0", margin: "0 auto" }} />
           </div>
-
-          {/* BUGFIX (live test: "als je verkeerd rijdt reageert hij niet"): de afwijkings-
-              indicatie was voorheen alleen zichtbaar in uitgeklapte toestand -- tijdens gewoon
-              fietsen (ingeklapt, de standaardstand) was er dus GEEN enkele zichtbare reactie
-              op een afwijking. Nu ook in de ingeklapte balk zelf, als kleurverandering +
-              tekst, altijd zichtbaar ongeacht de sheet-stand. */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 14,
-              padding: "4px 20px 18px",
-              background: update?.offRoute.isOffRoute ? "#fff4e0" : "transparent",
-              transition: "background 0.2s ease",
-            }}
-          >
-          {update?.offRoute.isOffRoute ? (
-            <>
-              <div style={{ fontSize: 28, flexShrink: 0 }}>⚠️</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 16, fontWeight: 800, color: "#8a5a00" }}>Je lijkt van de route af te zijn</div>
-                <div style={{ fontSize: 13, color: "#8a5a00" }}>Controleer je positie op de kaart</div>
-              </div>
-            </>
-          ) : update?.maneuver ? (
-            <>
-              <div
-                style={{
-                  flexShrink: 0,
-                  transform: `rotate(${update.maneuverArrowDeg}deg)`,
-                  transition: "transform 0.3s ease",
-                }}
-              >
-                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 2L12 22M12 2L5 9M12 2L19 9" stroke="#085041" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: "#111" }}>{maneuverLabel}</div>
-                <div style={{ fontSize: 14, color: "#666" }}>
-                  {Math.round(update.maneuver.distanceToManeuverM)} m
-                  {update.maneuver.streetName ? ` · ${update.maneuver.streetName}` : ""}
-                </div>
-              </div>
-            </>
-          ) : (
-            <div style={{ fontSize: 15, color: "#666" }}>{update ? "Volg de route" : "GPS zoeken..."}</div>
-          )}
-          {update && (
-            <div style={{ textAlign: "right", fontSize: 13, color: "#888", flexShrink: 0 }}>
-              <div>{(update.progress.remainingDistanceM / 1000).toFixed(1)} km</div>
+          <div style={{ display: "flex", padding: "0 20px 16px", textAlign: "center" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#111" }}>{arrivalLabel}</div>
+              <div style={{ fontSize: 12, color: "#888" }}>aankomst</div>
             </div>
-          )}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#111" }}>{etaMinutes ?? "--"}</div>
+              <div style={{ fontSize: 12, color: "#888" }}>min.</div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#111" }}>
+                {update ? (update.progress.remainingDistanceM / 1000).toFixed(1) : (route.distanceM / 1000).toFixed(1)}
+              </div>
+              <div style={{ fontSize: 12, color: "#888" }}>km</div>
+            </div>
           </div>
         </div>
 
-        {sheetExpanded && update && (
+        {barExpanded && (
           <div style={{ padding: "0 20px 24px", fontSize: 14 }}>
             {routeLabel && <div style={{ color: "#888", marginBottom: 12 }}>{routeLabel}</div>}
 
             <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
               <div>
-                <div style={{ color: "#888", fontSize: 12 }}>Resterend</div>
-                <div style={{ fontWeight: 700, fontSize: 16 }}>{(update.progress.remainingDistanceM / 1000).toFixed(1)} km</div>
-              </div>
-              <div>
-                <div style={{ color: "#888", fontSize: 12 }}>Totaal</div>
+                <div style={{ color: "#888", fontSize: 12 }}>Totale afstand</div>
                 <div style={{ fontWeight: 700, fontSize: 16 }}>{(route.distanceM / 1000).toFixed(1)} km</div>
               </div>
-              <div>
-                <div style={{ color: "#888", fontSize: 12 }}>Voortgang</div>
-                <div style={{ fontWeight: 700, fontSize: 16 }}>{Math.round(update.progress.progressRatio * 100)}%</div>
-              </div>
+              {update && (
+                <div>
+                  <div style={{ color: "#888", fontSize: 12 }}>Voortgang</div>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>{Math.round(update.progress.progressRatio * 100)}%</div>
+                </div>
+              )}
             </div>
+
+            <button
+              onClick={() => setMuted((v) => !v)}
+              style={{
+                width: "100%",
+                minHeight: 48,
+                marginBottom: 10,
+                border: "1px solid #d0d0d0",
+                borderRadius: 12,
+                background: "#FFFFFF",
+                color: "#111",
+                fontWeight: 600,
+                fontSize: 15,
+              }}
+            >
+              {muted ? "🔇 Gesproken aankondigingen uit" : "🔊 Gesproken aankondigingen aan"}
+            </button>
 
             <button
               onClick={onExit}
