@@ -19,6 +19,9 @@ import PauseScreen from "@/components/navigation/PauseScreen";
 import type { GraphEdge } from "@/lib/route-engine/types";
 import type { PhysicalAnchor } from "@/lib/navigation/physical-anchor";
 import { loopOrientation } from "@/lib/route-engine/loop-orientation";
+import RouteNavigationScreen from "@/components/route-navigation/RouteNavigationScreen";
+import type { NavigationRoute } from "@/lib/route-navigation/types";
+import "leaflet/dist/leaflet.css";
 
 type Point = { x: number; y: number };
 type Route = {
@@ -48,7 +51,21 @@ type LocationCandidate = {
   distanceM: number;
 };
 
-type Step = "distance" | "loading" | "results" | "detail" | "navigating" | "paused" | "sharedPreview" | "error";
+type Step =
+  | "distance"
+  | "loading"
+  | "results"
+  | "detail"
+  | "navigating"
+  | "paused"
+  | "sharedPreview"
+  | "error"
+  // TOEGEVOEGD ("Fase B: nieuwe Apple-style route-navigatie", 19-9-2026, GO van Te):
+  // route-preview (kaart + afstand + straten, met een Start-knop) en de daadwerkelijke,
+  // nieuwe navigatiemodus -- volledig los van de bestaande "navigating"-stap (die blijft
+  // ongewijzigd voor de knooppunten-navigatie met NavigationScreen).
+  | "routeNavPreview"
+  | "routeNavActive";
 
 const DISTANCE_OPTIONS = [20, 30, 40, 50];
 
@@ -220,6 +237,20 @@ export default function Home() {
   /** Sectie 9.21 ("route naar een adres") -- eigen, apart veld/state van de bestaande plaatsnaam-zoekfunctie. */
   const [destinationInput, setDestinationInput] = useState("");
   const [routeToDestinationLoading, setRouteToDestinationLoading] = useState(false);
+
+  // TOEGEVOEGD ("Fase B: nieuwe Apple-style route-navigatie", 19-9-2026, GO van Te) --
+  // volledig aparte state, naast de bestaande destinationInput-flow hierboven (die blijft
+  // ongewijzigd). Eigen invoerveld i.p.v. hergebruik van destinationInput, om de bestaande
+  // flow op geen enkele manier te kunnen raken.
+  const [newRouteDestinationInput, setNewRouteDestinationInput] = useState("");
+  const [newRouteMode, setNewRouteMode] = useState<"normaal" | "knooppunten">("normaal");
+  const [newRouteLoading, setNewRouteLoading] = useState(false);
+  const [newRoutePreview, setNewRoutePreview] = useState<{
+    route: NavigationRoute;
+    label: string;
+    usedDirectFallback?: boolean;
+    bridgedSpansCount?: number;
+  } | null>(null);
   /** "Plus lusje" (sectie 9.49, 30-8-2026): 0 = geen omweg, gewoon de kortste route. */
   const [extraKm, setExtraKm] = useState(0);
   /** Parkeerplaats-zoekfunctie (sectie 9.42, 30-8-2026). */
@@ -673,6 +704,77 @@ export default function Home() {
   }
 
   /**
+   * "Fase B: nieuwe Apple-style route-navigatie" (19-9-2026, GO van Te) -- roept functie 1
+   * (`/api/route/direct`) of functie 2 (`/api/route/via-knooppunten`) aan, afhankelijk van
+   * `newRouteMode`. Volledig los van `startRouteToDestination` hierboven (het oude,
+   * NWB/knooppunten-gebaseerde systeem) -- geen gedeelde state, geen gedeeld pad.
+   */
+  function calculateNewRoute() {
+    if (!newRouteDestinationInput.trim()) return;
+    if (!navigator.geolocation) {
+      setErrorMessage("Dit toestel ondersteunt geen locatiebepaling.");
+      setStep("error");
+      return;
+    }
+    setNewRouteLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const endpoint = newRouteMode === "normaal" ? "/api/route/direct" : "/api/route/via-knooppunten";
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              originLat: position.coords.latitude,
+              originLon: position.coords.longitude,
+              destinationPlaceName: newRouteDestinationInput,
+            }),
+          });
+          const rawText = await res.text();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let data: any;
+          try {
+            data = JSON.parse(rawText);
+          } catch {
+            setErrorMessage(`Er ging iets mis bij het berekenen van de route (status ${res.status}).`);
+            setStep("error");
+            return;
+          }
+          if (!res.ok) {
+            setErrorMessage(data.error ?? "Kon geen route naar dit adres vinden.");
+            setStep("error");
+            return;
+          }
+
+          const route: NavigationRoute = {
+            geometry: data.geometry,
+            distanceM: data.distanceM,
+            durationS: data.durationS,
+            steps: data.steps ?? [],
+          };
+          setNewRoutePreview({
+            route,
+            label: `Mijn locatie → ${data.destination?.displayName ?? newRouteDestinationInput}`,
+            usedDirectFallback: data.usedDirectFallback,
+            bridgedSpansCount: data.bridgedSpans?.length,
+          });
+          setStep("routeNavPreview");
+        } catch (err) {
+          setErrorMessage(`Onverwachte fout: ${err instanceof Error ? err.message : String(err)}`);
+          setStep("error");
+        } finally {
+          setNewRouteLoading(false);
+        }
+      },
+      () => {
+        setErrorMessage("Kon je locatie niet bepalen. Geef locatietoegang, of probeer het opnieuw.");
+        setStep("error");
+        setNewRouteLoading(false);
+      }
+    );
+  }
+
+  /**
    * Parkeerplaats-zoekfunctie (sectie 9.42, 30-8-2026, oorspronkelijk vastgelegd/onderzocht in
    * sectie 9.23). Geocodet het ingetypte adres (hergebruikt `/api/location/resolve`'s
    * plaatsnaam-geocoding, precies zoals `startRouteToDestination` al doet), en zoekt dan
@@ -1074,6 +1176,73 @@ export default function Home() {
                     )}
                   </div>
                 )}
+
+                <div style={{ borderTop: "1px solid #e5e5e0", margin: "2rem 0 1.5rem" }} />
+
+                {/* TOEGEVOEGD ("Fase B: nieuwe Apple-style route-navigatie", 19-9-2026, GO
+                    van Te) -- volledig aparte sectie, de bestaande "Route naar een adres"
+                    hierboven blijft ongewijzigd. Geen linksom/rechtsom-keuze, geen enkele
+                    andere handmatige richtingskeuze -- puur normaal/via-knooppunten. */}
+                <h2 style={{ fontSize: 20, marginBottom: 8 }}>Route naar een adres (nieuw)</h2>
+                <p style={{ fontSize: 13, opacity: 0.65, marginBottom: 12 }}>
+                  Rustige, Apple-stijl navigatie via echte fietspaden — met of zonder knooppunten.
+                </p>
+
+                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                  {(["normaal", "knooppunten"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setNewRouteMode(mode)}
+                      style={{
+                        flex: 1,
+                        minHeight: 44,
+                        background: newRouteMode === mode ? "var(--color-knoop-green)" : "white",
+                        color: newRouteMode === mode ? "white" : "var(--color-ink)",
+                        border: `2px solid ${newRouteMode === mode ? "var(--color-knoop-green)" : "var(--color-sand)"}`,
+                        borderRadius: 10,
+                        fontSize: 14,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {mode === "normaal" ? "Normaal" : "Via knooppunten"}
+                    </button>
+                  ))}
+                </div>
+
+                <input
+                  value={newRouteDestinationInput}
+                  onChange={(e) => setNewRouteDestinationInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && calculateNewRoute()}
+                  placeholder="Plaats + straatnaam"
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    padding: "0 16px",
+                    fontSize: 17,
+                    border: "2px solid var(--color-sand)",
+                    borderRadius: "var(--radius-card)",
+                    background: "white",
+                  }}
+                />
+
+                <button
+                  onClick={calculateNewRoute}
+                  disabled={!newRouteDestinationInput.trim() || newRouteLoading}
+                  style={{
+                    width: "100%",
+                    minHeight: 52,
+                    marginTop: 12,
+                    background: newRouteDestinationInput.trim() ? "var(--color-knoop-green)" : "var(--color-sand)",
+                    color: newRouteDestinationInput.trim() ? "white" : "var(--color-ink)",
+                    opacity: newRouteDestinationInput.trim() ? 1 : 0.5,
+                    border: "none",
+                    borderRadius: "var(--radius-card)",
+                    fontSize: 17,
+                    fontWeight: 600,
+                  }}
+                >
+                  {newRouteLoading ? "Bezig... (kan even duren)" : "🚴 Route berekenen"}
+                </button>
               </section>
             )}
 
@@ -1683,9 +1852,122 @@ export default function Home() {
             onEndRide={endPausedRide}
           />
         )}
+
+        {/* TOEGEVOEGD ("Fase B: nieuwe Apple-style route-navigatie", 19-9-2026, GO van Te):
+            preview-stap (kaart + afstand + straten, Start-knop) vóór de daadwerkelijke,
+            nieuwe navigatie -- exact zoals het gewenste eindbeeld: "route berekenen →
+            route-preview → Start → nieuwe navigatie". */}
+        {step === "routeNavPreview" && newRoutePreview && (
+          <RouteNavPreview
+            preview={newRoutePreview}
+            onBack={() => {
+              setNewRoutePreview(null);
+              setStep(null);
+            }}
+            onStart={() => setStep("routeNavActive")}
+          />
+        )}
+
+        {step === "routeNavActive" && newRoutePreview && (
+          <RouteNavigationScreen
+            route={newRoutePreview.route}
+            routeLabel={newRoutePreview.label}
+            onExit={() => {
+              setStep(null);
+              setNewRoutePreview(null);
+            }}
+          />
+        )}
           </div>
         </>
       )}
     </main>
+  );
+}
+
+/**
+ * Kleine, losse preview-component (19-9-2026, "Fase B") -- kaart + afstand + straten vóór
+ * het starten van de nieuwe navigatie. Zelfde Leaflet+CARTO-opzet als de testpagina's
+ * (`/debug/bike-route`, `/debug/bike-route-knooppunten`) die dit al bewezen hebben; hier
+ * als klein, eigen onderdeel i.p.v. opnieuw een testpagina.
+ */
+function RouteNavPreview({
+  preview,
+  onBack,
+  onStart,
+}: {
+  preview: { route: NavigationRoute; label: string; usedDirectFallback?: boolean; bridgedSpansCount?: number };
+  onBack: () => void;
+  onStart: () => void;
+}) {
+  const containerRef = useState<HTMLDivElement | null>(null);
+  const [mapEl, setMapEl] = containerRef;
+
+  useEffect(() => {
+    if (!mapEl) return;
+    let cancelled = false;
+    (async () => {
+      const L = await import("leaflet");
+      if (cancelled) return;
+      const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY;
+      const tileUrl = cartoKey
+        ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=${cartoKey}`
+        : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
+      const map = L.map(mapEl, { zoomControl: true, attributionControl: true });
+      L.tileLayer(tileUrl, { attribution: "&copy; CARTO, &copy; OpenStreetMap contributors", subdomains: ["a", "b", "c", "d"], maxZoom: 20 }).addTo(
+        map
+      );
+      const latLngs = preview.route.geometry.map((p) => [p.lat, p.lon] as [number, number]);
+      const line = L.polyline(latLngs, { color: "#085041", weight: 5 }).addTo(map);
+      map.fitBounds(line.getBounds(), { padding: [32, 32] });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mapEl, preview.route.geometry]);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 900, background: "white", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", padding: "calc(env(safe-area-inset-top,0px) + 12px) 16px 12px" }}>
+        <button onClick={onBack} style={{ border: "none", background: "transparent", fontSize: 22 }}>
+          ←
+        </button>
+        <div style={{ flex: 1, textAlign: "center", fontSize: 15, fontWeight: 700 }}>{preview.label}</div>
+        <div style={{ width: 22 }} />
+      </div>
+      <div ref={setMapEl} style={{ flex: 1, minHeight: 0 }} />
+      <div style={{ padding: "16px 20px calc(env(safe-area-inset-bottom,0px) + 16px)" }}>
+        {preview.usedDirectFallback && (
+          <p style={{ fontSize: 12, color: "#8a5a00", marginBottom: 8 }}>
+            ⚠️ {preview.bridgedSpansCount} stuk(ken) van de route rechtstreeks overbrugd (gat in de knooppuntendata).
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 16, marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.6 }}>Afstand</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{(preview.route.distanceM / 1000).toFixed(1)} km</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.6 }}>Duur</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{Math.round(preview.route.durationS / 60)} min</div>
+          </div>
+        </div>
+        <button
+          onClick={onStart}
+          style={{
+            width: "100%",
+            minHeight: 52,
+            background: "var(--color-knoop-green)",
+            color: "white",
+            border: "none",
+            borderRadius: "var(--radius-card)",
+            fontSize: 17,
+            fontWeight: 700,
+          }}
+        >
+          Start
+        </button>
+      </div>
+    </div>
   );
 }

@@ -35,19 +35,27 @@ export const dynamic = "force-dynamic";
  * knooppuntennetwerk uit Firestore) -- GEEN `loadPrecomputedOrBuildGraph`/NWB-laag.
  */
 export async function POST(req: NextRequest) {
-  let body: { originPlaceName?: string; destinationPlaceName?: string };
+  let body: { originPlaceName?: string; originLat?: number; originLon?: number; destinationPlaceName?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON-body." }, { status: 400 });
   }
 
-  const { originPlaceName, destinationPlaceName } = body;
-  if (!originPlaceName || !destinationPlaceName) {
-    return NextResponse.json({ error: "originPlaceName en destinationPlaceName zijn verplicht." }, { status: 400 });
+  // Zelfde reden als bij functie 1 (/api/route/direct): de hoofd-app geeft de live
+  // GPS-positie mee, geen getypte plaatsnaam.
+  const { originPlaceName, originLat, originLon, destinationPlaceName } = body;
+  if ((!originPlaceName && (originLat == null || originLon == null)) || !destinationPlaceName) {
+    return NextResponse.json(
+      { error: "originPlaceName (of originLat+originLon) en destinationPlaceName zijn verplicht." },
+      { status: 400 }
+    );
   }
 
-  const origin = await geocodePlaceName(originPlaceName);
+  const origin =
+    originLat != null && originLon != null
+      ? { lat: originLat, lon: originLon, displayName: "Mijn locatie" }
+      : await geocodePlaceName(originPlaceName!);
   if (!origin) {
     return NextResponse.json({ error: `Kon herkomst '${originPlaceName}' niet vinden.`, leg: "origin" }, { status: 404 });
   }
