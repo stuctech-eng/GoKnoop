@@ -280,6 +280,14 @@ export default function NavigationScreen({
    * om een React-render per GPS-sample te vermijden.
    */
   const mapRotateWrapperRef = useRef<HTMLDivElement>(null);
+  /**
+   * BUGFIX (19-9-2026, live test van de nieuwe RouteNavigationScreen onthulde dezelfde fout
+   * hier): een vaste 150%-marge is bij een smal telefoonscherm onvoldoende om bij elke
+   * rotatiehoek zwarte hoeken te voorkomen -- de diagonaal van een smal, hoog scherm is
+   * proportioneel veel groter dan 150% van de BREEDTE. Nu op de werkelijke schermdiagonaal
+   * gebaseerd (zie het meet-effect hieronder), zelfde fix als in RouteNavigationScreen.tsx.
+   */
+  const [mapWrapperSizePx, setMapWrapperSizePx] = useState(0);
   const mapRef = useRef<L.Map | null>(null);
   const routeToStartLayerRef = useRef<L.Polyline | null>(null);
   const routeLineLayerRef = useRef<L.Polyline | null>(null);
@@ -379,9 +387,23 @@ export default function NavigationScreen({
     setLog((prev) => [`${new Date().toISOString().slice(11, 23)} — ${text}`, ...prev].slice(0, 20));
   }
 
-  // Kaart + route eenmalig opzetten (stap 12.3, nu op Leaflet i.p.v. MapLibre, 7-9-2026).
+  // Schermdiagonaal meten voor de rotatiewrapper (bugfix, zie toelichting bij mapWrapperSizePx hierboven).
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
+    function measure() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      setMapWrapperSizePx(Math.ceil(Math.sqrt(w * w + h * h)) + 40);
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  // Kaart + route eenmalig opzetten (stap 12.3, nu op Leaflet i.p.v. MapLibre, 7-9-2026).
+  // Afhankelijk van `mapWrapperSizePx` (i.p.v. een lege dependency-array) om dezelfde reden
+  // als in RouteNavigationScreen.tsx: `containerRef`'s div rendert nu pas ná de meting.
+  useEffect(() => {
+    if (mapWrapperSizePx === 0 || !containerRef.current || mapRef.current) return;
 
     let geoJson: ReturnType<typeof buildRouteGeoJson>;
     try {
@@ -533,7 +555,7 @@ export default function NavigationScreen({
       routeLineLayerRef.current = null;
       nodeLayerGroupRef.current = null;
     };
-  }, []);
+  }, [mapWrapperSizePx]);
 
 
   function start() {
@@ -1132,31 +1154,37 @@ export default function NavigationScreen({
       {/* Zie LiveLocationScreen.tsx voor de volledige toelichting: isoleert Leaflet's
           interne stapel-volgorde zodat die niet meer over de eigen UI heen schildert.
 
-          Apple-stijl heading-up (19-9-2026, sectie 2): buitenste div clipt (overflow:hidden)
-          terug tot het zichtbare scherm; de binnenste `mapRotateWrapperRef`-div is 150% groot
-          (in elke dimensie, ruim voldoende marge -- de lange diagonaal van het scherm zelf bij
-          een willekeurige rotatiehoek blijft ruim binnen 150%) en gecentreerd, zodat ELKE
-          rotatiehoek nog steeds volledig met kaarttegels gevuld scherm oplevert, nooit een
-          zwarte hoek. `containerRef` (waar Leaflet daadwerkelijk op mount, ongewijzigd) vult op
-          zijn beurt die overgrote wrapper volledig. Leaflet zelf blijft intern gewoon
-          noord-boven rekenen (pixel<->latlng-conversie raakt dit niet) -- alleen de VISUELE
-          laag draait, via `mapRotateWrapperRef.current.style.transform` (zie de GPS-sample-
-          handler hierboven). */}
+          Apple-stijl heading-up (19-9-2026, sectie 2; grootte-bugfix 19-9-2026 n.a.v. een
+          live test van RouteNavigationScreen die zwarte hoeken toonde): buitenste div clipt
+          (overflow:hidden) terug tot het zichtbare scherm; de binnenste `mapRotateWrapperRef`-
+          div is een VIERKANT ter grootte van de daadwerkelijke schermdiagonaal (+ kleine marge,
+          zie `mapWrapperSizePx`), gecentreerd -- dat garandeert bij ELKE rotatiehoek en ELKE
+          schermverhouding volledige dekking, nooit een zwarte hoek (een vaste procentuele marge
+          zoals de eerdere 150% is bij een smal, hoog telefoonscherm ontoereikend, omdat de
+          diagonaal dan proportioneel veel groter is dan 150% van de breedte). `containerRef`
+          (waar Leaflet daadwerkelijk op mount, ongewijzigd) vult op zijn beurt die overgrote
+          wrapper volledig. Leaflet zelf blijft intern gewoon noord-boven rekenen
+          (pixel<->latlng-conversie raakt dit niet) -- alleen de VISUELE laag draait, via
+          `mapRotateWrapperRef.current.style.transform` (zie de GPS-sample-handler hierboven). */}
       <div style={{ position: "absolute", inset: 0, overflow: "hidden", zIndex: 0 }}>
-        <div
-          ref={mapRotateWrapperRef}
-          style={{
-            position: "absolute",
-            top: "-25%",
-            left: "-25%",
-            width: "150%",
-            height: "150%",
-            transformOrigin: "center center",
-            transition: `transform ${EASE_DURATION_MS}ms ease`,
-          }}
-        >
-          <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
-        </div>
+        {mapWrapperSizePx > 0 && (
+          <div
+            ref={mapRotateWrapperRef}
+            style={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              width: mapWrapperSizePx,
+              height: mapWrapperSizePx,
+              marginLeft: -mapWrapperSizePx / 2,
+              marginTop: -mapWrapperSizePx / 2,
+              transformOrigin: "center center",
+              transition: `transform ${EASE_DURATION_MS}ms ease`,
+            }}
+          >
+            <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
+          </div>
+        )}
       </div>
 
       {/* GPS-follow (sectie 3): "Volg mij"-knop, alleen zichtbaar ná handmatig pannen. Geen

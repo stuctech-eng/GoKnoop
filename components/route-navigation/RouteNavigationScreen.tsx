@@ -32,6 +32,13 @@ const ROUTE_COLOR = "#085041";
 const NAVIGATION_ZOOM = 17.5;
 const EASE_DURATION_MS = 900;
 
+/** Ingeklapte hoogte van de bottom sheet, in pixels. */
+const SHEET_COLLAPSED_PX = 118;
+/** Aandeel van de schermhoogte dat de bottom sheet uitgeklapt inneemt. */
+const SHEET_EXPANDED_RATIO = 0.7;
+/** Voorbij dit aandeel van de sleepafstand snapt de sheet naar de andere stand. */
+const SHEET_SNAP_RATIO = 0.35;
+
 const DIRECTION_LABEL: Record<RelativeDirection, string> = {
   RECHTDOOR: "Rechtdoor",
   LICHT_LINKS: "Licht links",
@@ -62,9 +69,44 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
   const [sheetExpanded, setSheetExpanded] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Kaart + routepolyline eenmalig opzetten.
+  /**
+   * BUGFIX (live test: zwarte hoeken zichtbaar in de kaart tijdens rotatie): een vaste
+   * 150%-marge is bij een smal telefoonscherm ONVOLDOENDE -- de diagonaal (nodig om bij een
+   * willekeurige rotatiehoek alle hoeken te blijven bedekken) is voor een smal, hoog scherm
+   * veel groter dan 150% van de BREEDTE. Nu op basis van de werkelijke schermdiagonaal
+   * berekend (vierkante wrapper, zijde = diagonaal + marge), gegarandeerd voldoende bij elke
+   * rotatiehoek, ongeacht schermverhouding.
+   */
+  const [mapWrapperSizePx, setMapWrapperSizePx] = useState(0);
+
+  // Sleepbare bottom sheet (live test: was een tik, moet een sleepgebaar zijn).
+  const [sheetHeightPx, setSheetHeightPx] = useState(SHEET_COLLAPSED_PX);
+  const expandedHeightPxRef = useRef(SHEET_COLLAPSED_PX);
+  const dragStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const [isDraggingSheet, setIsDraggingSheet] = useState(false);
+
+  // Schermafmetingen meten -- voor zowel de kaartwrapper-diagonaal als de sheet-hoogte.
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
+    function measure() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      // +40px marge bovenop de exacte diagonaal, puur als veiligheidsmarge (afronding/subpixels).
+      setMapWrapperSizePx(Math.ceil(Math.sqrt(w * w + h * h)) + 40);
+      expandedHeightPxRef.current = Math.round(h * SHEET_EXPANDED_RATIO);
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  // Kaart + routepolyline eenmalig opzetten. Afhankelijk van `mapWrapperSizePx` (i.p.v. een
+  // vaste lege dependency-array) omdat `containerRef`'s div nu pas rendert zodra de
+  // schermdiagonaal gemeten is (zie het effect hierboven) -- zonder deze afhankelijkheid zou
+  // `containerRef.current` bij de allereerste render nog null zijn en de kaart nooit mounten.
+  // De `mapRef.current`-guard voorkomt dubbel mounten als dit effect door een latere resize
+  // nogmaals zou vuren.
+  useEffect(() => {
+    if (mapWrapperSizePx === 0 || !containerRef.current || mapRef.current) return;
     let cancelled = false;
 
     (async () => {
@@ -102,7 +144,7 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
       positionMarkerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mapWrapperSizePx]);
 
   // GPS-sessie starten.
   useEffect(() => {
@@ -175,20 +217,24 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
       {/* Kaartlaag: geclipte, overgrote rotatiewrapper -- zelfde techniek als de bestaande
           Apple-stijl-kaart (NavigationScreen.tsx), hier als losse, eigen implementatie. */}
       <div style={{ position: "absolute", inset: 0, overflow: "hidden", zIndex: 0 }}>
-        <div
-          ref={mapRotateWrapperRef}
-          style={{
-            position: "absolute",
-            top: "-25%",
-            left: "-25%",
-            width: "150%",
-            height: "150%",
-            transformOrigin: "center center",
-            transition: `transform ${EASE_DURATION_MS}ms ease`,
-          }}
-        >
-          <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
-        </div>
+        {mapWrapperSizePx > 0 && (
+          <div
+            ref={mapRotateWrapperRef}
+            style={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              width: mapWrapperSizePx,
+              height: mapWrapperSizePx,
+              marginLeft: -mapWrapperSizePx / 2,
+              marginTop: -mapWrapperSizePx / 2,
+              transformOrigin: "center center",
+              transition: `transform ${EASE_DURATION_MS}ms ease`,
+            }}
+          >
+            <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
+          </div>
+        )}
       </div>
 
       {/* Sluitknop */}
@@ -235,7 +281,7 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
           onClick={handleRecenter}
           style={{
             position: "absolute",
-            bottom: sheetExpanded ? "70vh" : 140,
+            bottom: sheetHeightPx + 20,
             right: 12,
             zIndex: 5,
             display: "flex",
@@ -267,23 +313,71 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
           borderTopLeftRadius: 20,
           borderTopRightRadius: 20,
           boxShadow: "0 -4px 20px rgba(0,0,0,0.25)",
-          maxHeight: sheetExpanded ? "70vh" : "auto",
-          overflowY: sheetExpanded ? "auto" : "visible",
-          transition: "max-height 0.25s ease",
+          height: sheetHeightPx,
+          overflowY: sheetHeightPx > SHEET_COLLAPSED_PX + 20 ? "auto" : "hidden",
+          transition: isDraggingSheet ? "none" : "height 0.25s ease",
           paddingBottom: "env(safe-area-inset-bottom, 0px)",
+          touchAction: "none",
         }}
       >
-        <button
-          onClick={() => setSheetExpanded((v) => !v)}
-          style={{ width: "100%", padding: "10px 0 4px", border: "none", background: "transparent" }}
-          aria-label={sheetExpanded ? "Inklappen" : "Uitklappen"}
+        {/* BUGFIX (live test: "nu is de onderste knop een tik, maar moet vegen"): echt
+            sleepgebaar via Pointer Events (werkt voor zowel touch als muis) i.p.v. een
+            simpele klik-knop. De handgreep zelf én de titelbalk zijn beide sleepbaar. */}
+        <div
+          onPointerDown={(e) => {
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            dragStateRef.current = { startY: e.clientY, startHeight: sheetHeightPx };
+            setIsDraggingSheet(true);
+          }}
+          onPointerMove={(e) => {
+            if (!dragStateRef.current) return;
+            const delta = dragStateRef.current.startY - e.clientY; // omhoog slepen = positief = groter
+            const next = Math.min(
+              expandedHeightPxRef.current,
+              Math.max(SHEET_COLLAPSED_PX, dragStateRef.current.startHeight + delta)
+            );
+            setSheetHeightPx(next);
+          }}
+          onPointerUp={() => {
+            if (!dragStateRef.current) return;
+            const range = expandedHeightPxRef.current - SHEET_COLLAPSED_PX;
+            const progress = range > 0 ? (sheetHeightPx - SHEET_COLLAPSED_PX) / range : 0;
+            const snapExpanded = progress > SHEET_SNAP_RATIO;
+            setSheetHeightPx(snapExpanded ? expandedHeightPxRef.current : SHEET_COLLAPSED_PX);
+            setSheetExpanded(snapExpanded);
+            dragStateRef.current = null;
+            setIsDraggingSheet(false);
+          }}
+          style={{ width: "100%", padding: "10px 0 4px", cursor: "grab" }}
+          aria-label={sheetExpanded ? "Sleep omlaag om in te klappen" : "Sleep omhoog om uit te klappen"}
         >
           <div style={{ width: 40, height: 5, borderRadius: 3, background: "#d0d0d0", margin: "0 auto" }} />
-        </button>
+        </div>
 
-        {/* Ingeklapt: alleen het belangrijkste. */}
-        <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "4px 20px 18px" }}>
-          {update?.maneuver ? (
+        {/* BUGFIX (live test: "als je verkeerd rijdt reageert hij niet"): de afwijkings-
+            indicatie was voorheen alleen zichtbaar in uitgeklapte toestand -- tijdens gewoon
+            fietsen (ingeklapt, de standaardstand) was er dus GEEN enkele zichtbare reactie
+            op een afwijking. Nu ook in de ingeklapte balk zelf, als kleurverandering +
+            tekst, altijd zichtbaar ongeacht de sheet-stand. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+            padding: "4px 20px 18px",
+            background: update?.offRoute.isOffRoute ? "#fff4e0" : "transparent",
+            transition: "background 0.2s ease",
+          }}
+        >
+          {update?.offRoute.isOffRoute ? (
+            <>
+              <div style={{ fontSize: 28, flexShrink: 0 }}>⚠️</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#8a5a00" }}>Je lijkt van de route af te zijn</div>
+                <div style={{ fontSize: 13, color: "#8a5a00" }}>Controleer je positie op de kaart</div>
+              </div>
+            </>
+          ) : update?.maneuver ? (
             <>
               <div
                 style={{
@@ -317,12 +411,6 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
         {sheetExpanded && update && (
           <div style={{ padding: "0 20px 24px", fontSize: 14 }}>
             {routeLabel && <div style={{ color: "#888", marginBottom: 12 }}>{routeLabel}</div>}
-
-            {update.offRoute.isOffRoute && (
-              <div style={{ background: "#fff4e0", color: "#8a5a00", padding: 10, borderRadius: 8, marginBottom: 14 }}>
-                ⚠️ Je lijkt van de route af te zijn.
-              </div>
-            )}
 
             <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
               <div>
