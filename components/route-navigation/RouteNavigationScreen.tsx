@@ -320,9 +320,12 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
           touchAction: "none",
         }}
       >
-        {/* BUGFIX (live test: "nu is de onderste knop een tik, maar moet vegen"): echt
-            sleepgebaar via Pointer Events (werkt voor zowel touch als muis) i.p.v. een
-            simpele klik-knop. De handgreep zelf én de titelbalk zijn beide sleepbaar. */}
+        {/* BUGFIX-VERVOLG (live test: "nu alleen via dat streepje, kan het op het hele vak?"):
+            niet langer alleen de kleine handgreep sleepbaar, maar de VOLLEDIGE ingeklapte
+            kopbalk (handgreep + manoeuvre-/afwijkingsinfo samen) -- zelfde als bij Apple
+            Kaarten, waar het niet uitmaakt waar op de balk je je vinger zet. Het uitgeklapte
+            gedeelte eronder (statistieken, "Route beëindigen") blijft BEWUST niet sleepbaar,
+            anders zou scrollen en het indrukken van die knop breken. */}
         <div
           onPointerDown={(e) => {
             (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -348,27 +351,28 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
             dragStateRef.current = null;
             setIsDraggingSheet(false);
           }}
-          style={{ width: "100%", padding: "10px 0 4px", cursor: "grab" }}
+          style={{ width: "100%", cursor: "grab" }}
           aria-label={sheetExpanded ? "Sleep omlaag om in te klappen" : "Sleep omhoog om uit te klappen"}
         >
-          <div style={{ width: 40, height: 5, borderRadius: 3, background: "#d0d0d0", margin: "0 auto" }} />
-        </div>
+          <div style={{ padding: "10px 0 4px" }}>
+            <div style={{ width: 40, height: 5, borderRadius: 3, background: "#d0d0d0", margin: "0 auto" }} />
+          </div>
 
-        {/* BUGFIX (live test: "als je verkeerd rijdt reageert hij niet"): de afwijkings-
-            indicatie was voorheen alleen zichtbaar in uitgeklapte toestand -- tijdens gewoon
-            fietsen (ingeklapt, de standaardstand) was er dus GEEN enkele zichtbare reactie
-            op een afwijking. Nu ook in de ingeklapte balk zelf, als kleurverandering +
-            tekst, altijd zichtbaar ongeacht de sheet-stand. */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 14,
-            padding: "4px 20px 18px",
-            background: update?.offRoute.isOffRoute ? "#fff4e0" : "transparent",
-            transition: "background 0.2s ease",
-          }}
-        >
+          {/* BUGFIX (live test: "als je verkeerd rijdt reageert hij niet"): de afwijkings-
+              indicatie was voorheen alleen zichtbaar in uitgeklapte toestand -- tijdens gewoon
+              fietsen (ingeklapt, de standaardstand) was er dus GEEN enkele zichtbare reactie
+              op een afwijking. Nu ook in de ingeklapte balk zelf, als kleurverandering +
+              tekst, altijd zichtbaar ongeacht de sheet-stand. */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              padding: "4px 20px 18px",
+              background: update?.offRoute.isOffRoute ? "#fff4e0" : "transparent",
+              transition: "background 0.2s ease",
+            }}
+          >
           {update?.offRoute.isOffRoute ? (
             <>
               <div style={{ fontSize: 28, flexShrink: 0 }}>⚠️</div>
@@ -406,6 +410,7 @@ export default function RouteNavigationScreen({ route, routeLabel, onExit }: Rou
               <div>{(update.progress.remainingDistanceM / 1000).toFixed(1)} km</div>
             </div>
           )}
+          </div>
         </div>
 
         {sheetExpanded && update && (
